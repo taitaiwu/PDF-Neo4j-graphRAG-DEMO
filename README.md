@@ -8,7 +8,7 @@
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
-python app.py
+python src/app.py
 ```
 
 瀏覽器會開啟 `http://127.0.0.1:7860`。應用程式不建立公開分享網址。
