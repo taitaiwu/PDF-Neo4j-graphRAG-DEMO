@@ -5,7 +5,7 @@ from typing import Any
 
 import gradio as gr
 
-from .chunking import chunk_pages, preview_rows
+from .chunking import TextChunk, chunk_pages, preview_rows_for_page
 from .config import BuildConfig, public_settings
 from .env_store import load_env, save_env
 from .pdf_service import extract_pdf
@@ -97,9 +97,11 @@ def preview_pdf(
     chunk_overlap: int,
     temperature: float,
     max_output_tokens: int,
-) -> tuple[str, list[list[object]], dict[str, Any]]:
+) -> tuple[
+    str, list[list[object]], dict[str, Any], list[TextChunk], dict[str, Any], str
+]:
     if not file_path:
-        return "請先上傳 PDF。", [], {}
+        return "請先上傳 PDF。", [], {}, [], gr.update(), "尚未解析 PDF。"
     try:
         config = BuildConfig(
             build_model=build_model,
@@ -112,7 +114,14 @@ def preview_pdf(
         pages, empty_pages = extract_pdf(file_path)
         chunks = chunk_pages(pages, config.chunk_size, config.chunk_overlap)
         if not chunks:
-            return "PDF 沒有可解析文字；掃描文件需在後續版本加入 OCR。", [], {}
+            return (
+                "PDF 沒有可解析文字；掃描文件需在後續版本加入 OCR。",
+                [],
+                {},
+                [],
+                gr.update(),
+                "沒有可預覽的頁面。",
+            )
         state = {
             "file_path": file_path,
             "file_name": Path(file_path).name,
@@ -124,9 +133,49 @@ def preview_pdf(
         note = f"已解析 {len(pages)} 頁，產生 {len(chunks)} 個 chunk。"
         if empty_pages:
             note += f" 無文字頁面：{', '.join(map(str, empty_pages))}。"
-        return note, preview_rows(chunks), state
+        first_page_rows = preview_rows_for_page(chunks, 1)
+        return (
+            note,
+            first_page_rows,
+            state,
+            chunks,
+            gr.update(minimum=1, maximum=len(pages), value=1, interactive=True),
+            _page_status(1, len(pages), len(first_page_rows)),
+        )
     except (ValueError, TypeError) as exc:
-        return f"❌ {exc}", [], {}
+        return f"❌ {exc}", [], {}, [], gr.update(), "無法預覽頁面。"
+
+
+def _page_status(page_number: int, page_count: int, chunk_count: int) -> str:
+    if chunk_count:
+        detail = f"顯示 {chunk_count} 個相關 chunk。"
+    else:
+        detail = "本頁沒有可解析文字或相關 chunk。"
+    return f"第 {page_number} / {page_count} 頁；{detail}"
+
+
+def preview_page(
+    page_number: int | float, chunks: list[TextChunk], state: dict[str, Any]
+) -> tuple[str, list[list[object]]]:
+    if not state or not chunks:
+        return "請先解析 PDF。", []
+    page_count = max(1, int(state.get("page_count", 1)))
+    page = max(1, min(int(page_number), page_count))
+    rows = preview_rows_for_page(chunks, page)
+    return _page_status(page, page_count, len(rows)), rows
+
+
+def _move_page(page_number: int | float, state: dict[str, Any], offset: int) -> int:
+    page_count = max(1, int(state.get("page_count", 1))) if state else 1
+    return max(1, min(int(page_number) + offset, page_count))
+
+
+def previous_page(page_number: int | float, state: dict[str, Any]) -> int:
+    return _move_page(page_number, state, -1)
+
+
+def next_page(page_number: int | float, state: dict[str, Any]) -> int:
+    return _move_page(page_number, state, 1)
 
 
 def save_config(state: dict[str, Any]) -> tuple[str, str | None]:
@@ -158,12 +207,13 @@ def initial_answer(question: str, state: dict[str, Any]) -> tuple[str, str]:
 
 def build_app() -> gr.Blocks:
     env = load_env()
-    with gr.Blocks(title="PDF GraphRAG 測試工具") as app:
+    with gr.Blocks(title="PDF GraphRAG 測試工具", fill_width=True) as app:
         gr.Markdown(
             "# PDF GraphRAG 測試工具\n"
             "上傳使用手冊、調整建圖參數，並測試 Neo4j GraphRAG。"
         )
         preview_state = gr.State({})
+        chunk_state = gr.State([])
 
         with gr.Tab("1. 連線設定"):
             with gr.Row():
@@ -197,13 +247,23 @@ def build_app() -> gr.Blocks:
                     preview_button = gr.Button("解析並預覽 Chunk", variant="primary")
                     export_button = gr.Button("匯出目前設定")
                     export_file = gr.File(label="設定 JSON", interactive=False)
-                with gr.Column(scale=2):
+                with gr.Column(scale=3):
                     preview_status = gr.Markdown("尚未解析 PDF。")
+                    with gr.Row():
+                        previous_button = gr.Button("上一頁", scale=1)
+                        page_selector = gr.Slider(
+                            1, 1, value=1, step=1, label="PDF 頁碼", interactive=False, scale=8
+                        )
+                        next_button = gr.Button("下一頁", scale=1)
+                    page_status = gr.Markdown("請先解析 PDF。")
                     chunk_table = gr.Dataframe(
                         headers=["編號", "頁碼", "字元數", "內容"],
                         datatype=["number", "str", "number", "str"],
                         interactive=False,
                         wrap=True,
+                        max_height=750,
+                        column_widths=[80, 120, 100, 900],
+                        show_search="search",
                     )
 
         with gr.Tab("3. 建圖"):
@@ -246,8 +306,24 @@ def build_app() -> gr.Blocks:
         preview_button.click(
             preview_pdf,
             inputs=[pdf_file, build_model, embedding_model, chunk_size, chunk_overlap, temperature, max_output_tokens],
-            outputs=[preview_status, chunk_table, preview_state],
+            outputs=[
+                preview_status,
+                chunk_table,
+                preview_state,
+                chunk_state,
+                page_selector,
+                page_status,
+            ],
         )
+        page_selector.change(
+            preview_page,
+            inputs=[page_selector, chunk_state, preview_state],
+            outputs=[page_status, chunk_table],
+        )
+        previous_button.click(
+            previous_page, inputs=[page_selector, preview_state], outputs=page_selector
+        )
+        next_button.click(next_page, inputs=[page_selector, preview_state], outputs=page_selector)
         export_button.click(save_config, inputs=[preview_state], outputs=[preview_status, export_file])
         build_button.click(initial_build_status, inputs=[preview_state], outputs=[build_status])
         ask_button.click(initial_answer, inputs=[question, preview_state], outputs=[answer_status, answer])

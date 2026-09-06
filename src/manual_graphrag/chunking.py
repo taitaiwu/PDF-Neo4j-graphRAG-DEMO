@@ -53,3 +53,13 @@ def preview_rows(chunks: list[TextChunk], limit: int = 10) -> list[list[object]]
         [chunk.number, ", ".join(map(str, chunk.pages)), len(chunk.text), chunk.text]
         for chunk in chunks[:limit]
     ]
+
+
+def preview_rows_for_page(
+    chunks: list[TextChunk], page_number: int
+) -> list[list[object]]:
+    return [
+        [chunk.number, ", ".join(map(str, chunk.pages)), len(chunk.text), chunk.text]
+        for chunk in chunks
+        if page_number in chunk.pages
+    ]
