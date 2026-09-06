@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pymupdf
-import pymupdf4llm
 
 from .chunking import PageText
+
+
+HEADER_FOOTER_MARGIN_RATIO = 0.08
 
 
 def get_pdf_page_count(path: str | Path) -> int:
@@ -43,6 +45,17 @@ def _validate_page_range(
     return start_page, last_page
 
 
+def _content_clip(page: pymupdf.Page) -> pymupdf.Rect:
+    page_rect = page.rect
+    margin = page_rect.height * HEADER_FOOTER_MARGIN_RATIO
+    return pymupdf.Rect(
+        page_rect.x0,
+        page_rect.y0 + margin,
+        page_rect.x1,
+        page_rect.y1 - margin,
+    )
+
+
 def extract_pdf(
     path: str | Path, start_page: int = 1, end_page: int | None = None
 ) -> tuple[list[PageText], list[int]]:
@@ -55,6 +68,8 @@ def extract_pdf(
     except Exception as exc:
         raise ValueError("PDF 無法開啟，可能已損毀或加密") from exc
 
+    pages: list[PageText] = []
+    empty_pages: list[int] = []
     with document:
         if document.needs_pass:
             raise ValueError("目前不支援加密 PDF")
@@ -62,36 +77,17 @@ def extract_pdf(
             document.page_count, start_page, end_page
         )
         try:
-            page_chunks = pymupdf4llm.to_markdown(
-                document,
-                page_chunks=True,
-                header=False,
-                footer=False,
-                pages=range(first_page - 1, last_page),
-                use_ocr=False,
-            )
+            for page_number in range(first_page, last_page + 1):
+                page = document.load_page(page_number - 1)
+                text = page.get_text(
+                    "text",
+                    clip=_content_clip(page),
+                    sort=True,
+                ).strip()
+                pages.append(PageText(page_number, text))
+                if not text:
+                    empty_pages.append(page_number)
         except Exception as exc:
             raise ValueError("PDF 無法解析，請確認檔案內容有效") from exc
 
-    if not isinstance(page_chunks, list):
-        raise ValueError("PDF 解析結果格式不正確")
-
-    pages: list[PageText] = []
-    empty_pages: list[int] = []
-    for index, chunk in enumerate(page_chunks):
-        fallback_page = first_page + index
-        if not isinstance(chunk, dict):
-            raise ValueError("PDF 解析結果格式不正確")
-        metadata = chunk.get("metadata", {})
-        page_number = (
-            metadata.get("page_number", fallback_page)
-            if isinstance(metadata, dict)
-            else fallback_page
-        )
-        if not isinstance(page_number, int) or page_number < 1:
-            page_number = fallback_page
-        text = str(chunk.get("text") or "").strip()
-        pages.append(PageText(page_number, text))
-        if not text:
-            empty_pages.append(page_number)
     return pages, empty_pages
