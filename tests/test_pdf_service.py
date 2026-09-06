@@ -120,6 +120,7 @@ def test_extract_pdf_with_real_document(tmp_path: Path) -> None:
     document.save(pdf_path)
     document.close()
 
+    assert pdf_service.get_pdf_page_count(pdf_path) == 3
     pages, empty_pages = pdf_service.extract_pdf(pdf_path, 2, 3)
 
     assert [(page.page, page.text) for page in pages] == [(2, "Second page"), (3, "")]

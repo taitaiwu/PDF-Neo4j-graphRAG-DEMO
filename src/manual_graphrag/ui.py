@@ -8,7 +8,7 @@ import gradio as gr
 from .chunking import TextChunk, chunk_pages, preview_rows_for_page
 from .config import BuildConfig, public_settings
 from .env_store import load_env, save_env
-from .pdf_service import extract_pdf
+from .pdf_service import extract_pdf, get_pdf_page_count
 from .storage import write_json
 
 
@@ -88,6 +88,25 @@ def reload_env_settings() -> tuple[str, ...]:
         "✅ 已重新讀取 .env",
     )
 
+
+def initialize_page_range(
+    file_path: str | None,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    if not file_path:
+        return (
+            gr.update(value=1),
+            gr.update(value=None),
+            "尚未解析 PDF。",
+        )
+    try:
+        page_count = get_pdf_page_count(file_path)
+    except ValueError as exc:
+        return gr.update(value=1), gr.update(value=None), f"❌ {exc}"
+    return (
+        gr.update(value=1, maximum=page_count),
+        gr.update(value=page_count, maximum=page_count),
+        f"已偵測到 {page_count} 頁；解析結束頁預設為第 {page_count} 頁。",
+    )
 
 def preview_pdf(
     file_path: str | None,
@@ -261,7 +280,7 @@ def build_app() -> gr.Blocks:
                             value=None,
                             minimum=1,
                             precision=0,
-                            label="解析結束頁（留空代表最後一頁）",
+                            label="解析結束頁（上傳後自動設為最後一頁）",
                         )
                     build_model = gr.Textbox(label="建圖 LLM", value=env["BUILD_MODEL"])
                     embedding_model = gr.Textbox(label="Embedding 模型", value=env["EMBEDDING_MODEL"])
@@ -328,6 +347,11 @@ def build_app() -> gr.Blocks:
         for component in env_inputs:
             component.change(persist_env_settings, inputs=env_inputs, outputs=env_status)
         reload_button.click(reload_env_settings, outputs=[*env_inputs, env_status])
+        pdf_file.change(
+            initialize_page_range,
+            inputs=pdf_file,
+            outputs=[start_page, end_page, preview_status],
+        )
         preview_button.click(
             preview_pdf,
             inputs=[

@@ -8,6 +8,26 @@ import pymupdf4llm
 from .chunking import PageText
 
 
+def get_pdf_page_count(path: str | Path) -> int:
+    pdf_path = Path(path)
+    if pdf_path.suffix.lower() != ".pdf":
+        raise ValueError("僅支援 PDF 檔案")
+
+    try:
+        with pymupdf.open(pdf_path) as document:
+            if document.needs_pass:
+                raise ValueError("目前不支援加密 PDF")
+            page_count = document.page_count
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("PDF 無法開啟，可能已損毀或加密") from exc
+
+    if page_count < 1:
+        raise ValueError("PDF 沒有任何頁面")
+    return page_count
+
+
 def _validate_page_range(
     page_count: int, start_page: int, end_page: int | None
 ) -> tuple[int, int]:

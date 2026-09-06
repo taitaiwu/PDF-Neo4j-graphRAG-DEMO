@@ -86,3 +86,15 @@ def test_preview_pdf_initializes_page_navigation(monkeypatch) -> None:
     assert slider_update["maximum"] == 3
     assert slider_update["value"] == 2
     assert page_status == "第 2 / 3 頁；顯示 1 個相關 chunk。"
+
+
+def test_initialize_page_range_defaults_end_to_last_page(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "get_pdf_page_count", lambda path: 326)
+
+    start_update, end_update, status = ui.initialize_page_range("manual.pdf")
+
+    assert start_update["value"] == 1
+    assert start_update["maximum"] == 326
+    assert end_update["value"] == 326
+    assert end_update["maximum"] == 326
+    assert status == "已偵測到 326 頁；解析結束頁預設為第 326 頁。"
