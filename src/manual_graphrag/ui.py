@@ -97,6 +97,8 @@ def preview_pdf(
     chunk_overlap: int,
     temperature: float,
     max_output_tokens: int,
+    start_page: int | float = 1,
+    end_page: int | float | None = None,
 ) -> tuple[
     str, list[list[object]], dict[str, Any], list[TextChunk], dict[str, Any], str
 ]:
@@ -111,7 +113,9 @@ def preview_pdf(
             temperature=float(temperature),
             max_output_tokens=int(max_output_tokens),
         )
-        pages, empty_pages = extract_pdf(file_path)
+        requested_start = int(start_page)
+        requested_end = None if end_page is None else int(end_page)
+        pages, empty_pages = extract_pdf(file_path, requested_start, requested_end)
         chunks = chunk_pages(pages, config.chunk_size, config.chunk_overlap)
         if not chunks:
             return (
@@ -122,25 +126,34 @@ def preview_pdf(
                 gr.update(),
                 "沒有可預覽的頁面。",
             )
+        parsed_start = pages[0].page
+        parsed_end = pages[-1].page
         state = {
             "file_path": file_path,
             "file_name": Path(file_path).name,
             "page_count": len(pages),
+            "page_start": parsed_start,
+            "page_end": parsed_end,
             "empty_pages": empty_pages,
             "chunk_count": len(chunks),
             "config": config.to_dict(),
         }
-        note = f"已解析 {len(pages)} 頁，產生 {len(chunks)} 個 chunk。"
+        note = f"已解析第 {parsed_start}–{parsed_end} 頁，產生 {len(chunks)} 個 chunk。"
         if empty_pages:
             note += f" 無文字頁面：{', '.join(map(str, empty_pages))}。"
-        first_page_rows = preview_rows_for_page(chunks, 1)
+        first_page_rows = preview_rows_for_page(chunks, parsed_start)
         return (
             note,
             first_page_rows,
             state,
             chunks,
-            gr.update(minimum=1, maximum=len(pages), value=1, interactive=True),
-            _page_status(1, len(pages), len(first_page_rows)),
+            gr.update(
+                minimum=parsed_start,
+                maximum=parsed_end,
+                value=parsed_start,
+                interactive=True,
+            ),
+            _page_status(parsed_start, parsed_end, len(first_page_rows)),
         )
     except (ValueError, TypeError) as exc:
         return f"❌ {exc}", [], {}, [], gr.update(), "無法預覽頁面。"
@@ -159,15 +172,17 @@ def preview_page(
 ) -> tuple[str, list[list[object]]]:
     if not state or not chunks:
         return "請先解析 PDF。", []
-    page_count = max(1, int(state.get("page_count", 1)))
-    page = max(1, min(int(page_number), page_count))
+    page_start = max(1, int(state.get("page_start", 1)))
+    page_end = max(page_start, int(state.get("page_end", state.get("page_count", 1))))
+    page = max(page_start, min(int(page_number), page_end))
     rows = preview_rows_for_page(chunks, page)
-    return _page_status(page, page_count, len(rows)), rows
+    return _page_status(page, page_end, len(rows)), rows
 
 
 def _move_page(page_number: int | float, state: dict[str, Any], offset: int) -> int:
-    page_count = max(1, int(state.get("page_count", 1))) if state else 1
-    return max(1, min(int(page_number) + offset, page_count))
+    page_start = max(1, int(state.get("page_start", 1))) if state else 1
+    page_end = max(page_start, int(state.get("page_end", state.get("page_count", 1))))
+    return max(page_start, min(int(page_number) + offset, page_end))
 
 
 def previous_page(page_number: int | float, state: dict[str, Any]) -> int:
@@ -238,6 +253,16 @@ def build_app() -> gr.Blocks:
             with gr.Row():
                 with gr.Column(scale=1):
                     pdf_file = gr.File(label="PDF 使用手冊", file_types=[".pdf"], type="filepath")
+                    with gr.Row():
+                        start_page = gr.Number(
+                            value=1, minimum=1, precision=0, label="解析起始頁"
+                        )
+                        end_page = gr.Number(
+                            value=None,
+                            minimum=1,
+                            precision=0,
+                            label="解析結束頁（留空代表最後一頁）",
+                        )
                     build_model = gr.Textbox(label="建圖 LLM", value=env["BUILD_MODEL"])
                     embedding_model = gr.Textbox(label="Embedding 模型", value=env["EMBEDDING_MODEL"])
                     chunk_size = gr.Slider(100, 10000, value=1500, step=100, label="Chunk size（字元）")
@@ -305,7 +330,17 @@ def build_app() -> gr.Blocks:
         reload_button.click(reload_env_settings, outputs=[*env_inputs, env_status])
         preview_button.click(
             preview_pdf,
-            inputs=[pdf_file, build_model, embedding_model, chunk_size, chunk_overlap, temperature, max_output_tokens],
+            inputs=[
+                pdf_file,
+                build_model,
+                embedding_model,
+                chunk_size,
+                chunk_overlap,
+                temperature,
+                max_output_tokens,
+                start_page,
+                end_page,
+            ],
             outputs=[
                 preview_status,
                 chunk_table,

@@ -8,8 +8,9 @@ from manual_graphrag import pdf_service
 
 
 class FakeDocument:
-    def __init__(self, *, needs_pass: bool = False) -> None:
+    def __init__(self, *, needs_pass: bool = False, page_count: int = 2) -> None:
         self.needs_pass = needs_pass
+        self.page_count = page_count
 
     def __enter__(self) -> FakeDocument:
         return self
@@ -24,6 +25,7 @@ def test_extract_pdf_returns_page_markdown_and_empty_pages(monkeypatch: pytest.M
 
     def fake_to_markdown(received_document: object, **options: object) -> list[dict[str, object]]:
         assert received_document is document
+        assert list(options.pop("pages")) == [0, 1]
         assert options == {"page_chunks": True, "use_ocr": False}
         return [
             {"metadata": {"page_number": 1}, "text": "# 標題\n\n第一頁"},
@@ -110,13 +112,50 @@ def test_extract_pdf_rejects_unexpected_parser_output(monkeypatch: pytest.Monkey
 def test_extract_pdf_with_real_document(tmp_path: Path) -> None:
     pdf_path = tmp_path / "manual.pdf"
     document = pdf_service.pymupdf.open()
-    page = document.new_page()
-    page.insert_text((72, 72), "Hello PDF")
+    first_page = document.new_page()
+    first_page.insert_text((72, 72), "Hello PDF")
+    second_page = document.new_page()
+    second_page.insert_text((72, 72), "Second page")
     document.new_page()
     document.save(pdf_path)
     document.close()
 
-    pages, empty_pages = pdf_service.extract_pdf(pdf_path)
+    pages, empty_pages = pdf_service.extract_pdf(pdf_path, 2, 3)
 
-    assert [(page.page, page.text) for page in pages] == [(1, "Hello PDF"), (2, "")]
-    assert empty_pages == [2]
+    assert [(page.page, page.text) for page in pages] == [(2, "Second page"), (3, "")]
+    assert empty_pages == [3]
+
+
+def test_extract_pdf_only_converts_requested_page_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    document = FakeDocument(page_count=4)
+    monkeypatch.setattr(pdf_service.pymupdf, "open", lambda path: document)
+    captured: dict[str, list[int]] = {}
+
+    def fake_to_markdown(received: object, **options: object) -> list[dict[str, object]]:
+        captured["pages"] = list(options["pages"])
+        return [
+            {"metadata": {"page_number": 2}, "text": "second"},
+            {"metadata": {"page_number": 3}, "text": "   "},
+        ]
+
+    monkeypatch.setattr(pdf_service.pymupdf4llm, "to_markdown", fake_to_markdown)
+
+    pages, empty_pages = pdf_service.extract_pdf("manual.pdf", 2, 3)
+
+    assert [(page.page, page.text) for page in pages] == [(2, "second"), (3, "")]
+    assert empty_pages == [3]
+    assert captured["pages"] == [1, 2]
+
+
+def test_extract_pdf_rejects_invalid_page_ranges(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pdf_service.pymupdf, "open", lambda path: FakeDocument(page_count=3))
+
+    cases = [
+        (0, None, "解析起始頁必須大於等於 1"),
+        (3, 2, "解析結束頁不得小於起始頁"),
+        (1, 4, "解析頁碼超出範圍；PDF 共 3 頁"),
+    ]
+
+    for start_page, end_page, message in cases:
+        with pytest.raises(ValueError, match=message):
+            pdf_service.extract_pdf("manual.pdf", start_page, end_page)

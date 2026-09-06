@@ -57,24 +57,32 @@ def test_page_navigation_stays_within_document_bounds() -> None:
     assert ui.next_page(2, state) == 3
     assert ui.next_page(3, state) == 3
 
+    ranged_state = {"page_count": 3, "page_start": 2, "page_end": 4}
+    assert ui.previous_page(2, ranged_state) == 2
+    assert ui.next_page(3, ranged_state) == 4
+    assert ui.next_page(4, ranged_state) == 4
+
 
 def test_preview_pdf_initializes_page_navigation(monkeypatch) -> None:
-    pages = [PageText(1, "one"), PageText(2, ""), PageText(3, "three")]
+    pages = [PageText(2, "two"), PageText(3, "three")]
     chunks = [
-        TextChunk(1, "one", (1,)),
+        TextChunk(1, "two", (2,)),
         TextChunk(2, "three", (3,)),
     ]
-    monkeypatch.setattr(ui, "extract_pdf", lambda path: (pages, [2]))
+    monkeypatch.setattr(ui, "extract_pdf", lambda path, start, end: (pages, []))
     monkeypatch.setattr(ui, "chunk_pages", lambda *args: chunks)
 
-    result = ui.preview_pdf("manual.pdf", "build", "embed", 100, 0, 0, 100)
+    result = ui.preview_pdf("manual.pdf", "build", "embed", 100, 0, 0, 100, 2, 3)
     status, rows, state, stored_chunks, slider_update, page_status = result
 
-    assert status.startswith("已解析 3 頁，產生 2 個 chunk。")
+    assert status.startswith("已解析第 2–3 頁，產生 2 個 chunk。")
     assert [row[0] for row in rows] == [1]
-    assert state["page_count"] == 3
+    assert state["page_count"] == 2
+    assert state["page_start"] == 2
+    assert state["page_end"] == 3
     assert "chunks" not in state
     assert stored_chunks is chunks
+    assert slider_update["minimum"] == 2
     assert slider_update["maximum"] == 3
-    assert slider_update["value"] == 1
-    assert page_status == "第 1 / 3 頁；顯示 1 個相關 chunk。"
+    assert slider_update["value"] == 2
+    assert page_status == "第 2 / 3 頁；顯示 1 個相關 chunk。"
