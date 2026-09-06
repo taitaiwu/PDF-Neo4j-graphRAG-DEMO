@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 
-LAUNCHER_PATH = Path("啟動網站.sh")
+LAUNCHER_PATH = Path("start.sh")
 
 
 def test_linux_launcher_prepares_and_starts_application() -> None:
