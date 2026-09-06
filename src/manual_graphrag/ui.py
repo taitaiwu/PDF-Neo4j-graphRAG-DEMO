@@ -8,7 +8,7 @@ from uuid import uuid4
 import gradio as gr
 
 from .chunking import TextChunk, chunk_pages, preview_rows_for_page
-from .config import BuildConfig, public_settings
+from .config import public_settings
 from .env_store import load_env, save_env
 from .graph_service import extract_graph, plan_graph_schema, validate_schema
 from .neo4j_service import import_extraction
@@ -114,12 +114,8 @@ def initialize_page_range(
 
 def preview_pdf(
     file_path: str | None,
-    build_model: str,
-    embedding_model: str,
     chunk_size: int,
     chunk_overlap: int,
-    temperature: float,
-    max_output_tokens: int,
     start_page: int | float = 1,
     end_page: int | float | None = None,
 ) -> tuple[
@@ -128,18 +124,16 @@ def preview_pdf(
     if not file_path:
         return "請先上傳 PDF。", [], {}, [], gr.update(), "尚未解析 PDF。"
     try:
-        config = BuildConfig(
-            build_model=build_model,
-            embedding_model=embedding_model,
-            chunk_size=int(chunk_size),
-            chunk_overlap=int(chunk_overlap),
-            temperature=float(temperature),
-            max_output_tokens=int(max_output_tokens),
-        )
+        parsed_chunk_size = int(chunk_size)
+        parsed_chunk_overlap = int(chunk_overlap)
+        if not 100 <= parsed_chunk_size <= 10000:
+            raise ValueError("chunk_size 必須介於 100 到 10,000")
+        if not 0 <= parsed_chunk_overlap < parsed_chunk_size:
+            raise ValueError("chunk_overlap 必須大於等於 0 且小於 chunk_size")
         requested_start = int(start_page)
         requested_end = None if end_page is None else int(end_page)
         pages, empty_pages = extract_pdf(file_path, requested_start, requested_end)
-        chunks = chunk_pages(pages, config.chunk_size, config.chunk_overlap)
+        chunks = chunk_pages(pages, parsed_chunk_size, parsed_chunk_overlap)
         if not chunks:
             return (
                 "PDF 沒有可解析文字；掃描文件需在後續版本加入 OCR。",
@@ -159,7 +153,10 @@ def preview_pdf(
             "page_end": parsed_end,
             "empty_pages": empty_pages,
             "chunk_count": len(chunks),
-            "config": config.to_dict(),
+            "config": {
+                "chunk_size": parsed_chunk_size,
+                "chunk_overlap": parsed_chunk_overlap,
+            },
         }
         note = f"已解析第 {parsed_start}–{parsed_end} 頁，產生 {len(chunks)} 個 chunk。"
         if empty_pages:
@@ -227,10 +224,19 @@ def plan_schema_for_ui(
     model_endpoint: str,
     api_key: str,
     llm_model: str,
+    temperature: float,
+    max_output_tokens: int,
     chunks: list[TextChunk],
 ) -> tuple[str, str]:
     try:
-        plan = plan_graph_schema(model_endpoint, api_key, llm_model, chunks)
+        plan = plan_graph_schema(
+            model_endpoint,
+            api_key,
+            llm_model,
+            chunks,
+            float(temperature),
+            int(max_output_tokens),
+        )
     except ValueError as exc:
         return f"❌ {exc}", ""
     note = (
@@ -250,6 +256,8 @@ def extract_graph_for_ui(
     neo4j_password: str,
     llm_model: str,
     embedding_model: str,
+    temperature: float,
+    max_output_tokens: int,
     chunks: list[TextChunk],
     schema_text: str,
     preview_state: dict[str, Any],
@@ -262,7 +270,13 @@ def extract_graph_for_ui(
             raise ValueError("schema 必須是 JSON 物件")
         schema = validate_schema(raw_schema)
         extraction = extract_graph(
-            model_endpoint, api_key, llm_model, chunks, schema
+            model_endpoint,
+            api_key,
+            llm_model,
+            chunks,
+            schema,
+            float(temperature),
+            int(max_output_tokens),
         )
     except json.JSONDecodeError:
         return "❌ schema 不是有效 JSON。", [], [], {}
@@ -297,6 +311,8 @@ def extract_graph_for_ui(
         "document": document_name,
         "llm_model": llm_model,
         "embedding_model": embedding_model,
+        "temperature": float(temperature),
+        "max_output_tokens": int(max_output_tokens),
         "schema": schema,
         "entities": extraction.entities,
         "relationships": extraction.relationships,
@@ -390,12 +406,8 @@ def build_app() -> gr.Blocks:
                             precision=0,
                             label="解析結束頁（上傳後自動設為最後一頁）",
                         )
-                    build_model = gr.Textbox(label="建圖 LLM", value=env["BUILD_MODEL"])
-                    embedding_model = gr.State(env["EMBEDDING_MODEL"])
                     chunk_size = gr.Slider(100, 10000, value=1500, step=100, label="Chunk size（字元）")
                     chunk_overlap = gr.Slider(0, 2000, value=200, step=50, label="Chunk overlap（字元）")
-                    temperature = gr.Slider(0, 2, value=0, step=0.1, label="Temperature")
-                    max_output_tokens = gr.Number(value=2048, precision=0, label="最大輸出 tokens")
                     preview_button = gr.Button("解析並預覽 Chunk", variant="primary")
                     export_button = gr.Button("匯出目前設定")
                     export_file = gr.File(label="設定 JSON", interactive=False)
@@ -415,7 +427,6 @@ def build_app() -> gr.Blocks:
                         wrap=True,
                         max_height=750,
                         column_widths=[80, 120, 100, 900],
-                        show_search="search",
                     )
 
         with gr.Tab("3. 建圖"):
@@ -425,16 +436,27 @@ def build_app() -> gr.Blocks:
                 gr.Markdown(
                     "選擇 LLM，從上一頁產生的 chunks 規劃實體與關係類型。"
                 )
-                graph_llm_model = gr.Dropdown(
-                    choices=list(dict.fromkeys([env["BUILD_MODEL"], env["ANSWER_MODEL"]])),
-                    value=env["BUILD_MODEL"],
-                    allow_custom_value=True,
-                    label="Schema 規劃／抽取 LLM",
-                )
+                with gr.Row():
+                    graph_llm_model = gr.Dropdown(
+                        choices=list(dict.fromkeys([env["BUILD_MODEL"], env["ANSWER_MODEL"]])),
+                        value=env["BUILD_MODEL"],
+                        allow_custom_value=True,
+                        label="Schema 規劃／抽取 LLM",
+                    )
+                    graph_temperature = gr.Slider(
+                        0, 2, value=0, step=0.1, label="Temperature"
+                    )
+                    graph_max_output_tokens = gr.Number(
+                        value=2048, minimum=1, precision=0, label="最大輸出 tokens"
+                    )
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema", variant="secondary"
                 )
                 plan_status = gr.Markdown("請先在 PDF 頁面解析並產生 chunks。")
+                gr.HTML(
+                    "<style>.schema-scroll-editor .cm-content {font-size: 17px; line-height: 1.6;}</style>",
+                    padding=False,
+                )
                 schema_editor = gr.Code(
                     label="實體與關係 Schema（可編輯 JSON）",
                     language="json",
@@ -497,8 +519,8 @@ def build_app() -> gr.Blocks:
             neo4j_password,
             model_endpoint,
             api_key,
-            build_model,
-            embedding_model,
+            graph_llm_model,
+            graph_embedding_model,
             answer_model,
         ]
         for component in env_inputs:
@@ -513,12 +535,8 @@ def build_app() -> gr.Blocks:
             preview_pdf,
             inputs=[
                 pdf_file,
-                build_model,
-                embedding_model,
                 chunk_size,
                 chunk_overlap,
-                temperature,
-                max_output_tokens,
                 start_page,
                 end_page,
             ],
@@ -547,6 +565,8 @@ def build_app() -> gr.Blocks:
                 model_endpoint,
                 api_key,
                 graph_llm_model,
+                graph_temperature,
+                graph_max_output_tokens,
                 chunk_state,
             ],
             outputs=[plan_status, schema_editor],
@@ -562,6 +582,8 @@ def build_app() -> gr.Blocks:
                 neo4j_password,
                 graph_llm_model,
                 graph_embedding_model,
+                graph_temperature,
+                graph_max_output_tokens,
                 chunk_state,
                 schema_editor,
                 preview_state,

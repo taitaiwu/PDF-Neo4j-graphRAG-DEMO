@@ -73,7 +73,7 @@ def test_preview_pdf_initializes_page_navigation(monkeypatch) -> None:
     monkeypatch.setattr(ui, "extract_pdf", lambda path, start, end: (pages, []))
     monkeypatch.setattr(ui, "chunk_pages", lambda *args: chunks)
 
-    result = ui.preview_pdf("manual.pdf", "build", "embed", 100, 0, 0, 100, 2, 3)
+    result = ui.preview_pdf("manual.pdf", 100, 0, 2, 3)
     status, rows, state, stored_chunks, slider_update, page_status = result
 
     assert status.startswith("已解析第 2–3 頁，產生 2 個 chunk。")
@@ -115,7 +115,7 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
     )
 
     status, schema_text = ui.plan_schema_for_ui(
-        "http://models/v1", "key", "llm", [TextChunk(1, "text", (1,))]
+        "http://models/v1", "key", "llm", 0.3, 999, [TextChunk(1, "text", (1,))]
     )
 
     assert status.startswith("✅")
@@ -165,6 +165,8 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
         "password",
         "llm",
         "embed",
+        0.2,
+        1500,
         [TextChunk(1, "text", (3,))],
         json.dumps(schema),
         {"file_name": "manual.pdf"},
@@ -175,11 +177,13 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
     assert relationships[0][:3] == ["設備 A", "USES", "設備 B"]
     assert state["document"] == "manual.pdf"
     assert state["embedding_model"] == "embed"
+    assert state["temperature"] == 0.2
+    assert state["max_output_tokens"] == 1500
 
 
 def test_extract_graph_for_ui_rejects_invalid_schema() -> None:
     result = ui.extract_graph_for_ui(
-        "http://models/v1", "", "bolt://db", "neo4j", "user", "password", "llm", "embed", [], "not-json", {}
+        "http://models/v1", "", "bolt://db", "neo4j", "user", "password", "llm", "embed", 0.2, 1500, [], "not-json", {}
     )
 
     assert result == ("❌ schema 不是有效 JSON。", [], [], {})
@@ -221,6 +225,8 @@ def test_extract_graph_for_ui_keeps_results_when_neo4j_import_fails(monkeypatch)
         "password",
         "llm",
         "embed",
+        0.2,
+        1500,
         [TextChunk(1, "text", (3,))],
         json.dumps(schema),
         {"file_name": "manual.pdf"},

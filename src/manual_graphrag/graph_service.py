@@ -86,7 +86,12 @@ def _chat_json(
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0,
+    max_output_tokens: int = 2048,
 ) -> dict[str, Any]:
+    if not 0 <= temperature <= 2:
+        raise ValueError("temperature 必須介於 0 到 2")
+    if max_output_tokens < 1:
+        raise ValueError("最大輸出 tokens 必須大於 0")
     if not model.strip():
         raise ValueError("請選擇 LLM 模型")
     response = _post_json(
@@ -94,6 +99,7 @@ def _chat_json(
         {
             "model": model.strip(),
             "temperature": temperature,
+            "max_tokens": int(max_output_tokens),
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -153,6 +159,8 @@ def plan_graph_schema(
     api_key: str,
     llm_model: str,
     chunks: list[TextChunk],
+    temperature: float = 0,
+    max_output_tokens: int = 2048,
 ) -> SchemaPlan:
     sampled = _sample_chunks(chunks, SCHEMA_CONTEXT_LIMIT)
     if not sampled:
@@ -169,6 +177,8 @@ def plan_graph_schema(
         "\"relationship_types\":[{\"name\":\"...\",\"description\":\"...\","
         "\"source_types\":[\"...\"],\"target_types\":[\"...\"]}]}。\n\n"
         f"文件 chunks：\n{context}",
+        temperature,
+        max_output_tokens,
     )
     return SchemaPlan(validate_schema(schema), len(sampled), len(chunks))
 
@@ -196,6 +206,8 @@ def extract_graph(
     llm_model: str,
     chunks: list[TextChunk],
     schema: dict[str, Any],
+    temperature: float = 0,
+    max_output_tokens: int = 2048,
 ) -> GraphExtraction:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -224,6 +236,8 @@ def extract_graph(
             "\"relationships\":[{\"source\":\"...\",\"target\":\"...\","
             "\"type\":\"...\",\"description\":\"...\",\"source_chunk_numbers\":[1]}]}。\n\n"
             f"schema：\n{json.dumps(schema, ensure_ascii=False)}\n\n文件：\n{context}",
+            temperature,
+            max_output_tokens,
         )
         for item in result.get("entities", []):
             if not isinstance(item, dict):

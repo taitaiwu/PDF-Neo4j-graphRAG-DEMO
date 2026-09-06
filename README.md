@@ -10,7 +10,7 @@ PDF 會由原生 PyMuPDF 逐頁擷取排序後的純文字，保留來源頁碼�
 
 解析結果會依 `chunk_size` 以固定字元長度切分，相鄰 chunk 依 `chunk_overlap` 保留重疊文字；跨頁 chunk 會保留涉及的所有來源頁碼。
 
-解析完成後可使用頁碼滑桿或「上一頁／下一頁」逐頁檢視所選範圍內的所有相關 chunk。預覽表會顯示來源頁碼、字元數與內容；預覽區採滿版寬度配置，表格最大高度為 750px，並提供內容搜尋。
+解析完成後可使用頁碼滑桿或「上一頁／下一頁」逐頁檢視所選範圍內的所有相關 chunk。預覽表會顯示來源頁碼、字元數與內容；預覽區採滿版寬度配置，表格最大高度為 750px。
 
 加密 PDF 不受支援。PyMuPDF 採 GNU AGPL v3／商業雙重授權，發布或商業使用本專案前應確認所採授權符合使用情境。
 
@@ -51,9 +51,9 @@ pytest
 
 ## 實體與關係規劃
 
-完成 PDF chunk 預覽後，前往「建圖」頁操作。PDF 參數頁不再顯示 Embedding 模型；抽取區可另外選擇後續向量建圖使用的 Embedding 模型。模型服務需提供 OpenAI-compatible `POST /chat/completions` API；API Base URL 例如 `http://localhost:11434/v1`。
+完成 PDF chunk 預覽後，前往「建圖」頁操作。PDF 參數頁只保留頁碼範圍、chunk size 與 overlap，不再顯示建圖 LLM、Embedding、Temperature 或最大輸出 tokens，也不提供 chunk 關鍵字搜尋；抽取區可另外選擇後續向量建圖使用的 Embedding 模型。模型服務需提供 OpenAI-compatible `POST /chat/completions` API；API Base URL 例如 `http://localhost:11434/v1`。
 
-1. 按「分析文件並規劃 Schema」：系統在 30,000 字元預算內均勻抽取文件前、中、後段 chunks，產生實體類型與關係類型 JSON。
+1. 在建圖頁設定 Schema 規劃／抽取 LLM、Temperature 與最大輸出 tokens；這兩項生成參數會實際傳給每次模型 API 呼叫。按「分析文件並規劃 Schema」後，系統在 30,000 字元預算內均勻抽取文件前、中、後段 chunks，產生實體類型與關係類型 JSON。
 2. 在獨立的 Schema 規劃區檢查或修改 JSON；編輯器固定高度，內容超出時可使用水平與垂直捲動條。`entity_types` 與 `relationship_types` 必須是非空陣列，每一項必須有 `name`。
 3. 到獨立的抽取區按「確認 Schema 並生成」：系統依確認後的類型批次讀取全部 chunks，抽取、去重並顯示實體與關係，同時列出來源 chunk 與 PDF 頁碼。抽取完成後會自動以單一交易匯入「連線設定」頁指定的 Neo4j。
 

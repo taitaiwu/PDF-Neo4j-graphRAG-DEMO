@@ -42,7 +42,7 @@ def test_plan_graph_schema_parses_fenced_json_and_uses_chunks(monkeypatch) -> No
     chunks = [TextChunk(1, "設備 A 使用設備 B", (2,))]
 
     plan = graph_service.plan_graph_schema(
-        "http://localhost:11434/v1", "secret", "model-a", chunks
+        "http://localhost:11434/v1", "secret", "model-a", chunks, 0.4, 777
     )
 
     assert plan.schema == SCHEMA
@@ -50,6 +50,8 @@ def test_plan_graph_schema_parses_fenced_json_and_uses_chunks(monkeypatch) -> No
     assert plan.total_chunks == 1
     assert captured["url"] == "http://localhost:11434/v1/chat/completions"
     assert captured["api_key"] == "secret"
+    assert captured["payload"]["temperature"] == 0.4
+    assert captured["payload"]["max_tokens"] == 777
     assert "[CHUNK 1; PAGES 2]" in captured["payload"]["messages"][1]["content"]
 
 
@@ -58,7 +60,9 @@ def test_schema_planning_samples_across_large_document(monkeypatch) -> None:
     chunks = [TextChunk(number, "x" * 20, (number,)) for number in range(1, 11)]
     prompts: list[str] = []
 
-    def fake_chat(base_url, api_key, model, system_prompt, user_prompt, temperature=0):
+    def fake_chat(
+        base_url, api_key, model, system_prompt, user_prompt, temperature=0, max_output_tokens=2048
+    ):
         prompts.append(user_prompt)
         return SCHEMA
 
@@ -152,3 +156,10 @@ def test_validate_schema_rejects_missing_types() -> None:
 def test_plan_graph_schema_requires_chunks() -> None:
     with pytest.raises(ValueError, match="先在 PDF 頁面解析"):
         graph_service.plan_graph_schema("http://models/v1", "", "llm", [])
+
+
+def test_chat_json_rejects_invalid_generation_options() -> None:
+    with pytest.raises(ValueError, match="temperature"):
+        graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 2.1, 100)
+    with pytest.raises(ValueError, match="最大輸出 tokens"):
+        graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 0, 0)
