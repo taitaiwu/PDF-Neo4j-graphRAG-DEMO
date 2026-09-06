@@ -72,13 +72,30 @@ def _extract_json_text(text: str) -> dict[str, Any]:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         candidate = "\n".join(lines).strip()
+
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(candidate):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(candidate[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise ValueError("模型未回傳有效的 JSON 結果")
+
+
+def _chat_response_content(response: dict[str, Any]) -> tuple[str, str]:
     try:
-        value = json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        raise ValueError("模型未回傳有效的 JSON 結果") from exc
-    if not isinstance(value, dict):
-        raise ValueError("模型 JSON 結果必須是物件")
-    return value
+        choice = response["choices"][0]
+        content = choice["message"]["content"]
+        finish_reason = str(choice.get("finish_reason") or "")
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("模型 API 回傳缺少 choices/message/content") from exc
+    if not isinstance(content, str):
+        raise ValueError("模型回傳內容格式不正確")
+    return content, finish_reason
 
 
 def _chat_json(
@@ -96,26 +113,55 @@ def _chat_json(
         raise ValueError("最大輸出 tokens 必須大於 0")
     if not model.strip():
         raise ValueError("請選擇 LLM 模型")
-    response = _post_json(
-        _api_url(base_url, "chat/completions"),
-        {
-            "model": model.strip(),
-            "temperature": temperature,
-            "max_tokens": int(max_output_tokens),
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        },
-        api_key,
-    )
+
+    url = _api_url(base_url, "chat/completions")
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    def request_json(request_messages: list[dict[str, str]], request_temperature: float):
+        return _post_json(
+            url,
+            {
+                "model": model.strip(),
+                "temperature": request_temperature,
+                "max_tokens": int(max_output_tokens),
+                "messages": request_messages,
+            },
+            api_key,
+        )
+
+    response = request_json(messages, temperature)
+    content, finish_reason = _chat_response_content(response)
     try:
-        content = response["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError("模型 API 回傳缺少 choices/message/content") from exc
-    if not isinstance(content, str):
-        raise ValueError("模型回傳內容格式不正確")
-    return _extract_json_text(content)
+        return _extract_json_text(content)
+    except ValueError as first_error:
+        repair_messages = [
+            *messages,
+            {"role": "assistant", "content": content},
+            {
+                "role": "user",
+                "content": (
+                    "上一個回覆不是可解析的完整 JSON。請修正並只輸出一個完整 JSON 物件，"
+                    "不得加入 Markdown code fence 或說明文字。"
+                ),
+            },
+        ]
+        repaired_response = request_json(repair_messages, 0)
+        repaired_content, repaired_finish_reason = _chat_response_content(repaired_response)
+        try:
+            return _extract_json_text(repaired_content)
+        except ValueError as exc:
+            if finish_reason in {"length", "max_tokens"} or repaired_finish_reason in {
+                "length",
+                "max_tokens",
+            }:
+                raise ValueError(
+                    "模型 JSON 連續兩次無法解析，且輸出可能被截斷；"
+                    "請提高最大輸出 tokens 或減少 Schema 類型數量"
+                ) from exc
+            raise ValueError("模型 JSON 連續兩次無法解析") from first_error
 
 
 def _chunk_label(chunk: TextChunk) -> str:

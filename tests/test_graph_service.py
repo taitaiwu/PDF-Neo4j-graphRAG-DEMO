@@ -204,3 +204,59 @@ def test_schema_planning_stops_when_any_batch_fails(monkeypatch) -> None:
         graph_service.plan_graph_schema("http://models/v1", "", "llm", chunks)
     assert calls == 2
     # Failure is contextualized with the exact batch and no partial plan is returned.
+
+
+def test_extract_json_text_accepts_prose_around_json() -> None:
+    result = graph_service._extract_json_text(
+        '以下是結果：\n{"entity_types": [], "relationship_types": []}\n請確認。'
+    )
+
+    assert result == {"entity_types": [], "relationship_types": []}
+
+
+def test_chat_json_retries_invalid_output_once(monkeypatch) -> None:
+    responses = iter(
+        [
+            {
+                "choices": [
+                    {"message": {"content": "not json"}, "finish_reason": "stop"}
+                ]
+            },
+            chat_response(SCHEMA),
+        ]
+    )
+    payloads = []
+
+    def fake_post(url, payload, api_key, timeout=120):
+        payloads.append(payload)
+        return next(responses)
+
+    monkeypatch.setattr(graph_service, "_post_json", fake_post)
+
+    result = graph_service._chat_json(
+        "http://models/v1", "", "llm", "system", "user", 0.7, 2048
+    )
+
+    assert result == SCHEMA
+    assert len(payloads) == 2
+    assert payloads[0]["temperature"] == 0.7
+    assert payloads[1]["temperature"] == 0
+    assert len(payloads[1]["messages"]) == 4
+    assert "請修正" in payloads[1]["messages"][-1]["content"]
+
+
+def test_chat_json_reports_token_truncation_after_retry(monkeypatch) -> None:
+    monkeypatch.setattr(
+        graph_service,
+        "_post_json",
+        lambda *args, **kwargs: {
+            "choices": [
+                {"message": {"content": '{"entity_types": ['}, "finish_reason": "length"}
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="提高最大輸出 tokens"):
+        graph_service._chat_json(
+            "http://models/v1", "", "llm", "system", "user", 0, 100
+        )

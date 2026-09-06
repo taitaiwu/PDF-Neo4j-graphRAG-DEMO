@@ -58,3 +58,7 @@ pytest
 3. 到獨立的抽取區按「確認 Schema 並生成」：系統依確認後的類型批次讀取全部 chunks，抽取、去重並顯示實體與關係，同時列出來源 chunk 與 PDF 頁碼。抽取完成後會自動以單一交易匯入「連線設定」頁指定的 Neo4j。
 
 Chunks、Schema 與畫面抽取結果仍只保存在本次 Gradio 頁面工作階段；實體與關係會寫入 Neo4j，每次生成使用獨立 `run_id`。Neo4j 以 `GraphDocument`、`ExtractedEntity` 節點及 `EXTRACTED_RELATION` 關係保存資料。Embedding 模型選擇會記入文件節點與結果 state，實際向量生成仍屬後續階段。若 Neo4j 寫入失敗，畫面會保留已抽取結果並顯示錯誤。大型文件會產生多次 LLM API 呼叫，執行時間與費用取決於 chunk 數量及所選模型。
+
+### Schema JSON 解析失敗
+
+模型回覆若在 JSON 前後加入說明文字或不完整的 Markdown code fence，系統會嘗試從內容中擷取第一個完整 JSON 物件。若仍無法解析，會自動以 Temperature 0 要求同一模型修正一次。第二次仍失敗時才中止該批或合併組；若 API 的 `finish_reason` 顯示輸出長度截斷，狀態會提示提高「最大輸出 tokens」或減少 Schema 類型數量。
