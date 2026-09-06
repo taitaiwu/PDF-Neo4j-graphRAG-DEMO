@@ -109,8 +109,10 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
         "plan_graph_schema",
         lambda *args: SchemaPlan(
             {"entity_types": [{"name": "DEVICE"}], "relationship_types": [{"name": "USES"}]},
-            2,
             5,
+            5,
+            2,
+            1,
         ),
     )
 
@@ -119,7 +121,8 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
     )
 
     assert status.startswith("✅")
-    assert "2 / 5" in status
+    assert "全部 5 / 5" in status
+    assert "共 2 批、1 輪整合" in status
     assert json.loads(schema_text)["entity_types"][0]["name"] == "DEVICE"
 
 

@@ -46,7 +46,9 @@ def test_plan_graph_schema_parses_fenced_json_and_uses_chunks(monkeypatch) -> No
     )
 
     assert plan.schema == SCHEMA
-    assert plan.sampled_chunks == 1
+    assert plan.analyzed_chunks == 1
+    assert plan.batch_count == 1
+    assert plan.merge_rounds == 0
     assert plan.total_chunks == 1
     assert captured["url"] == "http://localhost:11434/v1/chat/completions"
     assert captured["api_key"] == "secret"
@@ -55,24 +57,43 @@ def test_plan_graph_schema_parses_fenced_json_and_uses_chunks(monkeypatch) -> No
     assert "[CHUNK 1; PAGES 2]" in captured["payload"]["messages"][1]["content"]
 
 
-def test_schema_planning_samples_across_large_document(monkeypatch) -> None:
+def test_schema_planning_analyzes_all_chunks_and_merges_hierarchically(monkeypatch) -> None:
     monkeypatch.setattr(graph_service, "SCHEMA_CONTEXT_LIMIT", 100)
     chunks = [TextChunk(number, "x" * 20, (number,)) for number in range(1, 11)]
     prompts: list[str] = []
+    progress_updates: list[tuple[float, str]] = []
 
-    def fake_chat(
-        base_url, api_key, model, system_prompt, user_prompt, temperature=0, max_output_tokens=2048
-    ):
-        prompts.append(user_prompt)
+    def fake_chat(*args, **kwargs):
+        prompts.append(args[4])
         return SCHEMA
 
     monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
 
-    plan = graph_service.plan_graph_schema("http://models/v1", "", "llm", chunks)
+    plan = graph_service.plan_graph_schema(
+        "http://models/v1",
+        "",
+        "llm",
+        chunks,
+        progress_callback=lambda value, description: progress_updates.append(
+            (value, description)
+        ),
+    )
 
-    assert 1 < plan.sampled_chunks < plan.total_chunks
-    assert "CHUNK 1" in prompts[0]
-    assert "CHUNK 10" in prompts[0]
+    chunk_prompts = [prompt for prompt in prompts if "文件 chunks" in prompt]
+    seen = {
+        number
+        for number in range(1, 11)
+        if any(f"CHUNK {number};" in prompt for prompt in chunk_prompts)
+    }
+    assert seen == set(range(1, 11))
+    assert plan.analyzed_chunks == plan.total_chunks == 10
+    assert plan.batch_count == len(chunk_prompts)
+    assert plan.batch_count > 1
+    assert plan.merge_rounds > 0
+    assert [value for value, _ in progress_updates] == sorted(
+        value for value, _ in progress_updates
+    )
+    assert progress_updates[-1] == (1.0, "已分析全部 10 / 10 chunks")
 
 
 def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> None:
@@ -163,3 +184,23 @@ def test_chat_json_rejects_invalid_generation_options() -> None:
         graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 2.1, 100)
     with pytest.raises(ValueError, match="最大輸出 tokens"):
         graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 0, 0)
+
+
+def test_schema_planning_stops_when_any_batch_fails(monkeypatch) -> None:
+    monkeypatch.setattr(graph_service, "SCHEMA_CONTEXT_LIMIT", 45)
+    chunks = [TextChunk(number, "x" * 20, (number,)) for number in range(1, 4)]
+    calls = 0
+
+    def fake_chat(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError("second batch failed")
+        return SCHEMA
+
+    monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
+
+    with pytest.raises(ValueError, match="second batch failed"):
+        graph_service.plan_graph_schema("http://models/v1", "", "llm", chunks)
+    assert calls == 2
+    # Failure is contextualized with the exact batch and no partial plan is returned.

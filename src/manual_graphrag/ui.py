@@ -227,6 +227,7 @@ def plan_schema_for_ui(
     temperature: float,
     max_output_tokens: int,
     chunks: list[TextChunk],
+    progress=gr.Progress(),
 ) -> tuple[str, str]:
     try:
         plan = plan_graph_schema(
@@ -236,12 +237,14 @@ def plan_schema_for_ui(
             chunks,
             float(temperature),
             int(max_output_tokens),
+            lambda value, description: progress(value, desc=description),
         )
     except ValueError as exc:
         return f"❌ {exc}", ""
     note = (
         f"✅ 已使用 {llm_model} 規劃 schema；參考 "
-        f"{plan.sampled_chunks} / {plan.total_chunks} 個 chunk。"
+        f"全部 {plan.analyzed_chunks} / {plan.total_chunks} 個 chunk，"
+        f"共 {plan.batch_count} 批、{plan.merge_rounds} 輪整合。"
         "請確認或編輯後再進行抽取。"
     )
     return note, json.dumps(plan.schema, ensure_ascii=False, indent=2)

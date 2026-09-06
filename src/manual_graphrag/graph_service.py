@@ -4,7 +4,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .chunking import TextChunk
 
@@ -16,8 +16,10 @@ EXTRACTION_BATCH_LIMIT = 12_000
 @dataclass(frozen=True)
 class SchemaPlan:
     schema: dict[str, Any]
-    sampled_chunks: int
+    analyzed_chunks: int
     total_chunks: int
+    batch_count: int
+    merge_rounds: int
 
 
 @dataclass(frozen=True)
@@ -121,20 +123,44 @@ def _chunk_label(chunk: TextChunk) -> str:
     return f"[CHUNK {chunk.number}; PAGES {pages}]\n{chunk.text}"
 
 
-def _sample_chunks(chunks: list[TextChunk], limit: int) -> list[TextChunk]:
-    if not chunks:
-        return []
-    sizes = [len(_chunk_label(chunk)) + 2 for chunk in chunks]
-    if sum(sizes) <= limit:
-        return list(chunks)
-    average_size = max(1, sum(sizes) / len(sizes))
-    count = min(len(chunks), max(1, int(limit / average_size)))
-    while count > 1:
-        indices = [round(index * (len(chunks) - 1) / (count - 1)) for index in range(count)]
-        if sum(sizes[index] for index in indices) <= limit:
-            return [chunks[index] for index in indices]
-        count -= 1
-    return [chunks[0]]
+def _chunk_batches(
+    chunks: list[TextChunk], limit: int
+) -> list[list[TextChunk]]:
+    batches: list[list[TextChunk]] = []
+    current: list[TextChunk] = []
+    size = 0
+    for chunk in chunks:
+        chunk_size = len(_chunk_label(chunk)) + 2
+        if current and size + chunk_size > limit:
+            batches.append(current)
+            current = []
+            size = 0
+        current.append(chunk)
+        size += chunk_size
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _schema_groups(
+    schemas: list[dict[str, Any]], limit: int
+) -> list[list[dict[str, Any]]]:
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    size = 0
+    for schema in schemas:
+        schema_size = len(json.dumps(schema, ensure_ascii=False)) + 2
+        if current and size + schema_size > limit:
+            groups.append(current)
+            current = []
+            size = 0
+        current.append(schema)
+        size += schema_size
+    if current:
+        groups.append(current)
+    if len(groups) == len(schemas) and len(schemas) > 1:
+        return [schemas[index : index + 2] for index in range(0, len(schemas), 2)]
+    return groups
 
 
 def validate_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -161,43 +187,88 @@ def plan_graph_schema(
     chunks: list[TextChunk],
     temperature: float = 0,
     max_output_tokens: int = 2048,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> SchemaPlan:
-    sampled = _sample_chunks(chunks, SCHEMA_CONTEXT_LIMIT)
-    if not sampled:
+    if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
-    context = "\n\n".join(_chunk_label(chunk) for chunk in sampled)
-    schema = _chat_json(
-        base_url,
-        api_key,
-        llm_model,
-        "你是知識圖譜 schema 設計專家。只輸出 JSON，不要 Markdown 或說明文字。",
-        "請根據文件內容規劃適合問答與檢索的實體及關係類型。"
-        "避免過度細分，名稱使用英文大寫 snake case，說明使用繁體中文。"
-        "輸出格式：{\"entity_types\":[{\"name\":\"...\",\"description\":\"...\"}],"
-        "\"relationship_types\":[{\"name\":\"...\",\"description\":\"...\","
-        "\"source_types\":[\"...\"],\"target_types\":[\"...\"]}]}。\n\n"
-        f"文件 chunks：\n{context}",
-        temperature,
-        max_output_tokens,
+    batches = _chunk_batches(chunks, SCHEMA_CONTEXT_LIMIT)
+    candidates: list[dict[str, Any]] = []
+    analyzed = 0
+    for index, batch in enumerate(batches, start=1):
+        if progress_callback:
+            progress_callback(
+                0.75 * (index - 1) / len(batches),
+                f"分析第 {index} / {len(batches)} 批（已分析 {analyzed} / {len(chunks)} chunks）",
+            )
+        context = "\n\n".join(_chunk_label(chunk) for chunk in batch)
+        try:
+            candidate = _chat_json(
+                base_url,
+                api_key,
+                llm_model,
+                "你是知識圖譜 schema 設計專家。只輸出 JSON，不要 Markdown 或說明文字。",
+                "請根據這一批文件內容提出候選實體與關係類型。"
+                "避免過度細分，名稱使用英文大寫 snake case，說明使用繁體中文。"
+                "輸出格式：{\"entity_types\":[{\"name\":\"...\",\"description\":\"...\"}],"
+                "\"relationship_types\":[{\"name\":\"...\",\"description\":\"...\","
+                "\"source_types\":[\"...\"],\"target_types\":[\"...\"]}]}。\n\n"
+                f"文件 chunks：\n{context}",
+                temperature,
+                max_output_tokens,
+            )
+            candidates.append(validate_schema(candidate))
+        except ValueError as exc:
+            raise ValueError(
+                f"Schema 規劃第 {index} / {len(batches)} 批失敗：{exc}"
+            ) from exc
+        analyzed += len(batch)
+
+    merge_rounds = 0
+    while len(candidates) > 1:
+        merge_rounds += 1
+        groups = _schema_groups(candidates, SCHEMA_CONTEXT_LIMIT)
+        merged: list[dict[str, Any]] = []
+        for index, group in enumerate(groups, start=1):
+            if progress_callback:
+                progress_callback(
+                    min(
+                        0.99,
+                        0.75
+                        + 0.24 * (1 - 0.5 ** (merge_rounds - 1))
+                        + 0.24 * (0.5**merge_rounds) * index / len(groups),
+                    ),
+                    f"第 {merge_rounds} 輪 Schema 整合：{index} / {len(groups)}",
+                )
+            if len(group) == 1:
+                merged.append(group[0])
+                continue
+            try:
+                result = _chat_json(
+                    base_url,
+                    api_key,
+                    llm_model,
+                    "你是知識圖譜 schema 整合專家。只輸出 JSON，不要 Markdown 或說明文字。",
+                    "合併以下候選 Schema：去除重複、統一同義名稱、保留各批次的重要類型，"
+                    "並避免過度細分。輸出格式必須維持 entity_types 與 relationship_types。\n\n"
+                    f"候選 Schema：\n{json.dumps(group, ensure_ascii=False)}",
+                    temperature,
+                    max_output_tokens,
+                )
+                merged.append(validate_schema(result))
+            except ValueError as exc:
+                raise ValueError(
+                    f"Schema 第 {merge_rounds} 輪整合第 {index} / {len(groups)} 組失敗：{exc}"
+                ) from exc
+        candidates = merged
+    if progress_callback:
+        progress_callback(1.0, f"已分析全部 {len(chunks)} / {len(chunks)} chunks")
+    return SchemaPlan(
+        candidates[0], len(chunks), len(chunks), len(batches), merge_rounds
     )
-    return SchemaPlan(validate_schema(schema), len(sampled), len(chunks))
 
 
 def _batches(chunks: list[TextChunk]) -> list[list[TextChunk]]:
-    batches: list[list[TextChunk]] = []
-    current: list[TextChunk] = []
-    size = 0
-    for chunk in chunks:
-        chunk_size = len(_chunk_label(chunk)) + 2
-        if current and size + chunk_size > EXTRACTION_BATCH_LIMIT:
-            batches.append(current)
-            current = []
-            size = 0
-        current.append(chunk)
-        size += chunk_size
-    if current:
-        batches.append(current)
-    return batches
+    return _chunk_batches(chunks, EXTRACTION_BATCH_LIMIT)
 
 
 def extract_graph(
