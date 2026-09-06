@@ -106,6 +106,7 @@ def _chat_json(
     user_prompt: str,
     temperature: float = 0,
     max_output_tokens: int = 2048,
+    validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not 0 <= temperature <= 2:
         raise ValueError("temperature 必須介於 0 到 2")
@@ -132,10 +133,14 @@ def _chat_json(
             api_key,
         )
 
+    def parse_and_validate(raw_content: str) -> dict[str, Any]:
+        parsed = _extract_json_text(raw_content)
+        return validator(parsed) if validator else parsed
+
     response = request_json(messages, temperature)
     content, finish_reason = _chat_response_content(response)
     try:
-        return _extract_json_text(content)
+        return parse_and_validate(content)
     except ValueError as first_error:
         repair_messages = [
             *messages,
@@ -143,25 +148,28 @@ def _chat_json(
             {
                 "role": "user",
                 "content": (
-                    "上一個回覆不是可解析的完整 JSON。請修正並只輸出一個完整 JSON 物件，"
-                    "不得加入 Markdown code fence 或說明文字。"
+                    "上一個回覆無法通過 JSON 解析或必要結構驗證。"
+                    f"驗證錯誤：{first_error}。請修正並只輸出一個完整 JSON 物件，"
+                    "不得加入 Markdown code fence 或說明文字，也不得省略必要欄位或回傳空陣列。"
                 ),
             },
         ]
         repaired_response = request_json(repair_messages, 0)
         repaired_content, repaired_finish_reason = _chat_response_content(repaired_response)
         try:
-            return _extract_json_text(repaired_content)
+            return parse_and_validate(repaired_content)
         except ValueError as exc:
             if finish_reason in {"length", "max_tokens"} or repaired_finish_reason in {
                 "length",
                 "max_tokens",
             }:
                 raise ValueError(
-                    "模型 JSON 連續兩次無法解析，且輸出可能被截斷；"
+                    "模型 JSON 連續兩次無法通過解析或結構驗證，且輸出可能被截斷；"
                     "請提高最大輸出 tokens 或減少 Schema 類型數量"
                 ) from exc
-            raise ValueError("模型 JSON 連續兩次無法解析") from first_error
+            raise ValueError(
+                f"模型 JSON 連續兩次無法通過解析或結構驗證：{exc}"
+            ) from first_error
 
 
 def _chunk_label(chunk: TextChunk) -> str:
@@ -261,8 +269,9 @@ def plan_graph_schema(
                 f"文件 chunks：\n{context}",
                 temperature,
                 max_output_tokens,
+                validate_schema,
             )
-            candidates.append(validate_schema(candidate))
+            candidates.append(candidate)
         except ValueError as exc:
             raise ValueError(
                 f"Schema 規劃第 {index} / {len(batches)} 批失敗：{exc}"
@@ -299,8 +308,9 @@ def plan_graph_schema(
                     f"候選 Schema：\n{json.dumps(group, ensure_ascii=False)}",
                     temperature,
                     max_output_tokens,
+                    validate_schema,
                 )
-                merged.append(validate_schema(result))
+                merged.append(result)
             except ValueError as exc:
                 raise ValueError(
                     f"Schema 第 {merge_rounds} 輪整合第 {index} / {len(groups)} 組失敗：{exc}"

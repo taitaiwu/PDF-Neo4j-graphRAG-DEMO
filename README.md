@@ -61,4 +61,4 @@ Chunks、Schema 與畫面抽取結果仍只保存在本次 Gradio 頁面工作�
 
 ### Schema JSON 解析失敗
 
-模型回覆若在 JSON 前後加入說明文字或不完整的 Markdown code fence，系統會嘗試從內容中擷取第一個完整 JSON 物件。若仍無法解析，會自動以 Temperature 0 要求同一模型修正一次。第二次仍失敗時才中止該批或合併組；若 API 的 `finish_reason` 顯示輸出長度截斷，狀態會提示提高「最大輸出 tokens」或減少 Schema 類型數量。
+模型回覆若在 JSON 前後加入說明文字或不完整的 Markdown code fence，系統會嘗試從內容中擷取第一個完整 JSON 物件。若 JSON 無法解析，或雖可解析但缺少非空的 `entity_types`、`relationship_types` 及必要的 `name`，會把實際驗證錯誤提供給模型，並以 Temperature 0 自動修正一次。第二次仍失敗時才中止該批或合併組；若 API 的 `finish_reason` 顯示輸出長度截斷，狀態會提示提高「最大輸出 tokens」或減少 Schema 類型數量。

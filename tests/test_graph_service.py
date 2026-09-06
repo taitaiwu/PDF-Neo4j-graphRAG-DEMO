@@ -245,6 +245,57 @@ def test_chat_json_retries_invalid_output_once(monkeypatch) -> None:
     assert "請修正" in payloads[1]["messages"][-1]["content"]
 
 
+
+def test_chat_json_retries_schema_that_fails_structure_validation(monkeypatch) -> None:
+    invalid_schema = {"entity_types": [], "relationship_types": []}
+    responses = iter([chat_response(invalid_schema), chat_response(SCHEMA)])
+    payloads = []
+
+    def fake_post(url, payload, api_key, timeout=120):
+        payloads.append(payload)
+        return next(responses)
+
+    monkeypatch.setattr(graph_service, "_post_json", fake_post)
+
+    result = graph_service._chat_json(
+        "http://models/v1",
+        "",
+        "llm",
+        "system",
+        "user",
+        0.7,
+        2048,
+        graph_service.validate_schema,
+    )
+
+    assert result == SCHEMA
+    assert len(payloads) == 2
+    assert payloads[1]["temperature"] == 0
+    repair_prompt = payloads[1]["messages"][-1]["content"]
+    assert "entity_types" in repair_prompt
+    assert "不得省略必要欄位或回傳空陣列" in repair_prompt
+
+
+def test_chat_json_reports_schema_validation_error_after_retry(monkeypatch) -> None:
+    invalid_schema = {"entity_types": [], "relationship_types": []}
+    monkeypatch.setattr(
+        graph_service, "_post_json", lambda *args, **kwargs: chat_response(invalid_schema)
+    )
+
+    with pytest.raises(ValueError, match="entity_types"):
+        graph_service._chat_json(
+            "http://models/v1",
+            "",
+            "llm",
+            "system",
+            "user",
+            0,
+            2048,
+            graph_service.validate_schema,
+        )
+
+
+
 def test_chat_json_reports_token_truncation_after_retry(monkeypatch) -> None:
     monkeypatch.setattr(
         graph_service,
