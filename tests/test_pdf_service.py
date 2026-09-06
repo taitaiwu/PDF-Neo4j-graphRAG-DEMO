@@ -26,7 +26,12 @@ def test_extract_pdf_returns_page_markdown_and_empty_pages(monkeypatch: pytest.M
     def fake_to_markdown(received_document: object, **options: object) -> list[dict[str, object]]:
         assert received_document is document
         assert list(options.pop("pages")) == [0, 1]
-        assert options == {"page_chunks": True, "use_ocr": False}
+        assert options == {
+            "page_chunks": True,
+            "header": False,
+            "footer": False,
+            "use_ocr": False,
+        }
         return [
             {"metadata": {"page_number": 1}, "text": "# 標題\n\n第一頁"},
             {"metadata": {"page_number": 2}, "text": "   "},
@@ -113,9 +118,12 @@ def test_extract_pdf_with_real_document(tmp_path: Path) -> None:
     pdf_path = tmp_path / "manual.pdf"
     document = pdf_service.pymupdf.open()
     first_page = document.new_page()
-    first_page.insert_text((72, 72), "Hello PDF")
+    first_page.insert_text((72, 200), "Hello PDF")
     second_page = document.new_page()
-    second_page.insert_text((72, 72), "Second page")
+    second_page.insert_text(
+        (72, 200),
+        "Second page\nThis is document body text.\nAnother body line.",
+    )
     document.new_page()
     document.save(pdf_path)
     document.close()
@@ -123,7 +131,9 @@ def test_extract_pdf_with_real_document(tmp_path: Path) -> None:
     assert pdf_service.get_pdf_page_count(pdf_path) == 3
     pages, empty_pages = pdf_service.extract_pdf(pdf_path, 2, 3)
 
-    assert [(page.page, page.text) for page in pages] == [(2, "Second page"), (3, "")]
+    assert [page.page for page in pages] == [2, 3]
+    assert "Second page" in pages[0].text
+    assert pages[1].text == ""
     assert empty_pages == [3]
 
 
@@ -160,3 +170,30 @@ def test_extract_pdf_rejects_invalid_page_ranges(monkeypatch: pytest.MonkeyPatch
     for start_page, end_page, message in cases:
         with pytest.raises(ValueError, match=message):
             pdf_service.extract_pdf("manual.pdf", start_page, end_page)
+
+
+def test_extract_pdf_excludes_headers_and_footers_from_real_document(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "with-margins.pdf"
+    document = pdf_service.pymupdf.open()
+    for page_number in range(1, 4):
+        page = document.new_page()
+        page.insert_text((72, 30), "Repeated manual header")
+        page.insert_text((72, 200), f"Body content {page_number}")
+        page.insert_text((72, 810), f"Page {page_number}")
+    document.save(pdf_path)
+    document.close()
+
+    pages, empty_pages = pdf_service.extract_pdf(pdf_path)
+
+    assert empty_pages == []
+    assert all(
+        f"Body content {page_number}" in page.text
+        for page_number, page in enumerate(pages, start=1)
+    )
+    assert all("Repeated manual header" not in page.text for page in pages)
+    assert all(
+        f"Page {page_number}" not in page.text
+        for page_number, page in enumerate(pages, start=1)
+    )

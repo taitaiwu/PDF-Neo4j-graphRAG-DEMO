@@ -65,6 +65,8 @@ def extract_pdf(
             page_chunks = pymupdf4llm.to_markdown(
                 document,
                 page_chunks=True,
+                header=False,
+                footer=False,
                 pages=range(first_page - 1, last_page),
                 use_ocr=False,
             )
