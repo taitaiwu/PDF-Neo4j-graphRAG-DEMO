@@ -10,6 +10,8 @@ from .chunking import TextChunk
 
 
 SCHEMA_CONTEXT_LIMIT = 30_000
+SCHEMA_MERGE_LIMIT = 12_000
+SCHEMA_DESCRIPTION_LIMIT = 120
 EXTRACTION_BATCH_LIMIT = 12_000
 
 
@@ -217,6 +219,45 @@ def _schema_groups(
     return groups
 
 
+
+def _compact_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    schema = validate_schema(schema)
+
+    def compact_description(value: Any) -> str:
+        return " ".join(str(value or "").split())[:SCHEMA_DESCRIPTION_LIMIT]
+
+    entity_types = [
+        {
+            "name": str(item["name"]).strip(),
+            "description": compact_description(item.get("description")),
+        }
+        for item in schema["entity_types"]
+    ]
+    relationship_types = []
+    for item in schema["relationship_types"]:
+        relationship = {
+            "name": str(item["name"]).strip(),
+            "description": compact_description(item.get("description")),
+        }
+        for field in ("source_types", "target_types"):
+            values = item.get(field, [])
+            relationship[field] = (
+                list(
+                    dict.fromkeys(
+                        str(value).strip() for value in values if str(value).strip()
+                    )
+                )
+                if isinstance(values, list)
+                else []
+            )
+        relationship_types.append(relationship)
+    return {
+        "entity_types": entity_types,
+        "relationship_types": relationship_types,
+    }
+
+
+
 def validate_schema(schema: dict[str, Any]) -> dict[str, Any]:
     entity_types = schema.get("entity_types")
     relationship_types = schema.get("relationship_types")
@@ -271,7 +312,7 @@ def plan_graph_schema(
                 max_output_tokens,
                 validate_schema,
             )
-            candidates.append(candidate)
+            candidates.append(_compact_schema(candidate))
         except ValueError as exc:
             raise ValueError(
                 f"Schema 規劃第 {index} / {len(batches)} 批失敗：{exc}"
@@ -281,7 +322,7 @@ def plan_graph_schema(
     merge_rounds = 0
     while len(candidates) > 1:
         merge_rounds += 1
-        groups = _schema_groups(candidates, SCHEMA_CONTEXT_LIMIT)
+        groups = _schema_groups(candidates, SCHEMA_MERGE_LIMIT)
         merged: list[dict[str, Any]] = []
         for index, group in enumerate(groups, start=1):
             if progress_callback:
@@ -304,13 +345,15 @@ def plan_graph_schema(
                     llm_model,
                     "你是知識圖譜 schema 整合專家。只輸出 JSON，不要 Markdown 或說明文字。",
                     "合併以下候選 Schema：去除重複、統一同義名稱、保留各批次的重要類型，"
-                    "並避免過度細分。輸出格式必須維持 entity_types 與 relationship_types。\n\n"
+                    "並避免過度細分。只保留類型名稱、簡短說明，以及關係的 source_types "
+                    "與 target_types；不要輸出範例、屬性或其他欄位。"
+                    "輸出格式必須維持 entity_types 與 relationship_types。\n\n"
                     f"候選 Schema：\n{json.dumps(group, ensure_ascii=False)}",
                     temperature,
                     max_output_tokens,
                     validate_schema,
                 )
-                merged.append(result)
+                merged.append(_compact_schema(result))
             except ValueError as exc:
                 raise ValueError(
                     f"Schema 第 {merge_rounds} 輪整合第 {index} / {len(groups)} 組失敗：{exc}"

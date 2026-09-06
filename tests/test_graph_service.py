@@ -96,6 +96,65 @@ def test_schema_planning_analyzes_all_chunks_and_merges_hierarchically(monkeypat
     assert progress_updates[-1] == (1.0, "已分析全部 10 / 10 chunks")
 
 
+
+def test_schema_groups_use_smaller_merge_limit(monkeypatch) -> None:
+    monkeypatch.setattr(graph_service, "SCHEMA_CONTEXT_LIMIT", 100)
+    monkeypatch.setattr(graph_service, "SCHEMA_MERGE_LIMIT", 150)
+    chunks = [TextChunk(number, "x" * 20, (number,)) for number in range(1, 11)]
+    merge_group_sizes = []
+
+    def fake_chat(*args, **kwargs):
+        prompt = args[4]
+        if "候選 Schema" in prompt:
+            merge_group_sizes.append(prompt.count('"entity_types"'))
+        return SCHEMA
+
+    monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
+
+    plan = graph_service.plan_graph_schema("http://models/v1", "", "llm", chunks)
+
+    assert plan.merge_rounds > 1
+    assert merge_group_sizes
+    assert all(size <= 2 for size in merge_group_sizes)
+
+
+def test_compact_schema_keeps_only_required_merge_fields(monkeypatch) -> None:
+    monkeypatch.setattr(graph_service, "SCHEMA_DESCRIPTION_LIMIT", 8)
+    schema = {
+        "entity_types": [
+            {
+                "name": " DEVICE ",
+                "description": "很長   的設備類型說明",
+                "properties": ["serial"],
+            }
+        ],
+        "relationship_types": [
+            {
+                "name": " USES ",
+                "description": "使用關係說明文字",
+                "source_types": ["DEVICE", "DEVICE", ""],
+                "target_types": [" DEVICE "],
+                "example": "A uses B",
+            }
+        ],
+    }
+
+    compact = graph_service._compact_schema(schema)
+
+    assert compact == {
+        "entity_types": [{"name": "DEVICE", "description": "很長 的設備類型"}],
+        "relationship_types": [
+            {
+                "name": "USES",
+                "description": "使用關係說明文字",
+                "source_types": ["DEVICE"],
+                "target_types": ["DEVICE"],
+            }
+        ],
+    }
+
+
+
 def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> None:
     monkeypatch.setattr(graph_service, "EXTRACTION_BATCH_LIMIT", 45)
     chunks = [
