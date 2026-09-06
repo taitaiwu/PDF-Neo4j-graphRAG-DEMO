@@ -301,12 +301,12 @@ def build_app() -> gr.Blocks:
                         next_button = gr.Button("下一頁", scale=1)
                     page_status = gr.Markdown("請先解析 PDF。")
                     chunk_table = gr.Dataframe(
-                        headers=["編號", "頁碼", "字元數", "內容"],
-                        datatype=["number", "str", "number", "str"],
+                        headers=["編號", "章節", "頁碼", "字元數", "內容"],
+                        datatype=["number", "str", "str", "number", "str"],
                         interactive=False,
                         wrap=True,
                         max_height=750,
-                        column_widths=[80, 120, 100, 900],
+                        column_widths=[80, 220, 120, 100, 900],
                         show_search="search",
                     )
 
