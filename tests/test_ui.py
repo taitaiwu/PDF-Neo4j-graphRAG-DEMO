@@ -115,7 +115,7 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
     )
 
     status, schema_text = ui.plan_schema_for_ui(
-        "http://models/v1", "key", "llm", "embed", [TextChunk(1, "text", (1,))]
+        "http://models/v1", "key", "llm", [TextChunk(1, "text", (1,))]
     )
 
     assert status.startswith("✅")
@@ -149,6 +149,8 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
         processed_chunks=1,
     )
     monkeypatch.setattr(ui, "extract_graph", lambda *args: extraction)
+    from manual_graphrag.neo4j_service import ImportSummary
+    monkeypatch.setattr(ui, "import_extraction", lambda *args: ImportSummary(1, 1))
     schema = {
         "entity_types": [{"name": "DEVICE"}],
         "relationship_types": [{"name": "USES"}],
@@ -157,6 +159,10 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
     status, entities, relationships, state = ui.extract_graph_for_ui(
         "http://models/v1",
         "key",
+        "bolt://db",
+        "neo4j",
+        "user",
+        "password",
         "llm",
         "embed",
         [TextChunk(1, "text", (3,))],
@@ -173,7 +179,56 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
 
 def test_extract_graph_for_ui_rejects_invalid_schema() -> None:
     result = ui.extract_graph_for_ui(
-        "http://models/v1", "", "llm", "embed", [], "not-json", {}
+        "http://models/v1", "", "bolt://db", "neo4j", "user", "password", "llm", "embed", [], "not-json", {}
     )
 
     assert result == ("❌ schema 不是有效 JSON。", [], [], {})
+
+
+def test_extract_graph_for_ui_keeps_results_when_neo4j_import_fails(monkeypatch) -> None:
+    from manual_graphrag.graph_service import GraphExtraction
+
+    extraction = GraphExtraction(
+        entities=[
+            {
+                "name": "設備 A",
+                "type": "DEVICE",
+                "description": "設備",
+                "source_chunk_numbers": [1],
+                "source_pages": [3],
+            }
+        ],
+        relationships=[],
+        processed_chunks=1,
+    )
+    monkeypatch.setattr(ui, "extract_graph", lambda *args: extraction)
+
+    def failed_import(*args):
+        raise ValueError("Neo4j 寫入失敗：offline")
+
+    monkeypatch.setattr(ui, "import_extraction", failed_import)
+    schema = {
+        "entity_types": [{"name": "DEVICE"}],
+        "relationship_types": [{"name": "USES"}],
+    }
+
+    status, entities, relationships, state = ui.extract_graph_for_ui(
+        "http://models/v1",
+        "key",
+        "bolt://db",
+        "neo4j",
+        "user",
+        "password",
+        "llm",
+        "embed",
+        [TextChunk(1, "text", (3,))],
+        json.dumps(schema),
+        {"file_name": "manual.pdf"},
+    )
+
+    assert status.startswith("⚠️ 已處理 1 個 chunk")
+    assert "Neo4j 寫入失敗：offline" in status
+    assert entities[0][0] == "設備 A"
+    assert relationships == []
+    assert state["neo4j_imported"] is False
+    assert state["neo4j_error"] == "Neo4j 寫入失敗：offline"

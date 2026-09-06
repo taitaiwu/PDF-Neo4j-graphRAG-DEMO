@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import gradio as gr
 
@@ -10,6 +11,7 @@ from .chunking import TextChunk, chunk_pages, preview_rows_for_page
 from .config import BuildConfig, public_settings
 from .env_store import load_env, save_env
 from .graph_service import extract_graph, plan_graph_schema, validate_schema
+from .neo4j_service import import_extraction
 from .pdf_service import extract_pdf, get_pdf_page_count
 from .storage import write_json
 
@@ -225,11 +227,8 @@ def plan_schema_for_ui(
     model_endpoint: str,
     api_key: str,
     llm_model: str,
-    embedding_model: str,
     chunks: list[TextChunk],
 ) -> tuple[str, str]:
-    if not embedding_model.strip():
-        return "❌ 請選擇 Embedding 模型。", ""
     try:
         plan = plan_graph_schema(model_endpoint, api_key, llm_model, chunks)
     except ValueError as exc:
@@ -237,7 +236,7 @@ def plan_schema_for_ui(
     note = (
         f"✅ 已使用 {llm_model} 規劃 schema；參考 "
         f"{plan.sampled_chunks} / {plan.total_chunks} 個 chunk。"
-        f"Embedding 模型將使用 {embedding_model}。請確認或編輯後再生成。"
+        "請確認或編輯後再進行抽取。"
     )
     return note, json.dumps(plan.schema, ensure_ascii=False, indent=2)
 
@@ -245,6 +244,10 @@ def plan_schema_for_ui(
 def extract_graph_for_ui(
     model_endpoint: str,
     api_key: str,
+    neo4j_uri: str,
+    neo4j_database: str,
+    neo4j_username: str,
+    neo4j_password: str,
     llm_model: str,
     embedding_model: str,
     chunks: list[TextChunk],
@@ -287,19 +290,47 @@ def extract_graph_for_ui(
         ]
         for item in extraction.relationships
     ]
+    run_id = str(uuid4())
+    document_name = preview_state.get("file_name", "")
     graph_state = {
-        "document": preview_state.get("file_name", ""),
+        "run_id": run_id,
+        "document": document_name,
         "llm_model": llm_model,
         "embedding_model": embedding_model,
         "schema": schema,
         "entities": extraction.entities,
         "relationships": extraction.relationships,
     }
+    try:
+        imported = import_extraction(
+            neo4j_uri,
+            neo4j_database,
+            neo4j_username,
+            neo4j_password,
+            run_id,
+            document_name,
+            llm_model,
+            embedding_model,
+            schema,
+            extraction.entities,
+            extraction.relationships,
+        )
+    except ValueError as exc:
+        graph_state["neo4j_imported"] = False
+        graph_state["neo4j_error"] = str(exc)
+        status = (
+            f"⚠️ 已處理 {extraction.processed_chunks} 個 chunk，抽取 "
+            f"{len(extraction.entities)} 個實體與 "
+            f"{len(extraction.relationships)} 筆關係，但 {exc}"
+        )
+        return status, entity_rows, relationship_rows, graph_state
+
+    graph_state["neo4j_imported"] = True
     status = (
         f"✅ 已處理 {extraction.processed_chunks} 個 chunk，抽取 "
         f"{len(extraction.entities)} 個實體與 "
-        f"{len(extraction.relationships)} 筆關係。"
-        "結果目前保存在本次頁面工作階段。"
+        f"{len(extraction.relationships)} 筆關係；已匯入 Neo4j "
+        f"{imported.entity_count} 個實體與 {imported.relationship_count} 筆關係。"
     )
     return status, entity_rows, relationship_rows, graph_state
 
@@ -360,7 +391,7 @@ def build_app() -> gr.Blocks:
                             label="解析結束頁（上傳後自動設為最後一頁）",
                         )
                     build_model = gr.Textbox(label="建圖 LLM", value=env["BUILD_MODEL"])
-                    embedding_model = gr.Textbox(label="Embedding 模型", value=env["EMBEDDING_MODEL"])
+                    embedding_model = gr.State(env["EMBEDDING_MODEL"])
                     chunk_size = gr.Slider(100, 10000, value=1500, step=100, label="Chunk size（字元）")
                     chunk_overlap = gr.Slider(0, 2000, value=200, step=50, label="Chunk overlap（字元）")
                     temperature = gr.Slider(0, 2, value=0, step=0.1, label="Temperature")
@@ -389,43 +420,57 @@ def build_app() -> gr.Blocks:
 
         with gr.Tab("3. 建圖"):
             gr.Markdown("### 規劃並抽取知識圖譜")
-            gr.Markdown(
-                "先從上一頁產生的 chunks 規劃實體與關係 schema；確認或編輯 JSON 後，再執行抽取。"
-            )
-            with gr.Row():
+            with gr.Group():
+                gr.Markdown("#### ① 規劃 Schema")
+                gr.Markdown(
+                    "選擇 LLM，從上一頁產生的 chunks 規劃實體與關係類型。"
+                )
                 graph_llm_model = gr.Dropdown(
                     choices=list(dict.fromkeys([env["BUILD_MODEL"], env["ANSWER_MODEL"]])),
                     value=env["BUILD_MODEL"],
                     allow_custom_value=True,
-                    label="抽取 LLM",
+                    label="Schema 規劃／抽取 LLM",
+                )
+                plan_schema_button = gr.Button(
+                    "分析文件並規劃 Schema", variant="secondary"
+                )
+                plan_status = gr.Markdown("請先在 PDF 頁面解析並產生 chunks。")
+                schema_editor = gr.Code(
+                    label="實體與關係 Schema（可編輯 JSON）",
+                    language="json",
+                    interactive=True,
+                    lines=18,
+                    max_lines=18,
+                    wrap_lines=False,
+                    elem_classes="schema-scroll-editor",
+                )
+
+            with gr.Group():
+                gr.Markdown("#### ② 確認 Schema、抽取並匯入 Neo4j")
+                gr.Markdown(
+                    "確認上方 JSON 後執行全部 chunks；抽取完成會自動寫入連線設定中的 Neo4j。"
                 )
                 graph_embedding_model = gr.Dropdown(
                     choices=[env["EMBEDDING_MODEL"]],
                     value=env["EMBEDDING_MODEL"],
                     allow_custom_value=True,
-                    label="Embedding 模型（後續向量建圖使用）",
+                    label="Embedding 模型（記入建圖結果）",
                 )
-            with gr.Row():
-                plan_schema_button = gr.Button("分析文件並規劃 Schema", variant="secondary")
-                generate_graph_button = gr.Button("確認 Schema 並生成", variant="primary")
-            build_status = gr.Markdown("請先在 PDF 頁面解析並產生 chunks。")
-            schema_editor = gr.Code(
-                label="實體與關係 Schema（可編輯 JSON）",
-                language="json",
-                interactive=True,
-                lines=18,
-            )
-            gr.Markdown("#### 抽取結果")
-            entity_table = gr.Dataframe(
-                headers=["實體", "類型", "說明", "來源 Chunks", "來源頁碼"],
-                interactive=False,
-                wrap=True,
-            )
-            relationship_table = gr.Dataframe(
-                headers=["來源實體", "關係", "目標實體", "說明", "來源 Chunks", "來源頁碼"],
-                interactive=False,
-                wrap=True,
-            )
+                generate_graph_button = gr.Button(
+                    "確認 Schema 並生成", variant="primary"
+                )
+                build_status = gr.Markdown("尚未執行抽取。")
+                gr.Markdown("##### 抽取結果")
+                entity_table = gr.Dataframe(
+                    headers=["實體", "類型", "說明", "來源 Chunks", "來源頁碼"],
+                    interactive=False,
+                    wrap=True,
+                )
+                relationship_table = gr.Dataframe(
+                    headers=["來源實體", "關係", "目標實體", "說明", "來源 Chunks", "來源頁碼"],
+                    interactive=False,
+                    wrap=True,
+                )
 
         with gr.Tab("4. 問答測試"):
             answer_model = gr.Textbox(label="問答 LLM", value=env["ANSWER_MODEL"])
@@ -502,16 +547,19 @@ def build_app() -> gr.Blocks:
                 model_endpoint,
                 api_key,
                 graph_llm_model,
-                graph_embedding_model,
                 chunk_state,
             ],
-            outputs=[build_status, schema_editor],
+            outputs=[plan_status, schema_editor],
         )
         generate_graph_button.click(
             extract_graph_for_ui,
             inputs=[
                 model_endpoint,
                 api_key,
+                neo4j_uri,
+                neo4j_database,
+                neo4j_username,
+                neo4j_password,
                 graph_llm_model,
                 graph_embedding_model,
                 chunk_state,

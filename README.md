@@ -1,6 +1,6 @@
 # PDF GraphRAG 測試工具
 
-這是 Gradio 初版介面，已包含連線設定、PyMuPDF PDF 解析、chunk 參數與預覽、JSON 設定匯出，以及建圖／問答的操作入口。Neo4j 寫入與 GraphRAG 後端會在下一階段接入。
+這是 Gradio 初版介面，已包含連線設定、PyMuPDF PDF 解析、chunk 參數與預覽、JSON 設定匯出，以及建圖／問答的操作入口。實體與關係抽取後可自動匯入 Neo4j；GraphRAG 問答後端仍待後續接入。
 
 ## PDF 解析
 
@@ -51,10 +51,10 @@ pytest
 
 ## 實體與關係規劃
 
-完成 PDF chunk 預覽後，前往「建圖」頁選擇抽取 LLM 與後續向量建圖使用的 Embedding 模型。模型服務需提供 OpenAI-compatible `POST /chat/completions` API；API Base URL 例如 `http://localhost:11434/v1`。
+完成 PDF chunk 預覽後，前往「建圖」頁操作。PDF 參數頁不再顯示 Embedding 模型；抽取區可另外選擇後續向量建圖使用的 Embedding 模型。模型服務需提供 OpenAI-compatible `POST /chat/completions` API；API Base URL 例如 `http://localhost:11434/v1`。
 
 1. 按「分析文件並規劃 Schema」：系統在 30,000 字元預算內均勻抽取文件前、中、後段 chunks，產生實體類型與關係類型 JSON。
-2. 在 Schema 編輯器檢查或修改 JSON；`entity_types` 與 `relationship_types` 必須是非空陣列，每一項必須有 `name`。
-3. 按「確認 Schema 並生成」：系統依確認後的類型批次讀取全部 chunks，抽取、去重並顯示實體與關係，同時列出來源 chunk 與 PDF 頁碼。
+2. 在獨立的 Schema 規劃區檢查或修改 JSON；編輯器固定高度，內容超出時可使用水平與垂直捲動條。`entity_types` 與 `relationship_types` 必須是非空陣列，每一項必須有 `name`。
+3. 到獨立的抽取區按「確認 Schema 並生成」：系統依確認後的類型批次讀取全部 chunks，抽取、去重並顯示實體與關係，同時列出來源 chunk 與 PDF 頁碼。抽取完成後會自動以單一交易匯入「連線設定」頁指定的 Neo4j。
 
-目前抽取結果與 chunks 都只保存在本次 Gradio 頁面工作階段，尚未寫入 Neo4j 或磁碟；Embedding 模型選擇會記入結果 state，實際向量生成與 Neo4j 寫入仍屬後續階段。大型文件會產生多次 LLM API 呼叫，執行時間與費用取決於 chunk 數量及所選模型。
+Chunks、Schema 與畫面抽取結果仍只保存在本次 Gradio 頁面工作階段；實體與關係會寫入 Neo4j，每次生成使用獨立 `run_id`。Neo4j 以 `GraphDocument`、`ExtractedEntity` 節點及 `EXTRACTED_RELATION` 關係保存資料。Embedding 模型選擇會記入文件節點與結果 state，實際向量生成仍屬後續階段。若 Neo4j 寫入失敗，畫面會保留已抽取結果並顯示錯誤。大型文件會產生多次 LLM API 呼叫，執行時間與費用取決於 chunk 數量及所選模型。
