@@ -1,6 +1,12 @@
 # PDF GraphRAG 測試工具
 
-這是 Gradio 初版介面，已包含連線設定、PDF 文字解析、chunk 參數與預覽、JSON 設定匯出，以及建圖／問答的操作入口。Neo4j 寫入與 GraphRAG 後端會在下一階段接入。
+這是 Gradio 初版介面，已包含連線設定、PyMuPDF4LLM PDF 解析、chunk 參數與預覽、JSON 設定匯出，以及建圖／問答的操作入口。Neo4j 寫入與 GraphRAG 後端會在下一階段接入。
+
+## PDF 解析
+
+PDF 會由 PyMuPDF4LLM 逐頁轉換成適合 RAG 使用的 Markdown，保留來源頁碼並回報無文字頁面。現階段停用 OCR，因此僅支援具有文字層的 PDF；掃描型文件仍會顯示無法解析提示。
+
+加密 PDF 不受支援。PyMuPDF4LLM 採 GNU AGPL v3／商業雙重授權，發布或商業使用本專案前應確認所採授權符合使用情境。
 
 ## 安裝與啟動
 
