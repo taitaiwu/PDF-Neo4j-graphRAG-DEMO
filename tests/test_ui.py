@@ -1,3 +1,4 @@
+import json
 import gradio as gr
 from manual_graphrag import ui
 from manual_graphrag.chunking import PageText, TextChunk
@@ -98,3 +99,81 @@ def test_initialize_page_range_defaults_end_to_last_page(monkeypatch) -> None:
     assert end_update["value"] == 326
     assert end_update["maximum"] == 326
     assert status == "已偵測到 326 頁；解析結束頁預設為第 326 頁。"
+
+
+def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
+    from manual_graphrag.graph_service import SchemaPlan
+
+    monkeypatch.setattr(
+        ui,
+        "plan_graph_schema",
+        lambda *args: SchemaPlan(
+            {"entity_types": [{"name": "DEVICE"}], "relationship_types": [{"name": "USES"}]},
+            2,
+            5,
+        ),
+    )
+
+    status, schema_text = ui.plan_schema_for_ui(
+        "http://models/v1", "key", "llm", "embed", [TextChunk(1, "text", (1,))]
+    )
+
+    assert status.startswith("✅")
+    assert "2 / 5" in status
+    assert json.loads(schema_text)["entity_types"][0]["name"] == "DEVICE"
+
+
+def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
+    from manual_graphrag.graph_service import GraphExtraction
+
+    extraction = GraphExtraction(
+        entities=[
+            {
+                "name": "設備 A",
+                "type": "DEVICE",
+                "description": "設備",
+                "source_chunk_numbers": [1],
+                "source_pages": [3],
+            }
+        ],
+        relationships=[
+            {
+                "source": "設備 A",
+                "type": "USES",
+                "target": "設備 B",
+                "description": "使用",
+                "source_chunk_numbers": [1],
+                "source_pages": [3],
+            }
+        ],
+        processed_chunks=1,
+    )
+    monkeypatch.setattr(ui, "extract_graph", lambda *args: extraction)
+    schema = {
+        "entity_types": [{"name": "DEVICE"}],
+        "relationship_types": [{"name": "USES"}],
+    }
+
+    status, entities, relationships, state = ui.extract_graph_for_ui(
+        "http://models/v1",
+        "key",
+        "llm",
+        "embed",
+        [TextChunk(1, "text", (3,))],
+        json.dumps(schema),
+        {"file_name": "manual.pdf"},
+    )
+
+    assert status.startswith("✅ 已處理 1 個 chunk")
+    assert entities[0][:2] == ["設備 A", "DEVICE"]
+    assert relationships[0][:3] == ["設備 A", "USES", "設備 B"]
+    assert state["document"] == "manual.pdf"
+    assert state["embedding_model"] == "embed"
+
+
+def test_extract_graph_for_ui_rejects_invalid_schema() -> None:
+    result = ui.extract_graph_for_ui(
+        "http://models/v1", "", "llm", "embed", [], "not-json", {}
+    )
+
+    assert result == ("❌ schema 不是有效 JSON。", [], [], {})

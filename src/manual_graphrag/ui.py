@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ import gradio as gr
 from .chunking import TextChunk, chunk_pages, preview_rows_for_page
 from .config import BuildConfig, public_settings
 from .env_store import load_env, save_env
+from .graph_service import extract_graph, plan_graph_schema, validate_schema
 from .pdf_service import extract_pdf, get_pdf_page_count
 from .storage import write_json
 
@@ -219,13 +221,87 @@ def save_config(state: dict[str, Any]) -> tuple[str, str | None]:
     return f"設定已儲存：{output}", str(output)
 
 
-def initial_build_status(state: dict[str, Any]) -> str:
-    if not state:
-        return "請先在「PDF 與參數」完成預覽。"
-    return (
-        "介面與參數快照已就緒。Neo4j 寫入、實體關係抽取與 embedding "
-        "將在下一個開發階段接入。"
+def plan_schema_for_ui(
+    model_endpoint: str,
+    api_key: str,
+    llm_model: str,
+    embedding_model: str,
+    chunks: list[TextChunk],
+) -> tuple[str, str]:
+    if not embedding_model.strip():
+        return "❌ 請選擇 Embedding 模型。", ""
+    try:
+        plan = plan_graph_schema(model_endpoint, api_key, llm_model, chunks)
+    except ValueError as exc:
+        return f"❌ {exc}", ""
+    note = (
+        f"✅ 已使用 {llm_model} 規劃 schema；參考 "
+        f"{plan.sampled_chunks} / {plan.total_chunks} 個 chunk。"
+        f"Embedding 模型將使用 {embedding_model}。請確認或編輯後再生成。"
     )
+    return note, json.dumps(plan.schema, ensure_ascii=False, indent=2)
+
+
+def extract_graph_for_ui(
+    model_endpoint: str,
+    api_key: str,
+    llm_model: str,
+    embedding_model: str,
+    chunks: list[TextChunk],
+    schema_text: str,
+    preview_state: dict[str, Any],
+) -> tuple[str, list[list[object]], list[list[object]], dict[str, Any]]:
+    if not embedding_model.strip():
+        return "❌ 請選擇 Embedding 模型。", [], [], {}
+    try:
+        raw_schema = json.loads(schema_text)
+        if not isinstance(raw_schema, dict):
+            raise ValueError("schema 必須是 JSON 物件")
+        schema = validate_schema(raw_schema)
+        extraction = extract_graph(
+            model_endpoint, api_key, llm_model, chunks, schema
+        )
+    except json.JSONDecodeError:
+        return "❌ schema 不是有效 JSON。", [], [], {}
+    except ValueError as exc:
+        return f"❌ {exc}", [], [], {}
+
+    entity_rows = [
+        [
+            item["name"],
+            item["type"],
+            item["description"],
+            ", ".join(map(str, item["source_chunk_numbers"])),
+            ", ".join(map(str, item["source_pages"])),
+        ]
+        for item in extraction.entities
+    ]
+    relationship_rows = [
+        [
+            item["source"],
+            item["type"],
+            item["target"],
+            item["description"],
+            ", ".join(map(str, item["source_chunk_numbers"])),
+            ", ".join(map(str, item["source_pages"])),
+        ]
+        for item in extraction.relationships
+    ]
+    graph_state = {
+        "document": preview_state.get("file_name", ""),
+        "llm_model": llm_model,
+        "embedding_model": embedding_model,
+        "schema": schema,
+        "entities": extraction.entities,
+        "relationships": extraction.relationships,
+    }
+    status = (
+        f"✅ 已處理 {extraction.processed_chunks} 個 chunk，抽取 "
+        f"{len(extraction.entities)} 個實體與 "
+        f"{len(extraction.relationships)} 筆關係。"
+        "結果目前保存在本次頁面工作階段。"
+    )
+    return status, entity_rows, relationship_rows, graph_state
 
 
 def initial_answer(question: str, state: dict[str, Any]) -> tuple[str, str]:
@@ -248,6 +324,7 @@ def build_app() -> gr.Blocks:
         )
         preview_state = gr.State({})
         chunk_state = gr.State([])
+        graph_state = gr.State({})
 
         with gr.Tab("1. 連線設定"):
             with gr.Row():
@@ -311,9 +388,44 @@ def build_app() -> gr.Blocks:
                     )
 
         with gr.Tab("3. 建圖"):
-            gr.Markdown("### 建立 Neo4j 知識圖譜")
-            build_button = gr.Button("開始建圖", variant="primary")
-            build_status = gr.Markdown("請先完成 PDF 與參數設定。")
+            gr.Markdown("### 規劃並抽取知識圖譜")
+            gr.Markdown(
+                "先從上一頁產生的 chunks 規劃實體與關係 schema；確認或編輯 JSON 後，再執行抽取。"
+            )
+            with gr.Row():
+                graph_llm_model = gr.Dropdown(
+                    choices=list(dict.fromkeys([env["BUILD_MODEL"], env["ANSWER_MODEL"]])),
+                    value=env["BUILD_MODEL"],
+                    allow_custom_value=True,
+                    label="抽取 LLM",
+                )
+                graph_embedding_model = gr.Dropdown(
+                    choices=[env["EMBEDDING_MODEL"]],
+                    value=env["EMBEDDING_MODEL"],
+                    allow_custom_value=True,
+                    label="Embedding 模型（後續向量建圖使用）",
+                )
+            with gr.Row():
+                plan_schema_button = gr.Button("分析文件並規劃 Schema", variant="secondary")
+                generate_graph_button = gr.Button("確認 Schema 並生成", variant="primary")
+            build_status = gr.Markdown("請先在 PDF 頁面解析並產生 chunks。")
+            schema_editor = gr.Code(
+                label="實體與關係 Schema（可編輯 JSON）",
+                language="json",
+                interactive=True,
+                lines=18,
+            )
+            gr.Markdown("#### 抽取結果")
+            entity_table = gr.Dataframe(
+                headers=["實體", "類型", "說明", "來源 Chunks", "來源頁碼"],
+                interactive=False,
+                wrap=True,
+            )
+            relationship_table = gr.Dataframe(
+                headers=["來源實體", "關係", "目標實體", "說明", "來源 Chunks", "來源頁碼"],
+                interactive=False,
+                wrap=True,
+            )
 
         with gr.Tab("4. 問答測試"):
             answer_model = gr.Textbox(label="問答 LLM", value=env["ANSWER_MODEL"])
@@ -384,6 +496,29 @@ def build_app() -> gr.Blocks:
         )
         next_button.click(next_page, inputs=[page_selector, preview_state], outputs=page_selector)
         export_button.click(save_config, inputs=[preview_state], outputs=[preview_status, export_file])
-        build_button.click(initial_build_status, inputs=[preview_state], outputs=[build_status])
+        plan_schema_button.click(
+            plan_schema_for_ui,
+            inputs=[
+                model_endpoint,
+                api_key,
+                graph_llm_model,
+                graph_embedding_model,
+                chunk_state,
+            ],
+            outputs=[build_status, schema_editor],
+        )
+        generate_graph_button.click(
+            extract_graph_for_ui,
+            inputs=[
+                model_endpoint,
+                api_key,
+                graph_llm_model,
+                graph_embedding_model,
+                chunk_state,
+                schema_editor,
+                preview_state,
+            ],
+            outputs=[build_status, entity_table, relationship_table, graph_state],
+        )
         ask_button.click(initial_answer, inputs=[question, preview_state], outputs=[answer_status, answer])
     return app
