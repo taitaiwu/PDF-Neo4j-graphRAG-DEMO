@@ -10,6 +10,17 @@ def test_build_app_returns_blocks() -> None:
     assert isinstance(build_app(), gr.Blocks)
 
 
+def test_plan_schema_button_uses_orange_style_class() -> None:
+    app = build_app()
+    button = next(
+        component
+        for component in app.config["components"]
+        if component.get("props", {}).get("value") == "分析文件並規劃 Schema"
+    )
+
+    assert "schema-plan-orange" in button["props"]["elem_classes"]
+
+
 def test_connection_summary_does_not_expose_secrets() -> None:
     status, settings = connection_summary(
         "bolt://localhost:7687", "neo4j", "neo4j", "password", "http://localhost:11434/v1", "key"

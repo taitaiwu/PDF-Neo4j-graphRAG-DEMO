@@ -473,11 +473,29 @@ def build_app() -> gr.Blocks:
                         value=20, minimum=1, precision=0, label="最大關係類型數"
                     )
                 plan_schema_button = gr.Button(
-                    "分析文件並規劃 Schema", variant="secondary"
+                    "分析文件並規劃 Schema",
+                    variant="secondary",
+                    elem_classes="schema-plan-orange",
                 )
                 plan_status = gr.Markdown("請先在 PDF 頁面解析並產生 chunks。")
                 gr.HTML(
-                    "<style>.schema-scroll-editor .cm-content {font-size: 17px; line-height: 1.6;}</style>",
+                    """
+                    <style>
+                    .schema-scroll-editor .cm-content {
+                        font-size: 17px;
+                        line-height: 1.6;
+                    }
+                    .schema-plan-orange {
+                        background: #f97316 !important;
+                        border-color: #ea580c !important;
+                        color: #ffffff !important;
+                    }
+                    .schema-plan-orange:hover {
+                        background: #ea580c !important;
+                        border-color: #c2410c !important;
+                    }
+                    </style>
+                    """,
                     padding=False,
                 )
                 schema_editor = gr.Code(
