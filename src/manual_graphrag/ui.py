@@ -226,6 +226,9 @@ def plan_schema_for_ui(
     llm_model: str,
     temperature: float,
     max_output_tokens: int,
+    schema_granularity: str,
+    max_entity_types: int,
+    max_relationship_types: int,
     chunks: list[TextChunk],
     progress=gr.Progress(),
 ) -> tuple[str, str]:
@@ -238,6 +241,9 @@ def plan_schema_for_ui(
             float(temperature),
             int(max_output_tokens),
             lambda value, description: progress(value, desc=description),
+            schema_granularity,
+            int(max_entity_types),
+            int(max_relationship_types),
         )
     except ValueError as exc:
         return f"❌ {exc}", ""
@@ -245,6 +251,8 @@ def plan_schema_for_ui(
         f"✅ 已使用 {llm_model} 規劃 schema；參考 "
         f"全部 {plan.analyzed_chunks} / {plan.total_chunks} 個 chunk，"
         f"共 {plan.batch_count} 批、{plan.merge_rounds} 輪整合。"
+        f"粒度：{schema_granularity}；實體／關係類型上限："
+        f"{int(max_entity_types)}／{int(max_relationship_types)}。"
         "請確認或編輯後再進行抽取。"
     )
     return note, json.dumps(plan.schema, ensure_ascii=False, indent=2)
@@ -452,6 +460,18 @@ def build_app() -> gr.Blocks:
                     graph_max_output_tokens = gr.Number(
                         value=2048, minimum=1, precision=0, label="最大輸出 tokens"
                     )
+                with gr.Row():
+                    schema_granularity = gr.Radio(
+                        ["粗略", "平衡", "詳細"],
+                        value="平衡",
+                        label="Schema 粒度",
+                    )
+                    max_entity_types = gr.Number(
+                        value=15, minimum=1, precision=0, label="最大實體類型數"
+                    )
+                    max_relationship_types = gr.Number(
+                        value=20, minimum=1, precision=0, label="最大關係類型數"
+                    )
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema", variant="secondary"
                 )
@@ -570,6 +590,9 @@ def build_app() -> gr.Blocks:
                 graph_llm_model,
                 graph_temperature,
                 graph_max_output_tokens,
+                schema_granularity,
+                max_entity_types,
+                max_relationship_types,
                 chunk_state,
             ],
             outputs=[plan_status, schema_editor],

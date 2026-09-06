@@ -155,6 +155,87 @@ def test_compact_schema_keeps_only_required_merge_fields(monkeypatch) -> None:
 
 
 
+
+def test_schema_planning_prompt_applies_granularity_and_type_limits(monkeypatch) -> None:
+    prompts = []
+
+    def fake_chat(*args, **kwargs):
+        prompts.append(args[4])
+        return SCHEMA
+
+    monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
+
+    graph_service.plan_graph_schema(
+        "http://models/v1",
+        "",
+        "llm",
+        [TextChunk(1, "設備 A 使用設備 B", (1,))],
+        schema_granularity="粗略",
+        max_entity_types=8,
+        max_relationship_types=12,
+    )
+
+    assert "Schema 粒度：粗略" in prompts[0]
+    assert "具體名稱、型號、編號、人物、組織或章節" in prompts[0]
+    assert "實體類型最多 8 個" in prompts[0]
+    assert "關係類型最多 12 個" in prompts[0]
+
+
+@pytest.mark.parametrize(
+    "granularity,max_entities,max_relationships,error",
+    [
+        ("未知", 15, 20, "Schema 粒度"),
+        ("平衡", 0, 20, "最大實體類型數"),
+        ("平衡", 15, 0, "最大關係類型數"),
+    ],
+)
+def test_schema_planning_rejects_invalid_granularity_options(
+    granularity, max_entities, max_relationships, error
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        graph_service.plan_graph_schema(
+            "http://models/v1",
+            "",
+            "llm",
+            [TextChunk(1, "text", (1,))],
+            schema_granularity=granularity,
+            max_entity_types=max_entities,
+            max_relationship_types=max_relationships,
+        )
+
+
+def test_schema_planning_retries_when_type_limit_is_exceeded(monkeypatch) -> None:
+    oversized = {
+        "entity_types": [
+            {"name": "DEVICE"},
+            {"name": "COMPONENT"},
+        ],
+        "relationship_types": [{"name": "USES"}],
+    }
+    responses = iter([chat_response(oversized), chat_response(SCHEMA)])
+    payloads = []
+
+    def fake_post(url, payload, api_key, timeout=120):
+        payloads.append(payload)
+        return next(responses)
+
+    monkeypatch.setattr(graph_service, "_post_json", fake_post)
+
+    plan = graph_service.plan_graph_schema(
+        "http://models/v1",
+        "",
+        "llm",
+        [TextChunk(1, "text", (1,))],
+        max_entity_types=1,
+        max_relationship_types=1,
+    )
+
+    assert plan.schema == SCHEMA
+    assert len(payloads) == 2
+    assert "entity_types 不得超過 1 個" in payloads[1]["messages"][-1]["content"]
+
+
+
 def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> None:
     monkeypatch.setattr(graph_service, "EXTRACTION_BATCH_LIMIT", 45)
     chunks = [

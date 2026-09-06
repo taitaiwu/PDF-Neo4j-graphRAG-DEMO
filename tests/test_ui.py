@@ -117,12 +117,21 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
     )
 
     status, schema_text = ui.plan_schema_for_ui(
-        "http://models/v1", "key", "llm", 0.3, 999, [TextChunk(1, "text", (1,))]
+        "http://models/v1",
+        "key",
+        "llm",
+        0.3,
+        999,
+        "平衡",
+        15,
+        20,
+        [TextChunk(1, "text", (1,))],
     )
 
     assert status.startswith("✅")
     assert "全部 5 / 5" in status
     assert "共 2 批、1 輪整合" in status
+    assert "粒度：平衡；實體／關係類型上限：15／20" in status
     assert json.loads(schema_text)["entity_types"][0]["name"] == "DEVICE"
 
 
