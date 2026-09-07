@@ -20,9 +20,10 @@ from .neo4j_service import (
     check_neo4j_connection,
     import_extraction,
     load_latest_graph,
+    search_graph_evidence,
 )
 from .pdf_service import extract_pdf, get_pdf_page_count
-from .qa_service import answer_graph_question
+from .qa_service import answer_graph_question, embedding_vectors
 from .storage import write_json
 
 
@@ -362,7 +363,37 @@ def extract_graph_for_ui(
     return status, entity_rows, relationship_rows, graph_state
 
 
+def _build_graph_evidence(
+    entities: list[dict[str, Any]], relationships: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    evidence = []
+    for index, item in enumerate(entities):
+        evidence.append({
+            "evidence_id": f"entity-{index}", "kind": "實體",
+            "name": item.get("name", ""), "source": "", "target": "",
+            "text": "實體：{}；類型：{}；說明：{}".format(
+                item.get("name", ""), item.get("type", ""), item.get("description", "")
+            ),
+            "source_pages": item.get("source_pages", []),
+            "source_chunk_numbers": item.get("source_chunk_numbers", []),
+        })
+    for index, item in enumerate(relationships):
+        evidence.append({
+            "evidence_id": f"relationship-{index}", "kind": "關係", "name": "",
+            "source": item.get("source", ""), "target": item.get("target", ""),
+            "text": "關係：{} -[{}]-> {}；說明：{}".format(
+                item.get("source", ""), item.get("type", ""),
+                item.get("target", ""), item.get("description", "")
+            ),
+            "source_pages": item.get("source_pages", []),
+            "source_chunk_numbers": item.get("source_chunk_numbers", []),
+        })
+    return evidence
+
+
 def import_graph_for_ui(
+    model_endpoint: str,
+    api_key: str,
     neo4j_uri: str,
     neo4j_database: str,
     neo4j_username: str,
@@ -377,6 +408,17 @@ def import_graph_for_ui(
     updated_state = dict(graph_state)
     updated_state["embedding_model"] = embedding_model.strip()
     try:
+        evidence = _build_graph_evidence(
+            updated_state["entities"], updated_state["relationships"]
+        )
+        if not evidence:
+            raise ValueError("沒有可建立向量索引的實體或關係")
+        vectors = embedding_vectors(
+            model_endpoint, api_key, embedding_model,
+            [item["text"] for item in evidence],
+        )
+        for item, vector in zip(evidence, vectors):
+            item["embedding"] = vector
         imported = import_extraction(
             neo4j_uri,
             neo4j_database,
@@ -389,6 +431,7 @@ def import_graph_for_ui(
             updated_state["schema"],
             updated_state["entities"],
             updated_state["relationships"],
+            evidence,
         )
     except (KeyError, ValueError) as exc:
         updated_state["neo4j_imported"] = False
@@ -398,7 +441,7 @@ def import_graph_for_ui(
     updated_state["neo4j_imported"] = True
     updated_state.pop("neo4j_error", None)
     return (
-        f"✅ 已匯入 Neo4j {imported.entity_count} 個實體與 "
+        f"✅ 已建立 {len(evidence)} 筆向量證據與 Vector Index；已匯入 Neo4j {imported.entity_count} 個實體與 "
         f"{imported.relationship_count} 筆關係。",
         updated_state,
     )
@@ -416,13 +459,22 @@ def answer_question_for_ui(
     retrieval_mode: str,
     top_k: int,
 ) -> tuple[str, str, list[list[object]], list[dict[str, Any]]]:
+    if not question.strip():
+        return "請輸入問題。", "", [], []
     try:
         graph_state = load_latest_graph(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password
         )
+        question_vector = embedding_vectors(
+            model_endpoint, api_key, graph_state.get("embedding_model", ""),
+            [question.strip()],
+        )[0]
+        evidence = search_graph_evidence(
+            neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            graph_state["run_id"], question_vector, retrieval_mode, int(top_k),
+        )
         result = answer_graph_question(
-            model_endpoint, api_key, answer_model, question,
-            retrieval_mode, int(top_k), graph_state,
+            model_endpoint, api_key, answer_model, question, retrieval_mode, evidence
         )
     except ValueError as exc:
         return f"❌ {exc}", "", [], []
@@ -762,6 +814,8 @@ def build_app() -> gr.Blocks:
         import_graph_button.click(
             import_graph_for_ui,
             inputs=[
+                model_endpoint,
+                api_key,
                 neo4j_uri,
                 neo4j_database,
                 neo4j_username,

@@ -81,6 +81,50 @@ def load_latest_graph(
     return result
 
 
+def search_graph_evidence(
+    uri: str, database: str, username: str, password: str,
+    run_id: str, embedding: list[float], retrieval_mode: str, top_k: int,
+) -> list[dict[str, Any]]:
+    kind = "實體" if retrieval_mode == "GraphRAG" else None
+    query = """
+    CALL db.index.vector.queryNodes(
+        'graph_evidence_embedding', $candidate_count, $embedding
+    ) YIELD node, score
+    WHERE node.run_id = $run_id AND ($kind IS NULL OR node.kind = $kind)
+    RETURN node {
+        .kind, .name, .source, .target, .text, .source_pages,
+        .source_chunk_numbers, score: score
+    } AS evidence
+    ORDER BY score DESC LIMIT $top_k
+    """
+    try:
+        with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
+            with driver.session(database=database.strip()) as session:
+                records = session.run(
+                    query, run_id=run_id, embedding=embedding, kind=kind,
+                    top_k=int(top_k), candidate_count=max(1000, int(top_k) * 50),
+                ).data()
+                selected = [record["evidence"] for record in records]
+                if retrieval_mode == "GraphRAG" and selected:
+                    names = [item.get("name", "") for item in selected]
+                    related = session.run(
+                        """
+                        MATCH (relation:GraphEvidence {run_id: $run_id, kind: '關係'})
+                        WHERE relation.source IN $names OR relation.target IN $names
+                        RETURN relation {
+                            .kind, .name, .source, .target, .text, .source_pages,
+                            .source_chunk_numbers, score: 0.0
+                        } AS evidence
+                        LIMIT $top_k
+                        """,
+                        run_id=run_id, names=names, top_k=int(top_k),
+                    ).data()
+                    selected.extend(record["evidence"] for record in related)
+    except (DriverError, Neo4jError, OSError, ValueError) as exc:
+        raise ValueError(f"Neo4j Vector Search 失敗：{exc}") from exc
+    return selected
+
+
 def import_extraction(
     uri: str,
     database: str,
@@ -93,6 +137,7 @@ def import_extraction(
     schema: dict[str, Any],
     entities: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
 ) -> ImportSummary:
     if not uri.strip():
         raise ValueError("請先填寫 Neo4j URI")
@@ -102,11 +147,20 @@ def import_extraction(
         raise ValueError("請先填寫 Neo4j Username")
     if not password:
         raise ValueError("請先填寫 Neo4j Password")
+    if not evidence or not evidence[0].get("embedding"):
+        raise ValueError("沒有可寫入 Neo4j Vector Index 的向量證據")
 
     try:
         with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
             driver.verify_connectivity()
             with driver.session(database=database.strip()) as session:
+                dimensions = len(evidence[0]["embedding"])
+                session.run(
+                    f"CREATE VECTOR INDEX graph_evidence_embedding IF NOT EXISTS "
+                    f"FOR (e:GraphEvidence) ON (e.embedding) OPTIONS {{"
+                    f"indexConfig: {{`vector.dimensions`: {dimensions}, "
+                    f"`vector.similarity_function`: \x27cosine\x27}}}}}"
+                ).consume()
                 counts = session.execute_write(
                     _write_graph,
                     run_id,
@@ -116,6 +170,7 @@ def import_extraction(
                     schema,
                     entities,
                     relationships,
+                    evidence,
                 )
     except (DriverError, Neo4jError, OSError, ValueError) as exc:
         if isinstance(exc, ValueError) and str(exc).startswith("請先填寫"):
@@ -133,6 +188,7 @@ def _write_graph(
     schema: dict[str, Any],
     entities: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
 ) -> dict[str, int]:
     transaction.run(
         """
@@ -185,6 +241,21 @@ def _write_graph(
         run_id=run_id,
         relationships=relationships,
     ).single()
+    transaction.run(
+        """
+        MATCH (document:GraphDocument {run_id: $run_id})
+        UNWIND $evidence AS item
+        MERGE (evidence:GraphEvidence {run_id: $run_id, evidence_id: item.evidence_id})
+        SET evidence.kind = item.kind, evidence.name = item.name,
+            evidence.source = item.source, evidence.target = item.target,
+            evidence.text = item.text, evidence.source_pages = item.source_pages,
+            evidence.source_chunk_numbers = item.source_chunk_numbers,
+            evidence.embedding = item.embedding
+        MERGE (evidence)-[:IN_DOCUMENT]->(document)
+        """,
+        run_id=run_id,
+        evidence=evidence,
+    ).consume()
     return {
         "entity_count": int(entity_result["count"]) if entity_result else 0,
         "relationship_count": int(relationship_result["count"])
