@@ -10,7 +10,14 @@ import gradio as gr
 from .chunking import TextChunk, chunk_pages, preview_rows_for_page
 from .config import public_settings
 from .env_store import load_env, save_env
-from .graph_service import extract_graph, plan_graph_schema, validate_schema
+from .graph_service import (
+    DEFAULT_EXTRACTION_PROMPT,
+    DEFAULT_SCHEMA_MERGE_PROMPT,
+    DEFAULT_SCHEMA_PLANNING_PROMPT,
+    extract_graph,
+    plan_graph_schema,
+    validate_schema,
+)
 from .neo4j_service import import_extraction
 from .pdf_service import extract_pdf, get_pdf_page_count
 from .storage import write_json
@@ -230,6 +237,8 @@ def plan_schema_for_ui(
     max_entity_types: int,
     max_relationship_types: int,
     chunks: list[TextChunk],
+    schema_planning_prompt: str = DEFAULT_SCHEMA_PLANNING_PROMPT,
+    schema_merge_prompt: str = DEFAULT_SCHEMA_MERGE_PROMPT,
     progress=gr.Progress(),
 ) -> tuple[str, str]:
     try:
@@ -244,6 +253,8 @@ def plan_schema_for_ui(
             schema_granularity,
             int(max_entity_types),
             int(max_relationship_types),
+            schema_planning_prompt,
+            schema_merge_prompt,
         )
     except ValueError as exc:
         return f"❌ {exc}", ""
@@ -272,6 +283,7 @@ def extract_graph_for_ui(
     chunks: list[TextChunk],
     schema_text: str,
     preview_state: dict[str, Any],
+    extraction_prompt: str = DEFAULT_EXTRACTION_PROMPT,
 ) -> tuple[str, list[list[object]], list[list[object]], dict[str, Any]]:
     if not embedding_model.strip():
         return "❌ 請選擇 Embedding 模型。", [], [], {}
@@ -288,6 +300,7 @@ def extract_graph_for_ui(
             schema,
             float(temperature),
             int(max_output_tokens),
+            extraction_prompt,
         )
     except json.JSONDecodeError:
         return "❌ schema 不是有效 JSON。", [], [], {}
@@ -472,6 +485,22 @@ def build_app() -> gr.Blocks:
                     max_relationship_types = gr.Number(
                         value=20, minimum=1, precision=0, label="最大關係類型數"
                     )
+                with gr.Accordion("提示詞設定", open=False):
+                    schema_planning_prompt = gr.Textbox(
+                        value=DEFAULT_SCHEMA_PLANNING_PROMPT,
+                        label="Schema 規劃提示詞",
+                        lines=3,
+                    )
+                    schema_merge_prompt = gr.Textbox(
+                        value=DEFAULT_SCHEMA_MERGE_PROMPT,
+                        label="Schema 合併提示詞",
+                        lines=3,
+                    )
+                    extraction_prompt = gr.Textbox(
+                        value=DEFAULT_EXTRACTION_PROMPT,
+                        label="知識圖譜抽取提示詞",
+                        lines=3,
+                    )
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema",
                     variant="secondary",
@@ -612,6 +641,8 @@ def build_app() -> gr.Blocks:
                 max_entity_types,
                 max_relationship_types,
                 chunk_state,
+                schema_planning_prompt,
+                schema_merge_prompt,
             ],
             outputs=[plan_status, schema_editor],
         )
@@ -631,6 +662,7 @@ def build_app() -> gr.Blocks:
                 chunk_state,
                 schema_editor,
                 preview_state,
+                extraction_prompt,
             ],
             outputs=[build_status, entity_table, relationship_table, graph_state],
         )

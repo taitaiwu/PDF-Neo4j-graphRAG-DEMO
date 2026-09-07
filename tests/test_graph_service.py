@@ -309,6 +309,44 @@ def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> No
     ]
 
 
+def test_custom_schema_prompts_are_used_for_planning_and_merge(monkeypatch) -> None:
+    monkeypatch.setattr(graph_service, "SCHEMA_CONTEXT_LIMIT", 45)
+    chunks = [TextChunk(number, "x" * 20, (number,)) for number in range(1, 3)]
+    system_prompts = []
+
+    def fake_chat(*args, **kwargs):
+        system_prompts.append(args[3])
+        return SCHEMA
+
+    monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
+    graph_service.plan_graph_schema(
+        "http://models/v1", "", "llm", chunks,
+        schema_planning_prompt="自訂規劃提示詞",
+        schema_merge_prompt="自訂合併提示詞",
+    )
+
+    assert system_prompts[:2] == ["自訂規劃提示詞", "自訂規劃提示詞"]
+    assert system_prompts[-1] == "自訂合併提示詞"
+
+
+def test_custom_extraction_prompt_is_used(monkeypatch) -> None:
+    system_prompts = []
+
+    def fake_chat(*args, **kwargs):
+        system_prompts.append(args[3])
+        return {"entities": [], "relationships": []}
+
+    monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
+    graph_service.extract_graph(
+        "http://models/v1", "", "llm",
+        [TextChunk(1, "text", (1,))], SCHEMA,
+        extraction_prompt="自訂抽取提示詞",
+    )
+
+    assert system_prompts == ["自訂抽取提示詞"]
+
+
+
 def test_validate_schema_rejects_missing_types() -> None:
     with pytest.raises(ValueError, match="entity_types"):
         graph_service.validate_schema({"entity_types": [], "relationship_types": []})

@@ -21,6 +21,19 @@ def test_plan_schema_button_uses_orange_style_class() -> None:
     assert "schema-plan-orange" in button["props"]["elem_classes"]
 
 
+def test_build_app_uses_current_prompts_as_editable_defaults() -> None:
+    app = build_app()
+    components = {
+        component.get("props", {}).get("label"): component.get("props", {})
+        for component in app.config["components"]
+    }
+
+    assert components["Schema 規劃提示詞"]["value"] == ui.DEFAULT_SCHEMA_PLANNING_PROMPT
+    assert components["Schema 合併提示詞"]["value"] == ui.DEFAULT_SCHEMA_MERGE_PROMPT
+    assert components["知識圖譜抽取提示詞"]["value"] == ui.DEFAULT_EXTRACTION_PROMPT
+
+
+
 def test_connection_summary_does_not_expose_secrets() -> None:
     status, settings = connection_summary(
         "bolt://localhost:7687", "neo4j", "neo4j", "password", "http://localhost:11434/v1", "key"
