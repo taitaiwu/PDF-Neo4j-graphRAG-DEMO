@@ -53,9 +53,9 @@ pytest
 
 完成 PDF chunk 預覽後，前往「建圖」頁操作。PDF 參數頁只保留頁碼範圍、chunk size 與 overlap，不再顯示建圖 LLM、Embedding、Temperature 或最大輸出 tokens，也不提供 chunk 關鍵字搜尋；獨立的匯入區可選擇後續向量建圖使用的 Embedding 模型。模型服務需提供 OpenAI-compatible `POST /chat/completions` API；API Base URL 例如 `http://localhost:11434/v1`。
 
-1. 在建圖頁設定 Schema 規劃／抽取 LLM、Temperature、最大輸出 tokens、Schema 粒度、實體／關係類型數量上限，以及最大並行請求數（預設 3）；生成參數會傳給每次模型 API 呼叫，粒度與數量上限則套用於候選規劃和每輪整合。按「分析文件並規劃 Schema」按鈕後，系統以每批最多約 30,000 字元分析所有 chunks，各規劃批次會受最大並行數限制而同時產生候選 Schema，待全部完成後，再將同一整合輪中的各組並行處理；每輪全部完成後才進入下一輪，整合組每組約 12,000 字元；中間結果只保留名稱、最多 120 字元的簡短說明，以及關係的來源／目標類型，最後去重並統一同義名稱後產生 JSON。畫面會顯示批次、已分析 chunk 數與整合進度；任一批失敗時會中止且不顯示不完整 Schema。
+1. 在建圖頁設定 Schema 規劃 LLM、Temperature、最大輸出 tokens、Schema 粒度、實體／關係類型數量上限，以及最大並行請求數（預設 3）；生成參數會傳給每次模型 API 呼叫，粒度與數量上限則套用於候選規劃和每輪整合。按「分析文件並規劃 Schema」按鈕後，系統以每批最多約 30,000 字元分析所有 chunks，各規劃批次會受最大並行數限制而同時產生候選 Schema，待全部完成後，再將同一整合輪中的各組並行處理；每輪全部完成後才進入下一輪，整合組每組約 12,000 字元；中間結果只保留名稱、最多 120 字元的簡短說明，以及關係的來源／目標類型，最後去重並統一同義名稱後產生 JSON。畫面會顯示批次、已分析 chunk 數與整合進度；任一批失敗時會中止且不顯示不完整 Schema。
 2. 在獨立的 Schema 規劃區檢查或修改 JSON；編輯器固定高度，內容超出時可使用水平與垂直捲動條。`entity_types` 與 `relationship_types` 必須是非空陣列，每一項必須有 `name`。
-3. 到獨立的抽取區按「確認 Schema 並抽取」：系統依確認後的類型批次讀取全部 chunks，抽取、去重並顯示實體與關係，同時列出來源 chunk 與 PDF 頁碼。確認抽取結果後，在獨立區塊選擇 Embedding 模型並按「Embedding 並匯入 Neo4j」，才會以單一交易寫入「連線設定」頁指定的 Neo4j。
+3. 到獨立的抽取區選擇知識圖譜抽取 LLM，再按「確認 Schema 並抽取」：系統依確認後的類型批次讀取全部 chunks，抽取、去重並顯示實體與關係，同時列出來源 chunk 與 PDF 頁碼；畫面會依已完成的抽取批次顯示進度。確認抽取結果後，在獨立區塊選擇 Embedding 模型並按「Embedding 並匯入 Neo4j」，才會以單一交易寫入「連線設定」頁指定的 Neo4j，並在該區塊顯示匯入數量或錯誤原因。
 
 Chunks、Schema 與畫面抽取結果仍只保存在本次 Gradio 頁面工作階段；實體與關係會寫入 Neo4j，每次生成使用獨立 `run_id`。Neo4j 以 `GraphDocument`、`ExtractedEntity` 節點及 `EXTRACTED_RELATION` 關係保存資料。Embedding 模型選擇會記入文件節點與結果 state，實際向量生成仍屬後續階段。若 Neo4j 寫入失敗，畫面會保留已抽取結果並顯示錯誤。大型文件會產生多次 LLM API 呼叫，執行時間與費用取決於 chunk 數量及所選模型。
 

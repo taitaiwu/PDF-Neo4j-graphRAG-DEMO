@@ -464,6 +464,7 @@ def extract_graph(
     schema: dict[str, Any],
     temperature: float = 0,
     max_output_tokens: int = 2048,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> GraphExtraction:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -478,7 +479,11 @@ def extract_graph(
     relationships: dict[tuple[str, str, str], dict[str, Any]] = {}
     chunk_lookup = {chunk.number: chunk for chunk in chunks}
 
-    for batch in _batches(chunks):
+    batches = _batches(chunks)
+    processed_chunks = 0
+    if progress_callback:
+        progress_callback(0.0, f"準備抽取 {len(chunks)} 個 chunks")
+    for batch_index, batch in enumerate(batches, start=1):
         context = "\n\n".join(_chunk_label(chunk) for chunk in batch)
         result = _chat_json(
             base_url,
@@ -546,7 +551,16 @@ def extract_graph(
                 },
             )
             _merge_sources(current, numbers, chunk_lookup)
-    return GraphExtraction(list(entities.values()), list(relationships.values()), len(chunks))
+        processed_chunks += len(batch)
+        if progress_callback:
+            progress_callback(
+                processed_chunks / len(chunks),
+                f"抽取第 {batch_index} / {len(batches)} 批（已完成 "
+                f"{processed_chunks} / {len(chunks)} chunks）",
+            )
+    return GraphExtraction(
+        list(entities.values()), list(relationships.values()), len(chunks)
+    )
 
 
 def _source_numbers(

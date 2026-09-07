@@ -293,6 +293,7 @@ def extract_graph_for_ui(
     chunks: list[TextChunk],
     schema_text: str,
     preview_state: dict[str, Any],
+    progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], list[list[object]], dict[str, Any]]:
     try:
         raw_schema = json.loads(schema_text)
@@ -307,6 +308,7 @@ def extract_graph_for_ui(
             schema,
             float(temperature),
             int(max_output_tokens),
+            lambda value, description: progress(value, desc=description),
         )
     except json.JSONDecodeError:
         return "❌ schema 不是有效 JSON。", [], [], {}
@@ -488,7 +490,7 @@ def build_app() -> gr.Blocks:
                         choices=list(dict.fromkeys([env["BUILD_MODEL"], env["ANSWER_MODEL"]])),
                         value=env["BUILD_MODEL"],
                         allow_custom_value=True,
-                        label="Schema 規劃／抽取 LLM",
+                        label="Schema 規劃 LLM",
                     )
                     graph_temperature = gr.Slider(
                         0, 2, value=0, step=0.1, label="Temperature"
@@ -541,6 +543,14 @@ def build_app() -> gr.Blocks:
                 gr.Markdown(
                     "確認上方 JSON 後執行全部 chunks；檢查抽取結果後，再手動匯入 Neo4j。"
                 )
+                extraction_llm_model = gr.Dropdown(
+                    choices=list(
+                        dict.fromkeys([env["BUILD_MODEL"], env["ANSWER_MODEL"]])
+                    ),
+                    value=env["BUILD_MODEL"],
+                    allow_custom_value=True,
+                    label="知識圖譜抽取 LLM",
+                )
                 generate_graph_button = gr.Button(
                     "確認 Schema 並抽取", variant="primary"
                 )
@@ -571,6 +581,7 @@ def build_app() -> gr.Blocks:
                 import_graph_button = gr.Button(
                     "Embedding 並匯入 Neo4j", variant="primary"
                 )
+                import_status = gr.Markdown("尚未執行 Embedding 與匯入。")
 
         with gr.Tab("4. 問答測試"):
             answer_model = gr.Textbox(label="問答 LLM", value=env["ANSWER_MODEL"])
@@ -663,7 +674,7 @@ def build_app() -> gr.Blocks:
             inputs=[
                 model_endpoint,
                 api_key,
-                graph_llm_model,
+                extraction_llm_model,
                 graph_temperature,
                 graph_max_output_tokens,
                 chunk_state,
@@ -682,7 +693,7 @@ def build_app() -> gr.Blocks:
                 graph_embedding_model,
                 graph_state,
             ],
-            outputs=[build_status, graph_state],
+            outputs=[import_status, graph_state],
         )
         ask_button.click(initial_answer, inputs=[question, preview_state], outputs=[answer_status, answer])
     return app
