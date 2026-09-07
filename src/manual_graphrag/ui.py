@@ -835,6 +835,7 @@ def build_app() -> gr.Blocks:
                 preview_state,
             ],
             outputs=[build_status, entity_table, relationship_table, graph_state],
+            show_progress="hidden",
         )
         import_graph_button.click(
             import_graph_for_ui,
