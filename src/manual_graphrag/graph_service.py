@@ -66,6 +66,23 @@ def _post_json(
     return result
 
 
+def check_model_connection(base_url: str, api_key: str) -> None:
+    url = _api_url(base_url, "models")
+    headers = {}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if not 200 <= response.status < 300:
+                raise ValueError(f"模型服務回傳 HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        raise ValueError(f"模型服務回傳 HTTP {exc.code}：{detail}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ValueError(f"模型服務連線失敗：{exc}") from exc
+
+
 def _extract_json_text(text: str) -> dict[str, Any]:
     candidate = text.strip()
     if candidate.startswith("```"):

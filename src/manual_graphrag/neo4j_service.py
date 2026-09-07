@@ -14,6 +14,28 @@ class ImportSummary:
     relationship_count: int
 
 
+def check_neo4j_connection(
+    uri: str, database: str, username: str, password: str
+) -> None:
+    if not uri.strip():
+        raise ValueError("請先填寫 Neo4j URI")
+    if not database.strip():
+        raise ValueError("請先填寫 Neo4j Database")
+    if not username.strip():
+        raise ValueError("請先填寫 Neo4j Username")
+    if not password:
+        raise ValueError("請先填寫 Neo4j Password")
+    try:
+        with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
+            driver.verify_connectivity()
+            with driver.session(database=database.strip()) as session:
+                session.run("RETURN 1 AS value").consume()
+    except (Neo4jError, OSError, ValueError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith("請先填寫"):
+            raise
+        raise ValueError(f"Neo4j 連線失敗：{exc}") from exc
+
+
 def import_extraction(
     uri: str,
     database: str,

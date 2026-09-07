@@ -10,8 +10,13 @@ import gradio as gr
 from .chunking import TextChunk, chunk_pages, preview_rows_for_page
 from .config import public_settings
 from .env_store import load_env, save_env
-from .graph_service import extract_graph, plan_graph_schema, validate_schema
-from .neo4j_service import import_extraction
+from .graph_service import (
+    extract_graph,
+    plan_graph_schema,
+    check_model_connection,
+    validate_schema,
+)
+from .neo4j_service import import_extraction, check_neo4j_connection
 from .pdf_service import extract_pdf, get_pdf_page_count
 from .storage import write_json
 
@@ -48,6 +53,24 @@ def connection_summary(
         }
     )
     return "✅ 欄位格式已通過初步檢查；實際連線將於下一版接入。", settings
+
+
+def check_neo4j_for_ui(
+    uri: str, database: str, username: str, password: str
+) -> str:
+    try:
+        check_neo4j_connection(uri, database, username, password)
+    except ValueError as exc:
+        return f"❌ {exc}"
+    return "✅ Neo4j 連線成功，且可存取指定 Database。"
+
+
+def check_model_service_for_ui(base_url: str, api_key: str) -> str:
+    try:
+        check_model_connection(base_url, api_key)
+    except ValueError as exc:
+        return f"❌ {exc}"
+    return "✅ 模型服務連線成功。"
 
 
 def persist_env_settings(
@@ -404,16 +427,17 @@ def build_app() -> gr.Blocks:
                     neo4j_database = gr.Textbox(label="Database", value=env["NEO4J_DATABASE"])
                     neo4j_username = gr.Textbox(label="Username", value=env["NEO4J_USERNAME"])
                     neo4j_password = gr.Textbox(label="Password", value=env["NEO4J_PASSWORD"], type="password")
+                    neo4j_test_button = gr.Button("測試 Neo4j 連線", variant="primary")
+                    neo4j_connection_status = gr.Markdown()
                 with gr.Column():
                     gr.Markdown("### 模型服務")
                     model_endpoint = gr.Textbox(label="API Base URL", value=env["MODEL_API_BASE"])
                     api_key = gr.Textbox(label="API Key", value=env["MODEL_API_KEY"], type="password")
-                    connection_button = gr.Button("檢查設定", variant="primary")
+                    model_test_button = gr.Button("測試模型服務連線", variant="primary")
+                    model_connection_status = gr.Markdown()
                     reload_button = gr.Button("重新讀取 .env")
             gr.Markdown("⚠️ Password 與 API Key 會以明文寫入本機 `.env`；請勿提交此檔案。")
             env_status = gr.Markdown("啟動時已讀取 .env；欄位修改後會自動儲存。")
-            connection_status = gr.Markdown()
-            safe_connection = gr.JSON(label="非機密設定預覽")
 
         with gr.Tab("2. PDF 與參數"):
             with gr.Row():
@@ -488,9 +512,7 @@ def build_app() -> gr.Blocks:
                         value=3, minimum=1, precision=0, label="最大並行請求數"
                     )
                 plan_schema_button = gr.Button(
-                    "分析文件並規劃 Schema",
-                    variant="secondary",
-                    elem_classes="schema-plan-orange",
+                    "分析文件並規劃 Schema", variant="primary"
                 )
                 plan_status = gr.Markdown("請先在 PDF 頁面解析並產生 chunks。")
                 gr.HTML(
@@ -499,15 +521,6 @@ def build_app() -> gr.Blocks:
                     .schema-scroll-editor .cm-content {
                         font-size: 17px;
                         line-height: 1.6;
-                    }
-                    .schema-plan-orange {
-                        background: #f97316 !important;
-                        border-color: #ea580c !important;
-                        color: #ffffff !important;
-                    }
-                    .schema-plan-orange:hover {
-                        background: #ea580c !important;
-                        border-color: #c2410c !important;
                     }
                     </style>
                     """,
@@ -549,7 +562,7 @@ def build_app() -> gr.Blocks:
                     interactive=False,
                     wrap=True,
                 )
-                import_graph_button = gr.Button("匯入 Neo4j", variant="secondary")
+                import_graph_button = gr.Button("匯入 Neo4j", variant="primary")
 
         with gr.Tab("4. 問答測試"):
             answer_model = gr.Textbox(label="問答 LLM", value=env["ANSWER_MODEL"])
@@ -564,10 +577,15 @@ def build_app() -> gr.Blocks:
         with gr.Tab("5. 歷史紀錄"):
             gr.Markdown("建圖與問答紀錄將在後續開發階段顯示於此。")
 
-        connection_button.click(
-            connection_summary,
-            inputs=[neo4j_uri, neo4j_database, neo4j_username, neo4j_password, model_endpoint, api_key],
-            outputs=[connection_status, safe_connection],
+        neo4j_test_button.click(
+            check_neo4j_for_ui,
+            inputs=[neo4j_uri, neo4j_database, neo4j_username, neo4j_password],
+            outputs=neo4j_connection_status,
+        )
+        model_test_button.click(
+            check_model_service_for_ui,
+            inputs=[model_endpoint, api_key],
+            outputs=model_connection_status,
         )
         env_inputs = [
             neo4j_uri,
