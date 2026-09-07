@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from neo4j import GraphDatabase
-from neo4j.exceptions import Neo4jError
+from neo4j.exceptions import DriverError, Neo4jError
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ def check_neo4j_connection(
             driver.verify_connectivity()
             with driver.session(database=database.strip()) as session:
                 session.run("RETURN 1 AS value").consume()
-    except (Neo4jError, OSError, ValueError) as exc:
+    except (DriverError, Neo4jError, OSError, ValueError) as exc:
         if isinstance(exc, ValueError) and str(exc).startswith("請先填寫"):
             raise
         raise ValueError(f"Neo4j 連線失敗：{exc}") from exc
@@ -72,7 +72,7 @@ def import_extraction(
                     entities,
                     relationships,
                 )
-    except (Neo4jError, OSError, ValueError) as exc:
+    except (DriverError, Neo4jError, OSError, ValueError) as exc:
         if isinstance(exc, ValueError) and str(exc).startswith("請先填寫"):
             raise
         raise ValueError(f"Neo4j 寫入失敗：{exc}") from exc
