@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -249,6 +250,31 @@ def save_config(state: dict[str, Any]) -> tuple[str, str | None]:
     return f"設定已儲存：{output}", str(output)
 
 
+def _select_schema_planning_chunks(
+    chunks: list[TextChunk], sampling_mode: str, sample_page_count: int
+) -> tuple[list[TextChunk], list[int]]:
+    if not chunks:
+        raise ValueError("請先在 PDF 頁面解析並產生 chunks")
+    available_pages = sorted({page for chunk in chunks for page in chunk.pages})
+    if sampling_mode == "全部頁面":
+        return chunks, available_pages
+    if sampling_mode != "隨機抽取 N 頁":
+        raise ValueError("不支援的 Schema 規劃範圍")
+    sample_page_count = int(sample_page_count)
+    if sample_page_count < 1:
+        raise ValueError("隨機抽取頁數必須至少為 1")
+    if sample_page_count > len(available_pages):
+        raise ValueError(
+            f"隨機抽取頁數不可超過可用頁數 {len(available_pages)}"
+        )
+    sampled_pages = sorted(random.sample(available_pages, sample_page_count))
+    sampled_page_set = set(sampled_pages)
+    selected_chunks = [
+        chunk for chunk in chunks if sampled_page_set.intersection(chunk.pages)
+    ]
+    return selected_chunks, sampled_pages
+
+
 def plan_schema_for_ui(
     model_endpoint: str,
     api_key: str,
@@ -259,15 +285,20 @@ def plan_schema_for_ui(
     max_entity_types: int,
     max_relationship_types: int,
     max_concurrent_requests: int,
+    sampling_mode: str,
+    sample_page_count: int,
     chunks: list[TextChunk],
     progress=gr.Progress(),
 ) -> tuple[str, str]:
     try:
+        planning_chunks, selected_pages = _select_schema_planning_chunks(
+            chunks, sampling_mode, sample_page_count
+        )
         plan = plan_graph_schema(
             model_endpoint,
             api_key,
             llm_model,
-            chunks,
+            planning_chunks,
             float(temperature),
             int(max_output_tokens),
             lambda value, description: progress(value, desc=description),
@@ -278,9 +309,16 @@ def plan_schema_for_ui(
         )
     except ValueError as exc:
         return f"❌ {exc}", ""
+    if sampling_mode == "全部頁面":
+        scope_note = f"全部 {len(selected_pages)} 頁"
+    else:
+        sampled_page_text = ", ".join(map(str, selected_pages))
+        scope_note = (
+            f"隨機抽取 {len(selected_pages)} 頁（頁碼：{sampled_page_text}）"
+        )
     note = (
-        f"✅ 已使用 {llm_model} 規劃 schema；參考 "
-        f"全部 {plan.analyzed_chunks} / {plan.total_chunks} 個 chunk，"
+        f"✅ 已使用 {llm_model} 規劃 schema；參考 {scope_note}、"
+        f"{plan.analyzed_chunks} 個 chunk，"
         f"共 {plan.batch_count} 批、{plan.merge_rounds} 輪整合。"
         f"粒度：{schema_granularity}；實體／關係類型上限："
         f"{int(max_entity_types)}／{int(max_relationship_types)}。"
@@ -619,6 +657,15 @@ def build_app() -> gr.Blocks:
                     max_concurrent_requests = gr.Number(
                         value=3, minimum=1, precision=0, label="最大並行請求數"
                     )
+                with gr.Row():
+                    schema_sampling_mode = gr.Radio(
+                        ["全部頁面", "隨機抽取 N 頁"],
+                        value="全部頁面",
+                        label="Schema 規劃範圍",
+                    )
+                    schema_sample_page_count = gr.Number(
+                        value=10, minimum=1, precision=0, label="隨機抽取頁數 N", visible=False
+                    )
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema", variant="primary"
                 )
@@ -805,6 +852,11 @@ def build_app() -> gr.Blocks:
         )
         next_button.click(next_page, inputs=[page_selector, preview_state], outputs=page_selector)
         export_button.click(save_config, inputs=[preview_state], outputs=[preview_status, export_file])
+        schema_sampling_mode.change(
+            lambda mode: gr.update(visible=mode == "隨機抽取 N 頁"),
+            inputs=schema_sampling_mode,
+            outputs=schema_sample_page_count,
+        )
         plan_schema_button.click(
             plan_schema_for_ui,
             inputs=[
@@ -817,6 +869,8 @@ def build_app() -> gr.Blocks:
                 max_entity_types,
                 max_relationship_types,
                 max_concurrent_requests,
+                schema_sampling_mode,
+                schema_sample_page_count,
                 chunk_state,
             ],
             outputs=[plan_status, schema_editor],
