@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -286,6 +287,7 @@ def plan_graph_schema(
     schema_granularity: str = "平衡",
     max_entity_types: int = 15,
     max_relationship_types: int = 20,
+    max_concurrent_requests: int = 3,
 ) -> SchemaPlan:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -300,8 +302,11 @@ def plan_graph_schema(
         raise ValueError("最大實體類型數必須大於 0")
     if int(max_relationship_types) < 1:
         raise ValueError("最大關係類型數必須大於 0")
+    if int(max_concurrent_requests) < 1:
+        raise ValueError("最大並行請求數必須大於 0")
     max_entity_types = int(max_entity_types)
     max_relationship_types = int(max_relationship_types)
+    max_concurrent_requests = int(max_concurrent_requests)
 
     def validate_planned_schema(schema: dict[str, Any]) -> dict[str, Any]:
         schema = validate_schema(schema)
@@ -320,81 +325,109 @@ def plan_graph_schema(
         "若超過上限，應依重要性合併較細類型，不可任意截斷。"
     )
     batches = _chunk_batches(chunks, SCHEMA_CONTEXT_LIMIT)
-    candidates: list[dict[str, Any]] = []
-    analyzed = 0
-    for index, batch in enumerate(batches, start=1):
-        if progress_callback:
-            progress_callback(
-                0.75 * (index - 1) / len(batches),
-                f"分析第 {index} / {len(batches)} 批（已分析 {analyzed} / {len(chunks)} chunks）",
-            )
+    candidates: list[dict[str, Any] | None] = [None] * len(batches)
+
+    def plan_batch(batch: list[TextChunk]) -> dict[str, Any]:
         context = "\n\n".join(_chunk_label(chunk) for chunk in batch)
-        try:
-            candidate = _chat_json(
-                base_url,
-                api_key,
-                llm_model,
-                "你是知識圖譜 schema 設計專家。只輸出 JSON，不要 Markdown 或說明文字。",
-                "請根據這一批文件內容提出候選實體與關係類型。"
-                f"{planning_rules}"
-                "名稱使用英文大寫 snake case，說明使用繁體中文。"
-                "輸出格式：{\"entity_types\":[{\"name\":\"...\",\"description\":\"...\"}],"
-                "\"relationship_types\":[{\"name\":\"...\",\"description\":\"...\","
-                "\"source_types\":[\"...\"],\"target_types\":[\"...\"]}]}。\n\n"
-                f"文件 chunks：\n{context}",
-                temperature,
-                max_output_tokens,
-                validate_planned_schema,
-            )
-            candidates.append(_compact_schema(candidate))
-        except ValueError as exc:
-            raise ValueError(
-                f"Schema 規劃第 {index} / {len(batches)} 批失敗：{exc}"
-            ) from exc
-        analyzed += len(batch)
+        candidate = _chat_json(
+            base_url,
+            api_key,
+            llm_model,
+            "你是知識圖譜 schema 設計專家。只輸出 JSON，不要 Markdown 或說明文字。",
+            "請根據這一批文件內容提出候選實體與關係類型。"
+            f"{planning_rules}"
+            "名稱使用英文大寫 snake case，說明使用繁體中文。"
+            "輸出格式：{\"entity_types\":[{\"name\":\"...\",\"description\":\"...\"}],"
+            "\"relationship_types\":[{\"name\":\"...\",\"description\":\"...\","
+            "\"source_types\":[\"...\"],\"target_types\":[\"...\"]}]}。\n\n"
+            f"文件 chunks：\n{context}",
+            temperature,
+            max_output_tokens,
+            validate_planned_schema,
+        )
+        return _compact_schema(candidate)
+
+    analyzed = 0
+    with ThreadPoolExecutor(max_workers=max_concurrent_requests) as executor:
+        futures = {
+            executor.submit(plan_batch, batch): (index, batch)
+            for index, batch in enumerate(batches)
+        }
+        for future in as_completed(futures):
+            index, batch = futures[future]
+            try:
+                candidates[index] = future.result()
+            except ValueError as exc:
+                raise ValueError(
+                    f"Schema 規劃第 {index + 1} / {len(batches)} 批失敗：{exc}"
+                ) from exc
+            analyzed += len(batch)
+            if progress_callback:
+                progress_callback(
+                    0.75 * analyzed / len(chunks),
+                    f"已完成 {sum(item is not None for item in candidates)} / "
+                    f"{len(batches)} 批（已分析 {analyzed} / {len(chunks)} chunks）",
+                )
+    candidates = [candidate for candidate in candidates if candidate is not None]
 
     merge_rounds = 0
     while len(candidates) > 1:
         merge_rounds += 1
         groups = _schema_groups(candidates, SCHEMA_MERGE_LIMIT)
-        merged: list[dict[str, Any]] = []
-        for index, group in enumerate(groups, start=1):
-            if progress_callback:
-                progress_callback(
-                    min(
-                        0.99,
-                        0.75
-                        + 0.24 * (1 - 0.5 ** (merge_rounds - 1))
-                        + 0.24 * (0.5**merge_rounds) * index / len(groups),
-                    ),
-                    f"第 {merge_rounds} 輪 Schema 整合：{index} / {len(groups)}",
-                )
+        merged: list[dict[str, Any] | None] = [None] * len(groups)
+
+        def merge_group(group: list[dict[str, Any]]) -> dict[str, Any]:
             if len(group) == 1:
-                merged.append(group[0])
-                continue
-            try:
-                result = _chat_json(
-                    base_url,
-                    api_key,
-                    llm_model,
-                    "你是知識圖譜 schema 整合專家。只輸出 JSON，不要 Markdown 或說明文字。",
-                    "合併以下候選 Schema；這不是候選類型的聯集。"
-                    f"{planning_rules}"
-                    "請積極去除重複、統一同義名稱並合併上下位與近義類型。"
-                    "只保留類型名稱、簡短說明，以及關係的 source_types "
-                    "與 target_types；不要輸出範例、屬性或其他欄位。"
-                    "輸出格式必須維持 entity_types 與 relationship_types。\n\n"
-                    f"候選 Schema：\n{json.dumps(group, ensure_ascii=False)}",
-                    temperature,
-                    max_output_tokens,
-                    validate_planned_schema,
-                )
-                merged.append(_compact_schema(result))
-            except ValueError as exc:
-                raise ValueError(
-                    f"Schema 第 {merge_rounds} 輪整合第 {index} / {len(groups)} 組失敗：{exc}"
-                ) from exc
-        candidates = merged
+                return group[0]
+            result = _chat_json(
+                base_url,
+                api_key,
+                llm_model,
+                "你是知識圖譜 schema 整合專家。只輸出 JSON，不要 Markdown 或說明文字。",
+                "合併以下候選 Schema；這不是候選類型的聯集。"
+                f"{planning_rules}"
+                "請積極去除重複、統一同義名稱並合併上下位與近義類型。"
+                "只保留類型名稱、簡短說明，以及關係的 source_types "
+                "與 target_types；不要輸出範例、屬性或其他欄位。"
+                "輸出格式必須維持 entity_types 與 relationship_types。\n\n"
+                f"候選 Schema：\n{json.dumps(group, ensure_ascii=False)}",
+                temperature,
+                max_output_tokens,
+                validate_planned_schema,
+            )
+            return _compact_schema(result)
+
+        completed_groups = 0
+        with ThreadPoolExecutor(max_workers=max_concurrent_requests) as executor:
+            futures = {
+                executor.submit(merge_group, group): index
+                for index, group in enumerate(groups)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    merged[index] = future.result()
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Schema 第 {merge_rounds} 輪整合第 "
+                        f"{index + 1} / {len(groups)} 組失敗：{exc}"
+                    ) from exc
+                completed_groups += 1
+                if progress_callback:
+                    progress_callback(
+                        min(
+                            0.99,
+                            0.75
+                            + 0.24 * (1 - 0.5 ** (merge_rounds - 1))
+                            + 0.24
+                            * (0.5**merge_rounds)
+                            * completed_groups
+                            / len(groups),
+                        ),
+                        f"第 {merge_rounds} 輪 Schema 整合："
+                        f"已完成 {completed_groups} / {len(groups)} 組",
+                    )
+        candidates = [item for item in merged if item is not None]
     if progress_callback:
         progress_callback(1.0, f"已分析全部 {len(chunks)} / {len(chunks)} chunks")
     return SchemaPlan(
