@@ -288,15 +288,12 @@ def extract_graph_for_ui(
     model_endpoint: str,
     api_key: str,
     llm_model: str,
-    embedding_model: str,
     temperature: float,
     max_output_tokens: int,
     chunks: list[TextChunk],
     schema_text: str,
     preview_state: dict[str, Any],
 ) -> tuple[str, list[list[object]], list[list[object]], dict[str, Any]]:
-    if not embedding_model.strip():
-        return "❌ 請選擇 Embedding 模型。", [], [], {}
     try:
         raw_schema = json.loads(schema_text)
         if not isinstance(raw_schema, dict):
@@ -343,7 +340,6 @@ def extract_graph_for_ui(
         "run_id": run_id,
         "document": document_name,
         "llm_model": llm_model,
-        "embedding_model": embedding_model,
         "temperature": float(temperature),
         "max_output_tokens": int(max_output_tokens),
         "schema": schema,
@@ -354,7 +350,7 @@ def extract_graph_for_ui(
     status = (
         f"✅ 已處理 {extraction.processed_chunks} 個 chunk，抽取 "
         f"{len(extraction.entities)} 個實體與 "
-        f"{len(extraction.relationships)} 筆關係。請確認結果後點擊匯入 Neo4j。"
+        f"{len(extraction.relationships)} 筆關係。請確認結果後進行 Embedding 並匯入 Neo4j。"
     )
     return status, entity_rows, relationship_rows, graph_state
 
@@ -364,11 +360,15 @@ def import_graph_for_ui(
     neo4j_database: str,
     neo4j_username: str,
     neo4j_password: str,
+    embedding_model: str,
     graph_state: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     if not graph_state or not graph_state.get("run_id"):
         return "❌ 請先完成知識圖譜抽取。", graph_state or {}
+    if not embedding_model.strip():
+        return "❌ 請選擇 Embedding 模型。", graph_state
     updated_state = dict(graph_state)
+    updated_state["embedding_model"] = embedding_model.strip()
     try:
         imported = import_extraction(
             neo4j_uri,
@@ -541,12 +541,6 @@ def build_app() -> gr.Blocks:
                 gr.Markdown(
                     "確認上方 JSON 後執行全部 chunks；檢查抽取結果後，再手動匯入 Neo4j。"
                 )
-                graph_embedding_model = gr.Dropdown(
-                    choices=[env["EMBEDDING_MODEL"]],
-                    value=env["EMBEDDING_MODEL"],
-                    allow_custom_value=True,
-                    label="Embedding 模型（記入建圖結果）",
-                )
                 generate_graph_button = gr.Button(
                     "確認 Schema 並抽取", variant="primary"
                 )
@@ -562,7 +556,21 @@ def build_app() -> gr.Blocks:
                     interactive=False,
                     wrap=True,
                 )
-                import_graph_button = gr.Button("匯入 Neo4j", variant="primary")
+
+            with gr.Group():
+                gr.Markdown("#### ③ Embedding 並匯入 Neo4j")
+                gr.Markdown(
+                    "確認上方抽取結果後，選擇 Embedding 模型並匯入 Neo4j。"
+                )
+                graph_embedding_model = gr.Dropdown(
+                    choices=[env["EMBEDDING_MODEL"]],
+                    value=env["EMBEDDING_MODEL"],
+                    allow_custom_value=True,
+                    label="Embedding 模型",
+                )
+                import_graph_button = gr.Button(
+                    "Embedding 並匯入 Neo4j", variant="primary"
+                )
 
         with gr.Tab("4. 問答測試"):
             answer_model = gr.Textbox(label="問答 LLM", value=env["ANSWER_MODEL"])
@@ -656,7 +664,6 @@ def build_app() -> gr.Blocks:
                 model_endpoint,
                 api_key,
                 graph_llm_model,
-                graph_embedding_model,
                 graph_temperature,
                 graph_max_output_tokens,
                 chunk_state,
@@ -672,6 +679,7 @@ def build_app() -> gr.Blocks:
                 neo4j_database,
                 neo4j_username,
                 neo4j_password,
+                graph_embedding_model,
                 graph_state,
             ],
             outputs=[build_status, graph_state],
