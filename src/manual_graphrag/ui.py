@@ -399,12 +399,16 @@ def import_graph_for_ui(
     neo4j_username: str,
     neo4j_password: str,
     embedding_model: str,
+    import_mode: str,
+    destructive_confirmed: bool,
     graph_state: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     if not graph_state or not graph_state.get("run_id"):
         return "❌ 請先完成知識圖譜抽取。", graph_state or {}
     if not embedding_model.strip():
         return "❌ 請選擇 Embedding 模型。", graph_state
+    if import_mode != "保留既有圖譜" and not destructive_confirmed:
+        return "❌ 取代或清空資料前必須勾選確認。", graph_state
     updated_state = dict(graph_state)
     updated_state["embedding_model"] = embedding_model.strip()
     try:
@@ -432,6 +436,8 @@ def import_graph_for_ui(
             updated_state["entities"],
             updated_state["relationships"],
             evidence,
+            import_mode,
+            bool(destructive_confirmed),
         )
     except (KeyError, ValueError) as exc:
         updated_state["neo4j_imported"] = False
@@ -441,7 +447,7 @@ def import_graph_for_ui(
     updated_state["neo4j_imported"] = True
     updated_state.pop("neo4j_error", None)
     return (
-        f"✅ 已建立 {len(evidence)} 筆向量證據與 Vector Index；已匯入 Neo4j {imported.entity_count} 個實體與 "
+        f"✅ 匯入模式：{import_mode}；已建立 {len(evidence)} 筆向量證據與 Vector Index；已匯入 Neo4j {imported.entity_count} 個實體與 "
         f"{imported.relationship_count} 筆關係。",
         updated_state,
     )
@@ -675,6 +681,15 @@ def build_app() -> gr.Blocks:
                     allow_custom_value=True,
                     label="Embedding 模型",
                 )
+                import_mode = gr.Radio(
+                    ["保留既有圖譜", "取代最近一次圖譜", "清空本工具所有圖譜"],
+                    value="保留既有圖譜",
+                    label="匯入模式",
+                )
+                destructive_confirmed = gr.Checkbox(
+                    value=False,
+                    label="我確認取代或清空操作會刪除既有圖譜資料",
+                )
                 import_graph_button = gr.Button(
                     "Embedding 並匯入 Neo4j", variant="primary"
                 )
@@ -821,6 +836,8 @@ def build_app() -> gr.Blocks:
                 neo4j_username,
                 neo4j_password,
                 graph_embedding_model,
+                import_mode,
+                destructive_confirmed,
                 graph_state,
             ],
             outputs=[import_status, graph_state],

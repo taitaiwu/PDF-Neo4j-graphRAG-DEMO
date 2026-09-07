@@ -138,6 +138,8 @@ def import_extraction(
     entities: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
+    import_mode: str = "保留既有圖譜",
+    destructive_confirmed: bool = False,
 ) -> ImportSummary:
     if not uri.strip():
         raise ValueError("請先填寫 Neo4j URI")
@@ -149,6 +151,11 @@ def import_extraction(
         raise ValueError("請先填寫 Neo4j Password")
     if not evidence or not evidence[0].get("embedding"):
         raise ValueError("沒有可寫入 Neo4j Vector Index 的向量證據")
+    allowed_modes = {"保留既有圖譜", "取代最近一次圖譜", "清空本工具所有圖譜"}
+    if import_mode not in allowed_modes:
+        raise ValueError("不支援的 Neo4j 匯入模式")
+    if import_mode != "保留既有圖譜" and not destructive_confirmed:
+        raise ValueError("取代或清空資料前必須勾選確認")
 
     try:
         with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
@@ -171,6 +178,7 @@ def import_extraction(
                     entities,
                     relationships,
                     evidence,
+                    import_mode,
                 )
     except (DriverError, Neo4jError, OSError, ValueError) as exc:
         if isinstance(exc, ValueError) and str(exc).startswith("請先填寫"):
@@ -189,7 +197,30 @@ def _write_graph(
     entities: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
+    import_mode: str,
 ) -> dict[str, int]:
+    if import_mode == "清空本工具所有圖譜":
+        transaction.run(
+            """
+            MATCH (node)
+            WHERE node:GraphDocument OR node:ExtractedEntity OR node:GraphEvidence
+            DETACH DELETE node
+            """
+        ).consume()
+    elif import_mode == "取代最近一次圖譜":
+        record = transaction.run(
+            """
+            MATCH (document:GraphDocument)
+            RETURN document.run_id AS run_id
+            ORDER BY document.updated_at DESC LIMIT 1
+            """
+        ).single()
+        if record:
+            transaction.run(
+                "MATCH (node) WHERE node.run_id = $run_id DETACH DELETE node",
+                run_id=record["run_id"],
+            ).consume()
+
     transaction.run(
         """
         MERGE (document:GraphDocument {run_id: $run_id})
