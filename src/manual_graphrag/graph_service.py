@@ -14,16 +14,6 @@ SCHEMA_MERGE_LIMIT = 12_000
 SCHEMA_DESCRIPTION_LIMIT = 120
 EXTRACTION_BATCH_LIMIT = 12_000
 
-DEFAULT_SCHEMA_PLANNING_PROMPT = (
-    "你是知識圖譜 schema 設計專家。只輸出 JSON，不要 Markdown 或說明文字。"
-)
-DEFAULT_SCHEMA_MERGE_PROMPT = (
-    "你是知識圖譜 schema 整合專家。只輸出 JSON，不要 Markdown 或說明文字。"
-)
-DEFAULT_EXTRACTION_PROMPT = (
-    "你是知識圖譜資訊抽取器。只能依據提供的文件內容抽取，禁止臆測。只輸出 JSON。"
-)
-
 
 @dataclass(frozen=True)
 class SchemaPlan:
@@ -296,8 +286,6 @@ def plan_graph_schema(
     schema_granularity: str = "平衡",
     max_entity_types: int = 15,
     max_relationship_types: int = 20,
-    schema_planning_prompt: str = DEFAULT_SCHEMA_PLANNING_PROMPT,
-    schema_merge_prompt: str = DEFAULT_SCHEMA_MERGE_PROMPT,
 ) -> SchemaPlan:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -346,7 +334,7 @@ def plan_graph_schema(
                 base_url,
                 api_key,
                 llm_model,
-                schema_planning_prompt,
+                "你是知識圖譜 schema 設計專家。只輸出 JSON，不要 Markdown 或說明文字。",
                 "請根據這一批文件內容提出候選實體與關係類型。"
                 f"{planning_rules}"
                 "名稱使用英文大寫 snake case，說明使用繁體中文。"
@@ -389,7 +377,7 @@ def plan_graph_schema(
                     base_url,
                     api_key,
                     llm_model,
-                    schema_merge_prompt,
+                    "你是知識圖譜 schema 整合專家。只輸出 JSON，不要 Markdown 或說明文字。",
                     "合併以下候選 Schema；這不是候選類型的聯集。"
                     f"{planning_rules}"
                     "請積極去除重複、統一同義名稱並合併上下位與近義類型。"
@@ -426,7 +414,6 @@ def extract_graph(
     schema: dict[str, Any],
     temperature: float = 0,
     max_output_tokens: int = 2048,
-    extraction_prompt: str = DEFAULT_EXTRACTION_PROMPT,
 ) -> GraphExtraction:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -447,7 +434,7 @@ def extract_graph(
             base_url,
             api_key,
             llm_model,
-            extraction_prompt,
+            "你是知識圖譜資訊抽取器。只能依據提供的文件內容抽取，禁止臆測。只輸出 JSON。",
             "依照 schema 抽取實體與關係。entity.type 與 relationship.type 必須來自 schema；"
             "source_chunk_numbers 必須引用提供的 CHUNK 編號。關係的 source 與 target 使用實體 name。"
             "輸出格式：{\"entities\":[{\"name\":\"...\",\"type\":\"...\","

@@ -21,16 +21,13 @@ def test_plan_schema_button_uses_orange_style_class() -> None:
     assert "schema-plan-orange" in button["props"]["elem_classes"]
 
 
-def test_build_app_uses_current_prompts_as_editable_defaults() -> None:
+def test_build_app_has_manual_neo4j_import_button() -> None:
     app = build_app()
-    components = {
-        component.get("props", {}).get("label"): component.get("props", {})
-        for component in app.config["components"]
-    }
 
-    assert components["Schema 規劃提示詞"]["value"] == ui.DEFAULT_SCHEMA_PLANNING_PROMPT
-    assert components["Schema 合併提示詞"]["value"] == ui.DEFAULT_SCHEMA_MERGE_PROMPT
-    assert components["知識圖譜抽取提示詞"]["value"] == ui.DEFAULT_EXTRACTION_PROMPT
+    assert any(
+        component.get("props", {}).get("value") == "匯入 Neo4j"
+        for component in app.config["components"]
+    )
 
 
 
@@ -185,8 +182,11 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
         processed_chunks=1,
     )
     monkeypatch.setattr(ui, "extract_graph", lambda *args: extraction)
-    from manual_graphrag.neo4j_service import ImportSummary
-    monkeypatch.setattr(ui, "import_extraction", lambda *args: ImportSummary(1, 1))
+    monkeypatch.setattr(
+        ui,
+        "import_extraction",
+        lambda *args: (_ for _ in ()).throw(AssertionError("抽取時不應匯入 Neo4j")),
+    )
     schema = {
         "entity_types": [{"name": "DEVICE"}],
         "relationship_types": [{"name": "USES"}],
@@ -195,10 +195,6 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
     status, entities, relationships, state = ui.extract_graph_for_ui(
         "http://models/v1",
         "key",
-        "bolt://db",
-        "neo4j",
-        "user",
-        "password",
         "llm",
         "embed",
         0.2,
@@ -215,62 +211,75 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
     assert state["embedding_model"] == "embed"
     assert state["temperature"] == 0.2
     assert state["max_output_tokens"] == 1500
+    assert state["neo4j_imported"] is False
+    assert "點擊匯入 Neo4j" in status
 
 
 def test_extract_graph_for_ui_rejects_invalid_schema() -> None:
     result = ui.extract_graph_for_ui(
-        "http://models/v1", "", "bolt://db", "neo4j", "user", "password", "llm", "embed", 0.2, 1500, [], "not-json", {}
+        "http://models/v1", "", "llm", "embed", 0.2, 1500, [], "not-json", {}
     )
 
     assert result == ("❌ schema 不是有效 JSON。", [], [], {})
 
 
-def test_extract_graph_for_ui_keeps_results_when_neo4j_import_fails(monkeypatch) -> None:
-    from manual_graphrag.graph_service import GraphExtraction
+def test_import_graph_for_ui_imports_saved_extraction(monkeypatch) -> None:
+    from manual_graphrag.neo4j_service import ImportSummary
 
-    extraction = GraphExtraction(
-        entities=[
-            {
-                "name": "設備 A",
-                "type": "DEVICE",
-                "description": "設備",
-                "source_chunk_numbers": [1],
-                "source_pages": [3],
-            }
-        ],
-        relationships=[],
-        processed_chunks=1,
-    )
-    monkeypatch.setattr(ui, "extract_graph", lambda *args: extraction)
+    captured = {}
 
-    def failed_import(*args):
-        raise ValueError("Neo4j 寫入失敗：offline")
+    def fake_import(*args):
+        captured["args"] = args
+        return ImportSummary(2, 1)
 
-    monkeypatch.setattr(ui, "import_extraction", failed_import)
-    schema = {
-        "entity_types": [{"name": "DEVICE"}],
-        "relationship_types": [{"name": "USES"}],
+    monkeypatch.setattr(ui, "import_extraction", fake_import)
+    graph_state = {
+        "run_id": "run-1",
+        "document": "manual.pdf",
+        "llm_model": "llm",
+        "embedding_model": "embed",
+        "schema": {
+            "entity_types": [{"name": "DEVICE"}],
+            "relationship_types": [{"name": "USES"}],
+        },
+        "entities": [{"name": "設備 A"}],
+        "relationships": [],
+        "neo4j_imported": False,
     }
 
-    status, entities, relationships, state = ui.extract_graph_for_ui(
-        "http://models/v1",
-        "key",
-        "bolt://db",
-        "neo4j",
-        "user",
-        "password",
-        "llm",
-        "embed",
-        0.2,
-        1500,
-        [TextChunk(1, "text", (3,))],
-        json.dumps(schema),
-        {"file_name": "manual.pdf"},
+    status, state = ui.import_graph_for_ui(
+        "bolt://db", "neo4j", "user", "password", graph_state
     )
 
-    assert status.startswith("⚠️ 已處理 1 個 chunk")
-    assert "Neo4j 寫入失敗：offline" in status
-    assert entities[0][0] == "設備 A"
-    assert relationships == []
+    assert status == "✅ 已匯入 Neo4j 2 個實體與 1 筆關係。"
+    assert state["neo4j_imported"] is True
+    assert captured["args"][4] == "run-1"
+
+
+def test_import_graph_for_ui_keeps_state_when_import_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ui,
+        "import_extraction",
+        lambda *args: (_ for _ in ()).throw(ValueError("Neo4j 寫入失敗：offline")),
+    )
+    graph_state = {
+        "run_id": "run-1",
+        "schema": {},
+        "entities": [],
+        "relationships": [],
+    }
+
+    status, state = ui.import_graph_for_ui(
+        "bolt://db", "neo4j", "user", "password", graph_state
+    )
+
+    assert status == "❌ Neo4j 寫入失敗：offline"
     assert state["neo4j_imported"] is False
     assert state["neo4j_error"] == "Neo4j 寫入失敗：offline"
+
+
+def test_import_graph_for_ui_requires_extraction() -> None:
+    assert ui.import_graph_for_ui("bolt://db", "neo4j", "user", "password", {}) == (
+        "❌ 請先完成知識圖譜抽取。",
+        {},
+    )

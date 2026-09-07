@@ -10,14 +10,7 @@ import gradio as gr
 from .chunking import TextChunk, chunk_pages, preview_rows_for_page
 from .config import public_settings
 from .env_store import load_env, save_env
-from .graph_service import (
-    DEFAULT_EXTRACTION_PROMPT,
-    DEFAULT_SCHEMA_MERGE_PROMPT,
-    DEFAULT_SCHEMA_PLANNING_PROMPT,
-    extract_graph,
-    plan_graph_schema,
-    validate_schema,
-)
+from .graph_service import extract_graph, plan_graph_schema, validate_schema
 from .neo4j_service import import_extraction
 from .pdf_service import extract_pdf, get_pdf_page_count
 from .storage import write_json
@@ -237,8 +230,6 @@ def plan_schema_for_ui(
     max_entity_types: int,
     max_relationship_types: int,
     chunks: list[TextChunk],
-    schema_planning_prompt: str = DEFAULT_SCHEMA_PLANNING_PROMPT,
-    schema_merge_prompt: str = DEFAULT_SCHEMA_MERGE_PROMPT,
     progress=gr.Progress(),
 ) -> tuple[str, str]:
     try:
@@ -253,8 +244,6 @@ def plan_schema_for_ui(
             schema_granularity,
             int(max_entity_types),
             int(max_relationship_types),
-            schema_planning_prompt,
-            schema_merge_prompt,
         )
     except ValueError as exc:
         return f"❌ {exc}", ""
@@ -272,10 +261,6 @@ def plan_schema_for_ui(
 def extract_graph_for_ui(
     model_endpoint: str,
     api_key: str,
-    neo4j_uri: str,
-    neo4j_database: str,
-    neo4j_username: str,
-    neo4j_password: str,
     llm_model: str,
     embedding_model: str,
     temperature: float,
@@ -283,7 +268,6 @@ def extract_graph_for_ui(
     chunks: list[TextChunk],
     schema_text: str,
     preview_state: dict[str, Any],
-    extraction_prompt: str = DEFAULT_EXTRACTION_PROMPT,
 ) -> tuple[str, list[list[object]], list[list[object]], dict[str, Any]]:
     if not embedding_model.strip():
         return "❌ 請選擇 Embedding 模型。", [], [], {}
@@ -300,7 +284,6 @@ def extract_graph_for_ui(
             schema,
             float(temperature),
             int(max_output_tokens),
-            extraction_prompt,
         )
     except json.JSONDecodeError:
         return "❌ schema 不是有效 JSON。", [], [], {}
@@ -341,38 +324,51 @@ def extract_graph_for_ui(
         "entities": extraction.entities,
         "relationships": extraction.relationships,
     }
+    graph_state["neo4j_imported"] = False
+    status = (
+        f"✅ 已處理 {extraction.processed_chunks} 個 chunk，抽取 "
+        f"{len(extraction.entities)} 個實體與 "
+        f"{len(extraction.relationships)} 筆關係。請確認結果後點擊匯入 Neo4j。"
+    )
+    return status, entity_rows, relationship_rows, graph_state
+
+
+def import_graph_for_ui(
+    neo4j_uri: str,
+    neo4j_database: str,
+    neo4j_username: str,
+    neo4j_password: str,
+    graph_state: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    if not graph_state or not graph_state.get("run_id"):
+        return "❌ 請先完成知識圖譜抽取。", graph_state or {}
+    updated_state = dict(graph_state)
     try:
         imported = import_extraction(
             neo4j_uri,
             neo4j_database,
             neo4j_username,
             neo4j_password,
-            run_id,
-            document_name,
-            llm_model,
-            embedding_model,
-            schema,
-            extraction.entities,
-            extraction.relationships,
+            updated_state["run_id"],
+            updated_state.get("document", ""),
+            updated_state.get("llm_model", ""),
+            updated_state.get("embedding_model", ""),
+            updated_state["schema"],
+            updated_state["entities"],
+            updated_state["relationships"],
         )
-    except ValueError as exc:
-        graph_state["neo4j_imported"] = False
-        graph_state["neo4j_error"] = str(exc)
-        status = (
-            f"⚠️ 已處理 {extraction.processed_chunks} 個 chunk，抽取 "
-            f"{len(extraction.entities)} 個實體與 "
-            f"{len(extraction.relationships)} 筆關係，但 {exc}"
-        )
-        return status, entity_rows, relationship_rows, graph_state
+    except (KeyError, ValueError) as exc:
+        updated_state["neo4j_imported"] = False
+        updated_state["neo4j_error"] = str(exc)
+        return f"❌ {exc}", updated_state
 
-    graph_state["neo4j_imported"] = True
-    status = (
-        f"✅ 已處理 {extraction.processed_chunks} 個 chunk，抽取 "
-        f"{len(extraction.entities)} 個實體與 "
-        f"{len(extraction.relationships)} 筆關係；已匯入 Neo4j "
-        f"{imported.entity_count} 個實體與 {imported.relationship_count} 筆關係。"
+    updated_state["neo4j_imported"] = True
+    updated_state.pop("neo4j_error", None)
+    return (
+        f"✅ 已匯入 Neo4j {imported.entity_count} 個實體與 "
+        f"{imported.relationship_count} 筆關係。",
+        updated_state,
     )
-    return status, entity_rows, relationship_rows, graph_state
 
 
 def initial_answer(question: str, state: dict[str, Any]) -> tuple[str, str]:
@@ -485,22 +481,6 @@ def build_app() -> gr.Blocks:
                     max_relationship_types = gr.Number(
                         value=20, minimum=1, precision=0, label="最大關係類型數"
                     )
-                with gr.Accordion("提示詞設定", open=False):
-                    schema_planning_prompt = gr.Textbox(
-                        value=DEFAULT_SCHEMA_PLANNING_PROMPT,
-                        label="Schema 規劃提示詞",
-                        lines=3,
-                    )
-                    schema_merge_prompt = gr.Textbox(
-                        value=DEFAULT_SCHEMA_MERGE_PROMPT,
-                        label="Schema 合併提示詞",
-                        lines=3,
-                    )
-                    extraction_prompt = gr.Textbox(
-                        value=DEFAULT_EXTRACTION_PROMPT,
-                        label="知識圖譜抽取提示詞",
-                        lines=3,
-                    )
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema",
                     variant="secondary",
@@ -538,9 +518,9 @@ def build_app() -> gr.Blocks:
                 )
 
             with gr.Group():
-                gr.Markdown("#### ② 確認 Schema、抽取並匯入 Neo4j")
+                gr.Markdown("#### ② 確認 Schema 並抽取知識圖譜")
                 gr.Markdown(
-                    "確認上方 JSON 後執行全部 chunks；抽取完成會自動寫入連線設定中的 Neo4j。"
+                    "確認上方 JSON 後執行全部 chunks；檢查抽取結果後，再手動匯入 Neo4j。"
                 )
                 graph_embedding_model = gr.Dropdown(
                     choices=[env["EMBEDDING_MODEL"]],
@@ -549,7 +529,7 @@ def build_app() -> gr.Blocks:
                     label="Embedding 模型（記入建圖結果）",
                 )
                 generate_graph_button = gr.Button(
-                    "確認 Schema 並生成", variant="primary"
+                    "確認 Schema 並抽取", variant="primary"
                 )
                 build_status = gr.Markdown("尚未執行抽取。")
                 gr.Markdown("##### 抽取結果")
@@ -563,6 +543,7 @@ def build_app() -> gr.Blocks:
                     interactive=False,
                     wrap=True,
                 )
+                import_graph_button = gr.Button("匯入 Neo4j", variant="secondary")
 
         with gr.Tab("4. 問答測試"):
             answer_model = gr.Textbox(label="問答 LLM", value=env["ANSWER_MODEL"])
@@ -641,8 +622,6 @@ def build_app() -> gr.Blocks:
                 max_entity_types,
                 max_relationship_types,
                 chunk_state,
-                schema_planning_prompt,
-                schema_merge_prompt,
             ],
             outputs=[plan_status, schema_editor],
         )
@@ -651,10 +630,6 @@ def build_app() -> gr.Blocks:
             inputs=[
                 model_endpoint,
                 api_key,
-                neo4j_uri,
-                neo4j_database,
-                neo4j_username,
-                neo4j_password,
                 graph_llm_model,
                 graph_embedding_model,
                 graph_temperature,
@@ -662,9 +637,19 @@ def build_app() -> gr.Blocks:
                 chunk_state,
                 schema_editor,
                 preview_state,
-                extraction_prompt,
             ],
             outputs=[build_status, entity_table, relationship_table, graph_state],
+        )
+        import_graph_button.click(
+            import_graph_for_ui,
+            inputs=[
+                neo4j_uri,
+                neo4j_database,
+                neo4j_username,
+                neo4j_password,
+                graph_state,
+            ],
+            outputs=[build_status, graph_state],
         )
         ask_button.click(initial_answer, inputs=[question, preview_state], outputs=[answer_status, answer])
     return app
