@@ -657,7 +657,7 @@ def build_app() -> gr.Blocks:
                         0, 2, value=0, step=0.1, label="Temperature"
                     )
                     graph_max_output_tokens = gr.Number(
-                        value=2048, minimum=1, precision=0, label="最大輸出 tokens"
+                        value=4096, minimum=1, precision=0, label="最大輸出 tokens"
                     )
                 with gr.Row():
                     schema_granularity = gr.Radio(
