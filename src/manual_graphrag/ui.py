@@ -639,8 +639,28 @@ def build_app() -> gr.Blocks:
                 top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
             ask_button = gr.Button("送出問題", variant="primary")
             answer_status = gr.Markdown()
-            gr.Markdown("### 回答")
-            answer = gr.Markdown()
+            gr.HTML(
+                """
+                <style>
+                .answer-panel {
+                    border: 2px solid var(--border-color-primary);
+                    border-radius: 12px;
+                    padding: 18px 22px;
+                    background: var(--background-fill-secondary);
+                }
+                .answer-content,
+                .answer-content p,
+                .answer-content li {
+                    font-size: 20px !important;
+                    line-height: 1.75 !important;
+                }
+                </style>
+                """,
+                padding=False,
+            )
+            with gr.Group(elem_classes="answer-panel"):
+                gr.Markdown("### 回答")
+                answer = gr.Markdown(elem_classes="answer-content")
             gr.Markdown("### 檢索來源")
             answer_sources = gr.Dataframe(
                 headers=["類型", "證據", "相似度", "來源頁碼", "來源 Chunks"],
