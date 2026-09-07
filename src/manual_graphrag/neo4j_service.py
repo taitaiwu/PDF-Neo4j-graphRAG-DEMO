@@ -163,10 +163,11 @@ def import_extraction(
             with driver.session(database=database.strip()) as session:
                 dimensions = len(evidence[0]["embedding"])
                 session.run(
-                    f"CREATE VECTOR INDEX graph_evidence_embedding IF NOT EXISTS "
-                    f"FOR (e:GraphEvidence) ON (e.embedding) OPTIONS {{"
-                    f"indexConfig: {{`vector.dimensions`: {dimensions}, "
-                    f"`vector.similarity_function`: \x27cosine\x27}}}}}"
+                    "CREATE VECTOR INDEX graph_evidence_embedding IF NOT EXISTS "
+                    "FOR (e:GraphEvidence) ON (e.embedding) OPTIONS {"
+                    "indexConfig: {`vector.dimensions`: "
+                    f"{dimensions}, "
+                    "`vector.similarity_function`: 'cosine'}}"
                 ).consume()
                 counts = session.execute_write(
                     _write_graph,
