@@ -38,6 +38,28 @@ python src/app.py
 
 瀏覽器會開啟 `http://127.0.0.1:7860`。應用程式不建立公開分享網址。
 
+### Docker
+
+先建立本機設定與資料目錄：
+
+```bash
+cp .env.example .env
+mkdir -p data
+```
+
+建置並啟動：
+
+```bash
+docker build -t pdf-graphrag .
+docker run --rm -p 7860:7860 \
+  --add-host=host.docker.internal:host-gateway \
+  --mount type=bind,source="$(pwd)/.env",target=/app/.env \
+  --mount type=bind,source="$(pwd)/data",target=/app/data \
+  pdf-graphrag
+```
+
+開啟 `http://127.0.0.1:7860`。Neo4j 或本機模型服務不在容器內時，連線位址請使用主機可供容器存取的介面；Linux Docker 可將 `localhost` 改為 `host.docker.internal`。掛載 `.env` 可保留介面修改的連線設定，掛載 `data/` 則保存匯出與問答紀錄。
+
 ## 測試
 
 ```bash
