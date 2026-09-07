@@ -38,27 +38,134 @@ python src/app.py
 
 瀏覽器會開啟 `http://127.0.0.1:7860`。應用程式不建立公開分享網址。
 
-### Docker
+### Docker：陌生環境從零部署
 
-先建立本機設定與資料目錄：
+以下流程不需要先安裝 Python 或專案套件；Python 與相依套件會建置在 Docker 映像內。
+
+#### 1. 安裝必要工具
+
+安裝 Git 與 Docker Desktop（Windows／macOS），或 Docker Engine（Linux）。安裝完成後開啟 Terminal 或 PowerShell，確認 Docker daemon 正在運作：
+
+```text
+git --version
+docker version
+```
+
+`docker version` 必須同時顯示 Client 與 Server；若只有 Client，請先啟動 Docker Desktop 或 Docker 服務。
+
+#### 2. 取得專案
+
+如果專案已放在 Git 倉庫，將下列網址與目錄名稱替換成實際值：
+
+```bash
+git clone <REPOSITORY_URL>
+cd <REPOSITORY_DIRECTORY>
+```
+
+目前專案尚未設定公開 Git remote，因此文件無法提供固定 clone URL。也可以下載或複製完整專案資料夾，然後在 Terminal／PowerShell 進入包含 `Dockerfile` 的目錄。
+
+#### 3. 建立本機設定與資料目錄
+
+Linux／macOS：
 
 ```bash
 cp .env.example .env
 mkdir -p data
 ```
 
-建置並啟動：
+Windows PowerShell：
 
-```bash
-docker build -t pdf-graphrag .
-docker run --rm -p 7860:7860 \
-  --add-host=host.docker.internal:host-gateway \
-  --mount type=bind,source="$(pwd)/.env",target=/app/.env \
-  --mount type=bind,source="$(pwd)/data",target=/app/data \
-  pdf-graphrag
+```powershell
+Copy-Item .env.example .env
+New-Item -ItemType Directory -Force data
 ```
 
-開啟 `http://127.0.0.1:7860`。Neo4j 或本機模型服務不在容器內時，連線位址請使用主機可供容器存取的介面；Linux Docker 可將 `localhost` 改為 `host.docker.internal`。掛載 `.env` 可保留介面修改的連線設定，掛載 `data/` 則保存匯出與問答紀錄。
+用文字編輯器開啟 `.env`，填寫 Neo4j、模型端點、模型名稱、密碼與 API key。請勿將 `.env` 提交或傳送給其他人。
+
+如果 Neo4j 或本機模型服務執行在 Docker 主機，而不是另一個容器，容器內不能使用 `localhost`。請改用：
+
+```env
+NEO4J_URI="bolt://host.docker.internal:7687"
+MODEL_API_BASE="http://host.docker.internal:11434/v1"
+```
+
+使用 OpenAI API 時，模型端點可維持 `https://api.openai.com/v1`，並設定 API key。
+
+#### 4. 建置 Docker 映像
+
+在包含 `Dockerfile` 的專案根目錄執行：
+
+```bash
+docker build -t pdf-graphrag:latest .
+```
+
+首次建置會下載 Python 基礎映像與套件，需要網路連線。完成時應看到映像名稱 `pdf-graphrag:latest`；可用以下指令確認：
+
+```bash
+docker image ls pdf-graphrag
+```
+
+#### 5. 啟動容器
+
+Linux／macOS：
+
+```bash
+docker run -d \
+  --name pdf-graphrag \
+  --restart unless-stopped \
+  -p 7860:7860 \
+  --add-host=host.docker.internal:host-gateway \
+  -v ./.env:/app/.env \
+  -v ./data:/app/data \
+  pdf-graphrag:latest
+```
+
+Windows PowerShell：
+
+```powershell
+docker run -d `
+  --name pdf-graphrag `
+  --restart unless-stopped `
+  -p 7860:7860 `
+  --add-host=host.docker.internal:host-gateway `
+  -v ./.env:/app/.env `
+  -v ./data:/app/data `
+  pdf-graphrag:latest
+```
+
+開啟 `http://127.0.0.1:7860`，先到「連線設定」分別測試 Neo4j 與模型服務。掛載 `.env` 可保留介面修改的連線設定，掛載 `data/` 則保存匯出與問答紀錄；刪除或重建容器不會刪除這兩個主機檔案。
+
+#### 6. 查看狀態、日誌與停止服務
+
+```bash
+docker ps --filter name=pdf-graphrag
+docker logs -f pdf-graphrag
+docker stop pdf-graphrag
+docker start pdf-graphrag
+```
+
+若容器啟動後立即停止，使用 `docker logs pdf-graphrag` 查看錯誤。若 7860 連接埠已被占用，可把啟動參數改為 `-p 8080:7860`，然後開啟 `http://127.0.0.1:8080`。
+
+#### 7. 更新版本
+
+Git 取得的專案可依序執行：
+
+```bash
+git pull
+docker build -t pdf-graphrag:latest .
+docker stop pdf-graphrag
+docker rm pdf-graphrag
+```
+
+然後重新執行第 5 步。因為 `.env` 與 `data/` 位於主機，重建容器後設定與問答紀錄仍會保留。
+
+#### 常見連線問題
+
+- 容器中的 `localhost` 指向容器本身，不是 Docker 主機。主機服務請使用 `host.docker.internal`。
+- Linux 若沒有加入 `--add-host=host.docker.internal:host-gateway`，可能無法解析主機名稱。
+- 本機 Neo4j 或模型服務若只監聽 `127.0.0.1`，容器可能無法連入；需讓服務監聽 Docker 主機可存取的介面，並確認防火牆允許對應連接埠。
+- `.env` 修改後可在介面按「重新讀取 .env」，或執行 `docker restart pdf-graphrag`。
+- 若看到掛載權限錯誤，確認目前使用者可讀寫 `.env` 與 `data/`。
 
 ## 測試
 
