@@ -1,0 +1,180 @@
+{
+  "entity_types": [
+    {
+      "name": "DEVICE_MODEL",
+      "description": "印表機或多功能事務機的產品型號與型號變體。"
+    },
+    {
+      "name": "DEVICE_COMPONENT",
+      "description": "裝置的實體組件、連接埠、面板按鈕、進紙與成像部件。"
+    },
+    {
+      "name": "DEVICE_FUNCTION",
+      "description": "列印、複印、掃描、傳真、節電及管理等裝置功能。"
+    },
+    {
+      "name": "SOFTWARE",
+      "description": "驅動程式、設定工具、狀態監控程式及其他配套軟體。"
+    },
+    {
+      "name": "OPERATING_SYSTEM",
+      "description": "支援軟體安裝與裝置操作的作業系統或平台版本。"
+    },
+    {
+      "name": "CONNECTION_METHOD",
+      "description": "USB、有線網路、無線網路、電話線等裝置連線方式或通訊協定。"
+    },
+    {
+      "name": "CONFIGURATION_OPTION",
+      "description": "操作面板、驅動程式或管理工具中可調整的設定項目。"
+    },
+    {
+      "name": "OPTION_VALUE",
+      "description": "設定項目的允許值、範圍、狀態或原廠預設值。"
+    },
+    {
+      "name": "PROCEDURE",
+      "description": "安裝、設定、操作、清潔、更換或排除故障的完整作業程序。"
+    },
+    {
+      "name": "PROCEDURE_STEP",
+      "description": "程序內具有順序、操作動作與預期結果的個別步驟。"
+    },
+    {
+      "name": "MATERIAL",
+      "description": "紙張、信封、碳粉匣及其他列印媒材或消耗品。"
+    },
+    {
+      "name": "SPECIFICATION",
+      "description": "尺寸、容量、速度、解析度、格式、限制及其他技術規格。"
+    },
+    {
+      "name": "PROBLEM",
+      "description": "錯誤訊息、異常症狀、夾紙、品質問題或功能失效情況。"
+    },
+    {
+      "name": "CAUSE",
+      "description": "導致問題或限制功能可用性的條件與根本原因。"
+    },
+    {
+      "name": "SOLUTION",
+      "description": "針對問題建議的檢查、修正、維護或聯絡支援措施。"
+    }
+  ],
+  "relationship_types": [
+    {
+      "name": "HAS_COMPONENT",
+      "description": "產品型號包含某個硬體或操作組件。",
+      "source_types": ["DEVICE_MODEL"],
+      "target_types": ["DEVICE_COMPONENT"]
+    },
+    {
+      "name": "SUPPORTS_FUNCTION",
+      "description": "產品型號提供某項裝置功能。",
+      "source_types": ["DEVICE_MODEL"],
+      "target_types": ["DEVICE_FUNCTION"]
+    },
+    {
+      "name": "APPLIES_TO_MODEL",
+      "description": "功能、程序、設定、規格或問題只適用於特定產品型號。",
+      "source_types": ["DEVICE_FUNCTION", "PROCEDURE", "CONFIGURATION_OPTION", "SPECIFICATION", "PROBLEM"],
+      "target_types": ["DEVICE_MODEL"]
+    },
+    {
+      "name": "ENABLES_FUNCTION",
+      "description": "軟體、連線方式或組件使某項裝置功能可用。",
+      "source_types": ["SOFTWARE", "CONNECTION_METHOD", "DEVICE_COMPONENT"],
+      "target_types": ["DEVICE_FUNCTION"]
+    },
+    {
+      "name": "COMPATIBLE_WITH",
+      "description": "軟體與特定作業系統相容。",
+      "source_types": ["SOFTWARE"],
+      "target_types": ["OPERATING_SYSTEM"]
+    },
+    {
+      "name": "USES_CONNECTION",
+      "description": "產品、軟體、功能或程序使用特定連線方式。",
+      "source_types": ["DEVICE_MODEL", "SOFTWARE", "DEVICE_FUNCTION", "PROCEDURE"],
+      "target_types": ["CONNECTION_METHOD"]
+    },
+    {
+      "name": "HAS_OPTION",
+      "description": "功能、軟體或產品提供某個可設定項目。",
+      "source_types": ["DEVICE_FUNCTION", "SOFTWARE", "DEVICE_MODEL"],
+      "target_types": ["CONFIGURATION_OPTION"]
+    },
+    {
+      "name": "HAS_VALUE",
+      "description": "設定項目具有允許值、範圍或預設值。",
+      "source_types": ["CONFIGURATION_OPTION"],
+      "target_types": ["OPTION_VALUE"]
+    },
+    {
+      "name": "CONFIGURES",
+      "description": "程序用來設定產品、功能、軟體、連線或設定項目。",
+      "source_types": ["PROCEDURE"],
+      "target_types": ["DEVICE_MODEL", "DEVICE_FUNCTION", "SOFTWARE", "CONNECTION_METHOD", "CONFIGURATION_OPTION"]
+    },
+    {
+      "name": "PERFORMS_FUNCTION",
+      "description": "程序用來執行某項裝置功能。",
+      "source_types": ["PROCEDURE"],
+      "target_types": ["DEVICE_FUNCTION"]
+    },
+    {
+      "name": "HAS_STEP",
+      "description": "程序包含個別操作步驟。",
+      "source_types": ["PROCEDURE"],
+      "target_types": ["PROCEDURE_STEP"]
+    },
+    {
+      "name": "PRECEDES",
+      "description": "某個程序步驟應在另一個步驟之前執行。",
+      "source_types": ["PROCEDURE_STEP"],
+      "target_types": ["PROCEDURE_STEP"]
+    },
+    {
+      "name": "USES_MATERIAL",
+      "description": "產品、功能或程序使用指定媒材或消耗品。",
+      "source_types": ["DEVICE_MODEL", "DEVICE_FUNCTION", "PROCEDURE"],
+      "target_types": ["MATERIAL"]
+    },
+    {
+      "name": "HAS_SPECIFICATION",
+      "description": "產品、組件、功能、連線或材料具有特定技術規格。",
+      "source_types": ["DEVICE_MODEL", "DEVICE_COMPONENT", "DEVICE_FUNCTION", "CONNECTION_METHOD", "MATERIAL"],
+      "target_types": ["SPECIFICATION"]
+    },
+    {
+      "name": "AFFECTS",
+      "description": "問題影響產品、組件、功能、軟體或輸出材料。",
+      "source_types": ["PROBLEM"],
+      "target_types": ["DEVICE_MODEL", "DEVICE_COMPONENT", "DEVICE_FUNCTION", "SOFTWARE", "MATERIAL"]
+    },
+    {
+      "name": "CAUSED_BY",
+      "description": "問題由某個原因導致。",
+      "source_types": ["PROBLEM"],
+      "target_types": ["CAUSE"]
+    },
+    {
+      "name": "RESOLVED_BY",
+      "description": "問題可由建議的解決措施處理。",
+      "source_types": ["PROBLEM"],
+      "target_types": ["SOLUTION"]
+    },
+    {
+      "name": "IMPLEMENTED_BY",
+      "description": "解決措施透過特定程序落實。",
+      "source_types": ["SOLUTION"],
+      "target_types": ["PROCEDURE"]
+    },
+    {
+      "name": "REQUIRES",
+      "description": "功能、軟體、程序或解決措施需要指定組件、軟體、連線、材料或作業系統。",
+      "source_types": ["DEVICE_FUNCTION", "SOFTWARE", "PROCEDURE", "SOLUTION"],
+      "target_types": ["DEVICE_COMPONENT", "SOFTWARE", "CONNECTION_METHOD", "MATERIAL", "OPERATING_SYSTEM"]
+    }
+  ]
+}
