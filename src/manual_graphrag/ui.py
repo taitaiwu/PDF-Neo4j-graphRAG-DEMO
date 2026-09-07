@@ -18,6 +18,7 @@ from .graph_service import (
 )
 from .neo4j_service import import_extraction, check_neo4j_connection
 from .pdf_service import extract_pdf, get_pdf_page_count
+from .qa_service import answer_graph_question
 from .storage import write_json
 
 
@@ -399,15 +400,49 @@ def import_graph_for_ui(
     )
 
 
-def initial_answer(question: str, state: dict[str, Any]) -> tuple[str, str]:
-    if not question.strip():
-        return "請輸入問題。", ""
-    if not state:
-        return "請先上傳 PDF 並完成 chunk 預覽。", ""
-    return (
-        "GraphRAG 後端尚未接入；初版介面已記錄問題與目前設定。",
-        f"問題：{question}\n\n目標文件：{state.get('file_name', '未知')}",
+def answer_question_for_ui(
+    model_endpoint: str,
+    api_key: str,
+    answer_model: str,
+    question: str,
+    retrieval_mode: str,
+    top_k: int,
+    graph_state: dict[str, Any],
+) -> tuple[str, str, list[list[object]], list[dict[str, Any]]]:
+    try:
+        result = answer_graph_question(
+            model_endpoint, api_key, answer_model, question,
+            retrieval_mode, int(top_k), graph_state,
+        )
+    except ValueError as exc:
+        return f"❌ {exc}", "", [], []
+    rows = [
+        [
+            item["kind"],
+            item["text"],
+            f"{item['score']:.4f}",
+            ", ".join(map(str, item.get("source_pages", []))),
+            ", ".join(map(str, item.get("source_chunk_numbers", []))),
+        ]
+        for item in result["evidence"]
+    ]
+    record = {
+        "run_id": graph_state.get("run_id"),
+        "document": graph_state.get("document", ""),
+        "answer_model": answer_model,
+        "embedding_model": graph_state.get("embedding_model", ""),
+        "question": question.strip(),
+        "retrieval_mode": retrieval_mode,
+        "top_k": int(top_k),
+        "answer": result["answer"],
+        "evidence": result["evidence"],
+    }
+    output = write_json(Path("data/qa") / f"{uuid4()}.json", record)
+    status = (
+        f"✅ {retrieval_mode} 已使用 {len(rows)} 筆證據完成回答；"
+        f"文件：{graph_state.get('document', '未知')}；紀錄：{output}。"
     )
+    return status, result["answer"], rows, result["evidence"]
 
 
 def build_app() -> gr.Blocks:
@@ -591,7 +626,15 @@ def build_app() -> gr.Blocks:
                 top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
             ask_button = gr.Button("送出問題", variant="primary")
             answer_status = gr.Markdown()
+            gr.Markdown("### 回答")
             answer = gr.Markdown()
+            gr.Markdown("### 檢索來源")
+            answer_sources = gr.Dataframe(
+                headers=["類型", "證據", "相似度", "來源頁碼", "來源 Chunks"],
+                interactive=False,
+                wrap=True,
+            )
+            retrieval_content = gr.JSON(label="檢索內容")
 
         with gr.Tab("5. 歷史紀錄"):
             gr.Markdown("建圖與問答紀錄將在後續開發階段顯示於此。")
@@ -695,5 +738,17 @@ def build_app() -> gr.Blocks:
             ],
             outputs=[import_status, graph_state],
         )
-        ask_button.click(initial_answer, inputs=[question, preview_state], outputs=[answer_status, answer])
+        ask_button.click(
+            answer_question_for_ui,
+            inputs=[
+                model_endpoint,
+                api_key,
+                answer_model,
+                question,
+                retrieval_mode,
+                top_k,
+                graph_state,
+            ],
+            outputs=[answer_status, answer, answer_sources, retrieval_content],
+        )
     return app
