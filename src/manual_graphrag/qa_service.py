@@ -9,15 +9,24 @@ from .graph_service import _api_url, _chat_response_content, _post_json
 def embedding_vectors(base_url: str, api_key: str, model: str, texts: list[str]) -> list[list[float]]:
     if not model.strip():
         raise ValueError("此建圖結果沒有 Embedding 模型")
-    response = _post_json(_api_url(base_url, "embeddings"), {"model": model.strip(), "input": texts}, api_key)
-    data = response.get("data")
-    if not isinstance(data, list) or len(data) != len(texts):
-        raise ValueError("Embedding API 回傳格式或數量不正確")
-    ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
-    try:
-        return [[float(value) for value in item["embedding"]] for item in ordered]
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("Embedding API 回傳的向量格式不正確") from exc
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), 64):
+        batch = texts[start : start + 64]
+        response = _post_json(
+            _api_url(base_url, "embeddings"),
+            {"model": model.strip(), "input": batch},
+            api_key,
+        )
+        data = response.get("data")
+        if not isinstance(data, list) or len(data) != len(batch):
+            raise ValueError("Embedding API 回傳格式或數量不正確")
+        ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
+        try:
+            for item in ordered:
+                vectors.append([float(value) for value in item["embedding"]])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Embedding API 回傳的向量格式不正確") from exc
+    return vectors
 
 
 def answer_graph_question(

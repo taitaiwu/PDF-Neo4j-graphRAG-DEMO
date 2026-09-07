@@ -394,6 +394,10 @@ def extract_graph_for_ui(
         "schema": schema,
         "entities": extraction.entities,
         "relationships": extraction.relationships,
+        "chunks": [
+            {"number": chunk.number, "text": chunk.text, "pages": list(chunk.pages)}
+            for chunk in chunks
+        ],
     }
     graph_state["neo4j_imported"] = False
     status = (
@@ -405,9 +409,20 @@ def extract_graph_for_ui(
 
 
 def _build_graph_evidence(
-    entities: list[dict[str, Any]], relationships: list[dict[str, Any]]
+    entities: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     evidence = []
+    for item in chunks:
+        number = int(item.get("number", 0))
+        evidence.append({
+            "evidence_id": f"chunk-{number}", "kind": "原文",
+            "name": "", "source": "", "target": "",
+            "text": str(item.get("text", "")),
+            "source_pages": item.get("pages", []),
+            "source_chunk_numbers": [number],
+        })
     for index, item in enumerate(entities):
         evidence.append({
             "evidence_id": f"entity-{index}", "kind": "實體",
@@ -454,10 +469,12 @@ def import_graph_for_ui(
     updated_state["embedding_model"] = embedding_model.strip()
     try:
         evidence = _build_graph_evidence(
-            updated_state["entities"], updated_state["relationships"]
+            updated_state["entities"],
+            updated_state["relationships"],
+            updated_state.get("chunks", []),
         )
         if not evidence:
-            raise ValueError("沒有可建立向量索引的實體或關係")
+            raise ValueError("沒有可建立向量索引的原文、實體或關係")
         vectors = embedding_vectors(
             model_endpoint, api_key, embedding_model,
             [item["text"] for item in evidence],

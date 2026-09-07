@@ -85,14 +85,13 @@ def search_graph_evidence(
     uri: str, database: str, username: str, password: str,
     run_id: str, embedding: list[float], retrieval_mode: str, top_k: int,
 ) -> list[dict[str, Any]]:
-    kind = "實體" if retrieval_mode == "GraphRAG" else None
     query = """
     CALL db.index.vector.queryNodes(
         'graph_evidence_embedding', $candidate_count, $embedding
     ) YIELD node, score
-    WHERE node.run_id = $run_id AND ($kind IS NULL OR node.kind = $kind)
+    WHERE node.run_id = $run_id
     RETURN node {
-        .kind, .name, .source, .target, .text, .source_pages,
+        .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
         .source_chunk_numbers, score: score
     } AS evidence
     ORDER BY score DESC LIMIT $top_k
@@ -100,26 +99,82 @@ def search_graph_evidence(
     try:
         with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
             with driver.session(database=database.strip()) as session:
+                total_record = session.run(
+                    "MATCH (node:GraphEvidence) RETURN count(node) AS count"
+                ).single()
+                candidate_count = max(
+                    int(top_k),
+                    int(total_record["count"]) if total_record else int(top_k),
+                )
                 records = session.run(
-                    query, run_id=run_id, embedding=embedding, kind=kind,
-                    top_k=int(top_k), candidate_count=max(1000, int(top_k) * 50),
+                    query,
+                    run_id=run_id,
+                    embedding=embedding,
+                    top_k=int(top_k),
+                    candidate_count=candidate_count,
                 ).data()
                 selected = [record["evidence"] for record in records]
                 if retrieval_mode == "GraphRAG" and selected:
-                    names = [item.get("name", "") for item in selected]
-                    related = session.run(
+                    chunk_numbers = sorted({
+                        number
+                        for item in selected
+                        for number in item.get("source_chunk_numbers", [])
+                    })
+                    names = [
+                        item.get("name", "")
+                        for item in selected
+                        if item.get("kind") == "實體" and item.get("name")
+                    ]
+                    selected_ids = {item.get("evidence_id", "") for item in selected}
+                    related_entities = session.run(
                         """
-                        MATCH (relation:GraphEvidence {run_id: $run_id, kind: '關係'})
-                        WHERE relation.source IN $names OR relation.target IN $names
-                        RETURN relation {
-                            .kind, .name, .source, .target, .text, .source_pages,
-                            .source_chunk_numbers, score: 0.0
+                        MATCH (entity:GraphEvidence {run_id: $run_id, kind: '實體'})
+                        WHERE entity.name IN $names OR any(
+                            number IN coalesce(entity.source_chunk_numbers, [])
+                            WHERE number IN $chunk_numbers
+                        )
+                        RETURN entity {
+                            .evidence_id, .kind, .name, .source, .target, .text,
+                            .source_pages, .source_chunk_numbers, score: 0.0
                         } AS evidence
                         LIMIT $top_k
                         """,
-                        run_id=run_id, names=names, top_k=int(top_k),
+                        run_id=run_id,
+                        names=names,
+                        chunk_numbers=chunk_numbers,
+                        top_k=int(top_k),
                     ).data()
-                    selected.extend(record["evidence"] for record in related)
+                    entity_evidence = [record["evidence"] for record in related_entities]
+                    selected.extend(
+                        item for item in entity_evidence
+                        if item.get("evidence_id", "") not in selected_ids
+                    )
+                    expanded_names = list(dict.fromkeys(
+                        names + [item.get("name", "") for item in entity_evidence]
+                    ))
+                    selected_ids = {item.get("evidence_id", "") for item in selected}
+                    related = session.run(
+                        """
+                        MATCH (relation:GraphEvidence {run_id: $run_id, kind: '關係'})
+                        WHERE relation.source IN $names OR relation.target IN $names OR any(
+                            number IN coalesce(relation.source_chunk_numbers, [])
+                            WHERE number IN $chunk_numbers
+                        )
+                        RETURN relation {
+                            .evidence_id, .kind, .name, .source, .target, .text,
+                            .source_pages, .source_chunk_numbers, score: 0.0
+                        } AS evidence
+                        LIMIT $top_k
+                        """,
+                        run_id=run_id,
+                        names=expanded_names,
+                        chunk_numbers=chunk_numbers,
+                        top_k=int(top_k),
+                    ).data()
+                    selected.extend(
+                        record["evidence"] for record in related
+                        if record["evidence"].get("evidence_id", "") not in selected_ids
+                    )
     except (DriverError, Neo4jError, OSError, ValueError) as exc:
         raise ValueError(f"Neo4j Vector Search 失敗：{exc}") from exc
     return selected
