@@ -464,10 +464,14 @@ def extract_graph(
     schema: dict[str, Any],
     temperature: float = 0,
     max_output_tokens: int = 2048,
+    max_concurrent_requests: int = 3,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> GraphExtraction:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
+    if int(max_concurrent_requests) < 1:
+        raise ValueError("最大並行請求數必須至少為 1")
+    max_concurrent_requests = int(max_concurrent_requests)
     schema = validate_schema(schema)
     allowed_entity_types = {
         str(item["name"]).casefold() for item in schema["entity_types"]
@@ -483,9 +487,10 @@ def extract_graph(
     processed_chunks = 0
     if progress_callback:
         progress_callback(0.0, f"準備抽取 {len(chunks)} 個 chunks")
-    for batch_index, batch in enumerate(batches, start=1):
+
+    def extract_batch(batch: list[TextChunk]) -> dict[str, Any]:
         context = "\n\n".join(_chunk_label(chunk) for chunk in batch)
-        result = _chat_json(
+        return _chat_json(
             base_url,
             api_key,
             llm_model,
@@ -500,6 +505,35 @@ def extract_graph(
             temperature,
             max_output_tokens,
         )
+
+    results: list[dict[str, Any] | None] = [None] * len(batches)
+    with ThreadPoolExecutor(max_workers=max_concurrent_requests) as executor:
+        futures = {
+            executor.submit(extract_batch, batch): (index, batch)
+            for index, batch in enumerate(batches)
+        }
+        for future in as_completed(futures):
+            batch_index, batch = futures[future]
+            try:
+                results[batch_index] = future.result()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"知識圖譜抽取第 {batch_index + 1} / {len(batches)} 批失敗：{exc}"
+                ) from exc
+            processed_chunks += len(batch)
+            if progress_callback:
+                completed_batches = sum(result is not None for result in results)
+                progress_callback(
+                    processed_chunks / len(chunks),
+                    f"已收到 {completed_batches} / {len(batches)} 批回應"
+                    f"（{processed_chunks} / {len(chunks)} chunks）",
+                )
+
+    if progress_callback:
+        progress_callback(1.0, "全部批次已完成，正在統一去重與整合")
+    for result in results:
+        if result is None:
+            raise RuntimeError("知識圖譜抽取結果不完整")
         for item in result.get("entities", []):
             if not isinstance(item, dict):
                 continue
@@ -551,13 +585,6 @@ def extract_graph(
                 },
             )
             _merge_sources(current, numbers, chunk_lookup)
-        processed_chunks += len(batch)
-        if progress_callback:
-            progress_callback(
-                processed_chunks / len(chunks),
-                f"抽取第 {batch_index} / {len(batches)} 批（已完成 "
-                f"{processed_chunks} / {len(chunks)} chunks）",
-            )
     return GraphExtraction(
         list(entities.values()), list(relationships.values()), len(chunks)
     )

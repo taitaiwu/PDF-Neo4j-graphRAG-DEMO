@@ -296,6 +296,7 @@ def extract_graph_for_ui(
     llm_model: str,
     temperature: float,
     max_output_tokens: int,
+    max_concurrent_requests: int,
     chunks: list[TextChunk],
     schema_text: str,
     preview_state: dict[str, Any],
@@ -314,11 +315,12 @@ def extract_graph_for_ui(
             schema,
             float(temperature),
             int(max_output_tokens),
+            int(max_concurrent_requests),
             lambda value, description: progress(value, desc=description),
         )
     except json.JSONDecodeError:
         return "❌ schema 不是有效 JSON。", [], [], {}
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         return f"❌ {exc}", [], [], {}
 
     entity_rows = [
@@ -350,6 +352,7 @@ def extract_graph_for_ui(
         "llm_model": llm_model,
         "temperature": float(temperature),
         "max_output_tokens": int(max_output_tokens),
+        "max_concurrent_requests": int(max_concurrent_requests),
         "schema": schema,
         "entities": extraction.entities,
         "relationships": extraction.relationships,
@@ -358,7 +361,7 @@ def extract_graph_for_ui(
     status = (
         f"✅ 已處理 {extraction.processed_chunks} 個 chunk，抽取 "
         f"{len(extraction.entities)} 個實體與 "
-        f"{len(extraction.relationships)} 筆關係。請確認結果後進行 Embedding 並匯入 Neo4j。"
+        f"{len(extraction.relationships)} 筆關係（最大並行請求數：{int(max_concurrent_requests)}）。請確認結果後進行 Embedding 並匯入 Neo4j。"
     )
     return status, entity_rows, relationship_rows, graph_state
 
@@ -654,6 +657,12 @@ def build_app() -> gr.Blocks:
                     allow_custom_value=True,
                     label="知識圖譜抽取 LLM",
                 )
+                extraction_max_concurrent_requests = gr.Number(
+                    value=3,
+                    minimum=1,
+                    precision=0,
+                    label="最大並行請求數",
+                )
                 generate_graph_button = gr.Button(
                     "確認 Schema 並抽取", variant="primary"
                 )
@@ -820,6 +829,7 @@ def build_app() -> gr.Blocks:
                 extraction_llm_model,
                 graph_temperature,
                 graph_max_output_tokens,
+                extraction_max_concurrent_requests,
                 chunk_state,
                 schema_editor,
                 preview_state,
