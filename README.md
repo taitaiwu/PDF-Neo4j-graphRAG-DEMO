@@ -1,6 +1,6 @@
 # PDF GraphRAG 測試工具
 
-這是 Gradio 初版介面，已包含連線設定、PyMuPDF PDF 解析、chunk 參數與預覽、JSON 設定匯出，以及建圖／問答的操作入口。實體與關係抽取後可由使用者確認並手動匯入 Neo4j；問答頁可使用即時計算的向量相似度執行向量 RAG 或 GraphRAG，顯示答案、來源與檢索證據。
+這是以 Gradio 製作的本機 PDF GraphRAG 工具，包含連線測試、PyMuPDF PDF 解析、chunk 參數與預覽、Schema 規劃、知識圖譜抽取、Neo4j 匯入及問答。實體與關係抽取後由使用者確認並手動匯入；問答頁使用原文 chunk、實體及關係的混合向量檢索與圖譜擴展，顯示答案及檢索證據表格。
 
 ## PDF 解析
 
