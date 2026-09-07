@@ -125,6 +125,40 @@ def search_graph_evidence(
                         for item in selected
                         if item.get("kind") == "實體" and item.get("name")
                     ]
+                    graph_chunk_numbers = list(dict.fromkeys(
+                        number
+                        for item in selected
+                        if item.get("kind") != "原文"
+                        for number in item.get("source_chunk_numbers", [])
+                    ))
+                    source_chunk_records = session.run(
+                        """
+                        MATCH (chunk:GraphEvidence {run_id: $run_id, kind: "原文"})
+                        WHERE any(
+                            number IN coalesce(chunk.source_chunk_numbers, [])
+                            WHERE number IN $chunk_numbers
+                        )
+                        RETURN chunk {
+                            .evidence_id, .kind, .name, .source, .target, .text,
+                            .source_pages, .source_chunk_numbers, score: 0.0
+                        } AS evidence
+                        """,
+                        run_id=run_id,
+                        chunk_numbers=graph_chunk_numbers,
+                    ).data()
+                    source_chunks = [record["evidence"] for record in source_chunk_records]
+                    chunk_priority = {
+                        number: index for index, number in enumerate(graph_chunk_numbers)
+                    }
+                    source_chunks.sort(key=lambda item: min(
+                        (
+                            chunk_priority[number]
+                            for number in item.get("source_chunk_numbers", [])
+                            if number in chunk_priority
+                        ),
+                        default=len(chunk_priority),
+                    ))
+                    selected.extend(source_chunks[:int(top_k)])
                     selected_ids = {item.get("evidence_id", "") for item in selected}
                     related_entities = session.run(
                         """
