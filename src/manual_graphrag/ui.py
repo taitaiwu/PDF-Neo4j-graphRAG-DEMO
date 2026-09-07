@@ -16,7 +16,11 @@ from .graph_service import (
     check_model_connection,
     validate_schema,
 )
-from .neo4j_service import import_extraction, check_neo4j_connection
+from .neo4j_service import (
+    check_neo4j_connection,
+    import_extraction,
+    load_latest_graph,
+)
 from .pdf_service import extract_pdf, get_pdf_page_count
 from .qa_service import answer_graph_question
 from .storage import write_json
@@ -403,13 +407,19 @@ def import_graph_for_ui(
 def answer_question_for_ui(
     model_endpoint: str,
     api_key: str,
+    neo4j_uri: str,
+    neo4j_database: str,
+    neo4j_username: str,
+    neo4j_password: str,
     answer_model: str,
     question: str,
     retrieval_mode: str,
     top_k: int,
-    graph_state: dict[str, Any],
 ) -> tuple[str, str, list[list[object]], list[dict[str, Any]]]:
     try:
+        graph_state = load_latest_graph(
+            neo4j_uri, neo4j_database, neo4j_username, neo4j_password
+        )
         result = answer_graph_question(
             model_endpoint, api_key, answer_model, question,
             retrieval_mode, int(top_k), graph_state,
@@ -619,6 +629,9 @@ def build_app() -> gr.Blocks:
                 import_status = gr.Markdown("尚未執行 Embedding 與匯入。")
 
         with gr.Tab("4. 問答測試"):
+            gr.Markdown(
+                "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
+            )
             answer_model = gr.Textbox(label="問答 LLM", value=env["ANSWER_MODEL"])
             question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
             with gr.Row():
@@ -743,11 +756,14 @@ def build_app() -> gr.Blocks:
             inputs=[
                 model_endpoint,
                 api_key,
+                neo4j_uri,
+                neo4j_database,
+                neo4j_username,
+                neo4j_password,
                 answer_model,
                 question,
                 retrieval_mode,
                 top_k,
-                graph_state,
             ],
             outputs=[answer_status, answer, answer_sources, retrieval_content],
         )

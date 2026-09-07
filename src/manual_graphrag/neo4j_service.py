@@ -36,6 +36,51 @@ def check_neo4j_connection(
         raise ValueError(f"Neo4j 連線失敗：{exc}") from exc
 
 
+def load_latest_graph(
+    uri: str, database: str, username: str, password: str
+) -> dict[str, Any]:
+    if not uri.strip():
+        raise ValueError("請先填寫 Neo4j URI")
+    if not database.strip():
+        raise ValueError("請先填寫 Neo4j Database")
+    if not username.strip():
+        raise ValueError("請先填寫 Neo4j Username")
+    if not password:
+        raise ValueError("請先填寫 Neo4j Password")
+    query = """
+    MATCH (document:GraphDocument)
+    WITH document ORDER BY document.updated_at DESC LIMIT 1
+    OPTIONAL MATCH (entity:ExtractedEntity)-[:IN_DOCUMENT]->(document)
+    WITH document, collect(DISTINCT entity {
+        .name, .type, .description, .source_chunk_numbers, .source_pages
+    }) AS entities
+    OPTIONAL MATCH (source:ExtractedEntity)-[relation:EXTRACTED_RELATION]->(target:ExtractedEntity)
+    WHERE relation.run_id = document.run_id
+    RETURN document.run_id AS run_id, document.file_name AS document,
+           document.embedding_model AS embedding_model, entities,
+           collect(DISTINCT relation {
+               source: source.name, target: target.name, .type, .description,
+               .source_chunk_numbers, .source_pages
+           }) AS relationships
+    """
+    try:
+        with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
+            driver.verify_connectivity()
+            with driver.session(database=database.strip()) as session:
+                record = session.run(query).single()
+    except (DriverError, Neo4jError, OSError, ValueError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith("請先填寫"):
+            raise
+        raise ValueError(f"Neo4j 查詢失敗：{exc}") from exc
+    if record is None:
+        raise ValueError("Neo4j 中沒有可供問答的 GraphDocument")
+    result = dict(record)
+    result["neo4j_imported"] = True
+    result["entities"] = [item for item in result.get("entities", []) if item]
+    result["relationships"] = [item for item in result.get("relationships", []) if item]
+    return result
+
+
 def import_extraction(
     uri: str,
     database: str,
