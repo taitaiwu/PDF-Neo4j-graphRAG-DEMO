@@ -57,7 +57,7 @@ pytest
 2. 在獨立的 Schema 規劃區檢查或修改 JSON；編輯器固定高度，內容超出時可使用水平與垂直捲動條。`entity_types` 與 `relationship_types` 必須是非空陣列，每一項必須有 `name`。
 3. 到獨立的抽取區選擇知識圖譜抽取 LLM 與最大並行請求數，再按「確認 Schema 並抽取」：系統依確認後的類型受控並行讀取全部 chunks，等待所有批次回應後統一去重、整合並顯示實體與關係，同時列出來源 chunk 與 PDF 頁碼；畫面會依已完成的抽取批次顯示進度。確認抽取結果後，在獨立區塊選擇 Embedding 模型與匯入模式，再按「Embedding 並匯入 Neo4j」，才會以單一交易寫入「連線設定」頁指定的 Neo4j，並在該區塊顯示匯入數量或錯誤原因。
 
-問答頁不要求先在本次工作階段建圖；送出問題時會直接連線到「連線設定」指定的 Neo4j，使用最近更新的 `GraphDocument`。向量 RAG 透過 Neo4j Vector Search 同時搜尋原文 chunk、實體與關係；GraphRAG 先取得 Top K 混合證據，再依命中的 chunk 與實體擴展同一建圖結果中的相關實體及關係。答案只能根據檢索證據生成，畫面會顯示來源頁碼、chunk、相似度和完整檢索內容；每次結果另存於 `data/qa/`。
+問答頁不要求先在本次工作階段建圖；送出問題時會直接連線到「連線設定」指定的 Neo4j，使用最近更新的 `GraphDocument`。向量 RAG 透過 Neo4j Vector Search 同時搜尋原文 chunk、實體與關係；GraphRAG 先取得 Top K 混合證據，再依命中的 chunk 與實體擴展同一建圖結果中的相關實體及關係。答案只能根據檢索證據生成，畫面會以表格顯示證據、來源頁碼、chunk 與相似度；每次結果另存於 `data/qa/`。
 
 Chunks 與畫面抽取結果保存在本次 Gradio 頁面工作階段；匯入時會將原文 chunk、實體與關係證據寫入 Neo4j，每次生成使用獨立 `run_id`。Neo4j 以 `GraphDocument`、`ExtractedEntity` 節點及 `EXTRACTED_RELATION` 關係保存資料。匯入模式可選擇保留既有圖譜、取代最近一次圖譜，或清空本工具建立的所有圖譜；後兩者必須勾選刪除確認，清空不會刪除其他應用的節點。「Embedding 並匯入 Neo4j」會分批預先計算原文、實體與關係證據向量，建立 `GraphEvidence` 節點及 Neo4j Vector Index；問答時只計算問題向量。既有圖譜需重新匯入才會具有原文 chunk 向量。若 Neo4j 寫入失敗，畫面會保留已抽取結果並顯示錯誤。大型文件會產生多次 LLM API 呼叫，執行時間與費用取決於 chunk 數量及所選模型。
 

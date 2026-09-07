@@ -522,9 +522,9 @@ def answer_question_for_ui(
     question: str,
     retrieval_mode: str,
     top_k: int,
-) -> tuple[str, str, list[list[object]], list[dict[str, Any]]]:
+) -> tuple[str, str, list[list[object]]]:
     if not question.strip():
-        return "請輸入問題。", "", [], []
+        return "請輸入問題。", "", []
     try:
         graph_state = load_latest_graph(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password
@@ -541,7 +541,7 @@ def answer_question_for_ui(
             model_endpoint, api_key, answer_model, question, retrieval_mode, evidence
         )
     except ValueError as exc:
-        return f"❌ {exc}", "", [], []
+        return f"❌ {exc}", "", []
     rows = [
         [
             item["kind"],
@@ -568,7 +568,7 @@ def answer_question_for_ui(
         f"✅ {retrieval_mode} 已使用 {len(rows)} 筆證據完成回答；"
         f"文件：{graph_state.get('document', '未知')}；紀錄：{output}。"
     )
-    return status, result["answer"], rows, result["evidence"]
+    return status, result["answer"], rows
 
 
 def build_app() -> gr.Blocks:
@@ -807,7 +807,6 @@ def build_app() -> gr.Blocks:
                 interactive=False,
                 wrap=True,
             )
-            retrieval_content = gr.JSON(label="檢索內容")
 
         with gr.Tab("5. 歷史紀錄"):
             gr.Markdown("建圖與問答紀錄將在後續開發階段顯示於此。")
@@ -938,6 +937,6 @@ def build_app() -> gr.Blocks:
                 retrieval_mode,
                 top_k,
             ],
-            outputs=[answer_status, answer, answer_sources, retrieval_content],
+            outputs=[answer_status, answer, answer_sources],
         )
     return app
