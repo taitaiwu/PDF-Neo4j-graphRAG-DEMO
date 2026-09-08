@@ -43,7 +43,8 @@ def test_connection_summary_does_not_expose_secrets() -> None:
 def test_persist_env_settings_writes_all_fields(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     status = persist_env_settings(
-        "bolt://db", "neo4j", "user", "pass", "http://models", "key", "build", "embed", "answer"
+        "bolt://db", "neo4j", "user", "pass", "http://models", "key",
+        "http://embeddings", "embed-key", "build", "embed", "answer",
     )
     content = (tmp_path / ".env").read_text(encoding="utf-8")
     assert status.startswith("✅")

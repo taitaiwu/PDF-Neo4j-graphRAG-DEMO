@@ -24,7 +24,7 @@ from .neo4j_service import (
     search_graph_evidence,
 )
 from .pdf_service import extract_pdf, get_pdf_page_count
-from .qa_service import answer_graph_question, embedding_vectors
+from .qa_service import answer_graph_question, check_embedding_connection, embedding_vectors
 from .storage import write_json
 
 
@@ -80,6 +80,14 @@ def check_model_service_for_ui(base_url: str, api_key: str) -> str:
     return "✅ 模型服務連線成功。"
 
 
+def check_embedding_service_for_ui(base_url: str, api_key: str, model: str) -> str:
+    try:
+        check_embedding_connection(base_url, api_key, model)
+    except ValueError as exc:
+        return f"❌ {exc}"
+    return "✅ Embedding 服務連線成功。"
+
+
 def persist_env_settings(
     neo4j_uri: str,
     neo4j_database: str,
@@ -87,6 +95,8 @@ def persist_env_settings(
     neo4j_password: str,
     model_endpoint: str,
     api_key: str,
+    embedding_api_base: str,
+    embedding_api_key: str,
     build_model: str,
     embedding_model: str,
     answer_model: str,
@@ -100,6 +110,8 @@ def persist_env_settings(
             "MODEL_API_BASE": model_endpoint,
             "MODEL_API_KEY": api_key,
             "BUILD_MODEL": build_model,
+            "EMBEDDING_API_BASE": embedding_api_base,
+            "EMBEDDING_API_KEY": embedding_api_key,
             "EMBEDDING_MODEL": embedding_model,
             "ANSWER_MODEL": answer_model,
         }
@@ -116,6 +128,8 @@ def reload_env_settings() -> tuple[str, ...]:
         settings["NEO4J_PASSWORD"],
         settings["MODEL_API_BASE"],
         settings["MODEL_API_KEY"],
+        settings["EMBEDDING_API_BASE"],
+        settings["EMBEDDING_API_KEY"],
         settings["BUILD_MODEL"],
         settings["EMBEDDING_MODEL"],
         settings["ANSWER_MODEL"],
@@ -448,8 +462,8 @@ def _build_graph_evidence(
 
 
 def import_graph_for_ui(
-    model_endpoint: str,
-    api_key: str,
+    embedding_api_base: str,
+    embedding_api_key: str,
     neo4j_uri: str,
     neo4j_database: str,
     neo4j_username: str,
@@ -476,7 +490,7 @@ def import_graph_for_ui(
         if not evidence:
             raise ValueError("沒有可建立向量索引的原文、實體或關係")
         vectors = embedding_vectors(
-            model_endpoint, api_key, embedding_model,
+            embedding_api_base, embedding_api_key, embedding_model,
             [item["text"] for item in evidence],
         )
         for item, vector in zip(evidence, vectors):
@@ -514,6 +528,8 @@ def import_graph_for_ui(
 def answer_question_for_ui(
     model_endpoint: str,
     api_key: str,
+    embedding_api_base: str,
+    embedding_api_key: str,
     neo4j_uri: str,
     neo4j_database: str,
     neo4j_username: str,
@@ -530,7 +546,7 @@ def answer_question_for_ui(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password
         )
         question_vector = embedding_vectors(
-            model_endpoint, api_key, graph_state.get("embedding_model", ""),
+            embedding_api_base, embedding_api_key, graph_state.get("embedding_model", ""),
             [question.strip()],
         )[0]
         evidence = search_graph_evidence(
@@ -593,11 +609,26 @@ def build_app() -> gr.Blocks:
                     neo4j_test_button = gr.Button("測試 Neo4j 連線", variant="primary")
                     neo4j_connection_status = gr.Markdown()
                 with gr.Column():
-                    gr.Markdown("### 模型服務")
+                    gr.Markdown("### 模型服務（對話／建圖用，例如 Groq）")
                     model_endpoint = gr.Textbox(label="API Base URL", value=env["MODEL_API_BASE"])
                     api_key = gr.Textbox(label="API Key", value=env["MODEL_API_KEY"], type="password")
                     model_test_button = gr.Button("測試模型服務連線", variant="primary")
                     model_connection_status = gr.Markdown()
+                    gr.Markdown(
+                        "### Embedding 服務（例如 Voyage AI）\n"
+                        "Groq 未提供 embeddings API，請另外填寫可產生向量的服務。"
+                    )
+                    embedding_api_base = gr.Textbox(
+                        label="Embedding API Base URL", value=env["EMBEDDING_API_BASE"]
+                    )
+                    embedding_api_key = gr.Textbox(
+                        label="Embedding API Key", value=env["EMBEDDING_API_KEY"], type="password"
+                    )
+                    embedding_test_model = gr.Textbox(
+                        label="測試用 Embedding 模型名稱", value=env["EMBEDDING_MODEL"]
+                    )
+                    embedding_test_button = gr.Button("測試 Embedding 服務連線", variant="primary")
+                    embedding_connection_status = gr.Markdown()
                     reload_button = gr.Button("重新讀取 .env")
             gr.Markdown("⚠️ Password 與 API Key 會以明文寫入本機 `.env`；請勿提交此檔案。")
             env_status = gr.Markdown("啟動時已讀取 .env；欄位修改後會自動儲存。")
@@ -821,6 +852,11 @@ def build_app() -> gr.Blocks:
             inputs=[model_endpoint, api_key],
             outputs=model_connection_status,
         )
+        embedding_test_button.click(
+            check_embedding_service_for_ui,
+            inputs=[embedding_api_base, embedding_api_key, embedding_test_model],
+            outputs=embedding_connection_status,
+        )
         env_inputs = [
             neo4j_uri,
             neo4j_database,
@@ -828,6 +864,8 @@ def build_app() -> gr.Blocks:
             neo4j_password,
             model_endpoint,
             api_key,
+            embedding_api_base,
+            embedding_api_key,
             graph_llm_model,
             graph_embedding_model,
             answer_model,
@@ -910,8 +948,8 @@ def build_app() -> gr.Blocks:
         import_graph_button.click(
             import_graph_for_ui,
             inputs=[
-                model_endpoint,
-                api_key,
+                embedding_api_base,
+                embedding_api_key,
                 neo4j_uri,
                 neo4j_database,
                 neo4j_username,
@@ -928,6 +966,8 @@ def build_app() -> gr.Blocks:
             inputs=[
                 model_endpoint,
                 api_key,
+                embedding_api_base,
+                embedding_api_key,
                 neo4j_uri,
                 neo4j_database,
                 neo4j_username,

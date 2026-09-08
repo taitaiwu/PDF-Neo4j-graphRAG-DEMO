@@ -14,6 +14,8 @@ ENV_KEYS = (
     "MODEL_API_BASE",
     "MODEL_API_KEY",
     "BUILD_MODEL",
+    "EMBEDDING_API_BASE",
+    "EMBEDDING_API_KEY",
     "EMBEDDING_MODEL",
     "ANSWER_MODEL",
 )
@@ -26,7 +28,9 @@ DEFAULTS = {
     "MODEL_API_BASE": "",
     "MODEL_API_KEY": "",
     "BUILD_MODEL": "gpt-4.1-mini",
-    "EMBEDDING_MODEL": "text-embedding-3-small",
+    "EMBEDDING_API_BASE": "https://api.voyageai.com/v1",
+    "EMBEDDING_API_KEY": "",
+    "EMBEDDING_MODEL": "voyage-3",
     "ANSWER_MODEL": "gpt-4.1-mini",
 }
 

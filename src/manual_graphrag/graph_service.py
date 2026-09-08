@@ -42,7 +42,7 @@ def _api_url(base_url: str, resource: str) -> str:
 def _post_json(
     url: str, payload: dict[str, Any], api_key: str, timeout: int = 120
 ) -> dict[str, Any]:
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"
     request = urllib.request.Request(
@@ -68,7 +68,7 @@ def _post_json(
 
 def check_model_connection(base_url: str, api_key: str) -> None:
     url = _api_url(base_url, "models")
-    headers = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"
     request = urllib.request.Request(url, headers=headers, method="GET")
