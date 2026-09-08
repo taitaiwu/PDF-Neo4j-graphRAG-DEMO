@@ -25,7 +25,7 @@
 - 以多請求並行方式抽取知識圖譜，整批完成後再統一去重整合。
 - 將文件片段、實體與關係建立 Embedding，寫入 Neo4j 並建立向量與全文索引。
 - 支援保留既有資料、取代目前圖譜，以及清空本工具建立的圖譜。
-- 使用向量與全文搜尋、RRF 排名融合、圖譜擴展及原文片段組成混合式 GraphRAG 問答內容。
+- 使用 Neo4j 官方 HybridCypherRetriever 執行向量與全文混合搜尋，並結合圖譜擴展及原文片段組成 GraphRAG 問答內容。
 - 在介面中測試 Neo4j 與模型服務連線。
 
 ## 實作原理
@@ -44,11 +44,11 @@
 
 1. 使用問題向量搜尋相關原文、實體與關係。
 2. 使用問題文字從 CJK 全文索引搜尋精確詞彙、錯誤碼與實體名稱。
-3. 以 Reciprocal Rank Fusion（RRF）融合兩組排名，依 evidence ID 去重後選出 Top K。
+3. 由 Neo4j 官方 HybridCypherRetriever 使用內建 naive ranker 正規化並融合兩組結果，再選出 Top K。
 4. GraphRAG 模式再從命中的節點向外擴展相關圖譜內容，並回查 PDF 原文片段。
 5. 將問題、圖譜內容及原文證據交給回答模型生成答案。
 
-兩個問答模式都會使用向量與全文混合檢索；GraphRAG 會額外執行圖譜擴展。匯入階段預先建立 Embedding、向量索引與全文索引，是後續問答能快速檢索的關鍵。
+兩個問答模式都會使用官方 HybridCypherRetriever 進行向量與全文混合檢索；GraphRAG 會額外執行圖譜擴展。匯入階段預先建立 Embedding、向量索引與全文索引，是後續問答能快速檢索的關鍵。
 
 從舊版升級時，請在介面重新執行一次「Embedding 並匯入 Neo4j」，以建立 `graph_evidence_fulltext` 全文索引；既有資料不會只因更新程式碼而自動建立索引。
 

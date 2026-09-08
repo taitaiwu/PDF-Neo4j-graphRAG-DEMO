@@ -7,15 +7,15 @@ from typing import Any
 
 from neo4j import GraphDatabase
 from neo4j.exceptions import DriverError, Neo4jError
+from neo4j_graphrag.exceptions import Neo4jGraphRagError
+from neo4j_graphrag.retrievers import HybridCypherRetriever
+from neo4j_graphrag.types import RetrieverResultItem
 
 
 @dataclass(frozen=True)
 class ImportSummary:
     entity_count: int
     relationship_count: int
-
-
-RRF_RANK_CONSTANT = 60
 
 
 def _escape_fulltext_query(question: str) -> str:
@@ -27,52 +27,21 @@ def _escape_fulltext_query(question: str) -> str:
     )
 
 
-def _fuse_search_results(
-    vector_evidence: list[dict[str, Any]],
-    fulltext_evidence: list[dict[str, Any]],
-    top_k: int,
-) -> list[dict[str, Any]]:
-    """Combine independently ranked result lists using reciprocal rank fusion."""
-    combined: dict[str, dict[str, Any]] = {}
-    for source, results, score_key in (
-        ("vector", vector_evidence, "vector_score"),
-        ("fulltext", fulltext_evidence, "keyword_score"),
-    ):
-        for rank, evidence in enumerate(results, start=1):
-            evidence_id = str(evidence.get("evidence_id", ""))
-            if not evidence_id:
-                continue
-            item = combined.setdefault(
-                evidence_id,
-                {
-                    **evidence,
-                    "vector_score": None,
-                    "keyword_score": None,
-                    "fusion_score": 0.0,
-                    "matched_by": [],
-                },
-            )
-            raw_score = evidence.get("score")
-            item[score_key] = float(raw_score) if raw_score is not None else None
-            if source not in item["matched_by"]:
-                item["matched_by"].append(source)
-            item["fusion_score"] += 1.0 / (RRF_RANK_CONSTANT + rank)
-
-    ranked = sorted(
-        combined.values(),
-        key=lambda item: (-item["fusion_score"], str(item["evidence_id"])),
-    )[:int(top_k)]
-    for item in ranked:
-        item["score"] = item["fusion_score"]
-    return ranked
+def _format_hybrid_record(record: Any) -> RetrieverResultItem:
+    evidence = dict(record["evidence"])
+    score = float(record["score"])
+    evidence.update({
+        "score": score,
+        "fusion_score": score,
+        "matched_by": ["official-hybrid"],
+    })
+    return RetrieverResultItem(content=evidence, metadata={"score": score})
 
 
 def _expanded_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     return {
         **evidence,
         "score": 0.0,
-        "vector_score": None,
-        "keyword_score": None,
         "fusion_score": 0.0,
         "matched_by": ["graph"],
     }
@@ -146,34 +115,23 @@ def load_latest_graph(
 
 
 def search_graph_evidence(
-    uri: str, database: str, username: str, password: str,
+    uri: str,
+    database: str,
+    username: str,
+    password: str,
     run_id: str,
     question: str,
     embedding: list[float],
     retrieval_mode: str,
     top_k: int,
 ) -> list[dict[str, Any]]:
-    vector_query = """
-    CALL db.index.vector.queryNodes(
-        'graph_evidence_embedding', $candidate_count, $embedding
-    ) YIELD node, score
+    retrieval_query = """
+    WITH node, score
     WHERE node.run_id = $run_id
     RETURN node {
         .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
-        .source_chunk_numbers, score: score
-    } AS evidence
-    ORDER BY score DESC LIMIT $candidate_limit
-    """
-    fulltext_query = """
-    CALL db.index.fulltext.queryNodes(
-        'graph_evidence_fulltext', $question, {limit: $candidate_count}
-    ) YIELD node, score
-    WHERE node.run_id = $run_id
-    RETURN node {
-        .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
-        .source_chunk_numbers, score: score
-    } AS evidence
-    ORDER BY score DESC LIMIT $candidate_limit
+        .source_chunk_numbers
+    } AS evidence, score
     """
     try:
         with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
@@ -185,27 +143,30 @@ def search_graph_evidence(
                     int(top_k),
                     int(total_record["count"]) if total_record else int(top_k),
                 )
-                candidate_limit = max(int(top_k) * 3, int(top_k))
-                vector_records = session.run(
-                    vector_query,
-                    run_id=run_id,
-                    embedding=embedding,
-                    candidate_count=candidate_count,
-                    candidate_limit=candidate_limit,
-                ).data()
-                fulltext_records = session.run(
-                    fulltext_query,
-                    run_id=run_id,
-                    question=_escape_fulltext_query(question),
-                    candidate_count=candidate_count,
-                    candidate_limit=candidate_limit,
-                ).data()
-                selected = _fuse_search_results(
-                    [record["evidence"] for record in vector_records],
-                    [record["evidence"] for record in fulltext_records],
-                    int(top_k),
-                )
-                if retrieval_mode == "GraphRAG" and selected:
+
+            retriever = HybridCypherRetriever(
+                driver=driver,
+                vector_index_name="graph_evidence_embedding",
+                fulltext_index_name="graph_evidence_fulltext",
+                retrieval_query=retrieval_query,
+                result_formatter=_format_hybrid_record,
+                neo4j_database=database.strip(),
+            )
+            result = retriever.search(
+                query_text=_escape_fulltext_query(question),
+                query_vector=embedding,
+                top_k=candidate_count,
+                effective_search_ratio=3,
+                query_params={"run_id": run_id},
+                ranker="naive",
+            )
+            selected = [
+                dict(item.content) for item in result.items
+                if isinstance(item.content, dict)
+            ][:int(top_k)]
+
+            if retrieval_mode == "GraphRAG" and selected:
+                with driver.session(database=database.strip()) as session:
                     chunk_numbers = sorted({
                         number
                         for item in selected
@@ -231,7 +192,7 @@ def search_graph_evidence(
                         )
                         RETURN chunk {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers, score: 0.0
+                            .source_pages, .source_chunk_numbers
                         } AS evidence
                         """,
                         run_id=run_id,
@@ -263,7 +224,7 @@ def search_graph_evidence(
                         )
                         RETURN entity {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers, score: 0.0
+                            .source_pages, .source_chunk_numbers
                         } AS evidence
                         LIMIT $top_k
                         """,
@@ -293,7 +254,7 @@ def search_graph_evidence(
                         )
                         RETURN relation {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers, score: 0.0
+                            .source_pages, .source_chunk_numbers
                         } AS evidence
                         LIMIT $top_k
                         """,
@@ -307,8 +268,12 @@ def search_graph_evidence(
                         for record in related
                         if record["evidence"].get("evidence_id", "") not in selected_ids
                     )
-    except (DriverError, Neo4jError, OSError, ValueError) as exc:
-        raise ValueError(f"Neo4j 混合檢索失敗：{exc}") from exc
+    except (DriverError, Neo4jError, Neo4jGraphRagError, OSError, ValueError) as exc:
+        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}") from exc
+    except Exception as exc:
+        # The official retriever currently raises a plain Exception when an
+        # expected index is missing; keep the UI error contract consistent.
+        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}") from exc
     return selected
 
 

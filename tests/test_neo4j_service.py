@@ -212,21 +212,16 @@ def test_escape_fulltext_query_escapes_lucene_syntax() -> None:
     )
 
 
-def test_fuse_search_results_deduplicates_and_uses_both_rankings() -> None:
-    results = neo4j_service._fuse_search_results(
-        [_evidence("vector-only", 0.9), _evidence("both", 0.8)],
-        [_evidence("both", 4.0), _evidence("keyword-only", 3.0)],
-        3,
-    )
+def test_format_hybrid_record_preserves_evidence_and_official_score() -> None:
+    item = neo4j_service._format_hybrid_record({
+        "evidence": _evidence("both", 0.0),
+        "score": 0.85,
+    })
 
-    assert [item["evidence_id"] for item in results] == [
-        "both", "vector-only", "keyword-only",
-    ]
-    both = results[0]
-    assert both["matched_by"] == ["vector", "fulltext"]
-    assert both["vector_score"] == 0.8
-    assert both["keyword_score"] == 4.0
-    assert both["fusion_score"] > results[1]["fusion_score"]
+    assert item.content["evidence_id"] == "both"
+    assert item.content["matched_by"] == ["official-hybrid"]
+    assert item.content["fusion_score"] == 0.85
+    assert item.metadata == {"score": 0.85}
 
 
 class SearchSession:
@@ -243,16 +238,6 @@ class SearchSession:
         self.calls.append((query, parameters))
         if "count(node)" in query:
             return FakeResult(3)
-        if "vector.queryNodes" in query:
-            return FakeResult(rows=[
-                {"evidence": _evidence("vector-only", 0.9)},
-                {"evidence": _evidence("both", 0.8)},
-            ])
-        if "fulltext.queryNodes" in query:
-            return FakeResult(rows=[
-                {"evidence": _evidence("both", 4.0)},
-                {"evidence": _evidence("keyword-only", 3.0)},
-            ])
         raise AssertionError(f"unexpected query: {query}")
 
 
@@ -270,12 +255,39 @@ class SearchDriver:
         return self.session_instance
 
 
-def test_search_graph_evidence_combines_vector_and_fulltext(monkeypatch) -> None:
+class FakeOfficialRetriever:
+    initialization = None
+    search_arguments = None
+
+    def __init__(self, **kwargs):
+        type(self).initialization = kwargs
+
+    def search(self, **kwargs):
+        type(self).search_arguments = kwargs
+        evidence = [
+            _evidence("both", 0.9),
+            _evidence("vector-only", 0.8),
+            _evidence("keyword-only", 0.7),
+        ]
+        for item in evidence:
+            item.update({
+                "matched_by": ["official-hybrid"],
+                "fusion_score": item["score"],
+            })
+        return type("Result", (), {
+            "items": [type("Item", (), {"content": item}) for item in evidence]
+        })()
+
+
+def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> None:
     session = SearchSession()
     monkeypatch.setattr(
         neo4j_service.GraphDatabase,
         "driver",
         lambda *args, **kwargs: SearchDriver(session),
+    )
+    monkeypatch.setattr(
+        neo4j_service, "HybridCypherRetriever", FakeOfficialRetriever
     )
 
     results = neo4j_service.search_graph_evidence(
@@ -286,9 +298,15 @@ def test_search_graph_evidence_combines_vector_and_fulltext(monkeypatch) -> None
     assert [item["evidence_id"] for item in results] == [
         "both", "vector-only", "keyword-only",
     ]
-    fulltext_call = next(
-        call for call in session.calls if "fulltext.queryNodes" in call[0]
-    )
-    assert fulltext_call[1]["run_id"] == "run-1"
-    assert fulltext_call[1]["question"] == r"E01 \+\(重試\)"
-    assert fulltext_call[1]["candidate_limit"] == 9
+    initialization = FakeOfficialRetriever.initialization
+    assert initialization["vector_index_name"] == "graph_evidence_embedding"
+    assert initialization["fulltext_index_name"] == "graph_evidence_fulltext"
+    assert initialization["neo4j_database"] == "neo4j"
+    assert "$run_id" in initialization["retrieval_query"]
+    arguments = FakeOfficialRetriever.search_arguments
+    assert arguments["query_text"] == r"E01 \+\(重試\)"
+    assert arguments["query_vector"] == [0.1]
+    assert arguments["top_k"] == 3
+    assert arguments["effective_search_ratio"] == 3
+    assert arguments["query_params"] == {"run_id": "run-1"}
+    assert arguments["ranker"] == "naive"

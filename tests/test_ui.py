@@ -317,10 +317,8 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
             "source_pages": [3],
             "source_chunk_numbers": [2],
             "score": 0.03,
-            "vector_score": 0.91,
-            "keyword_score": 4.2,
             "fusion_score": 0.03,
-            "matched_by": ["vector", "fulltext"],
+            "matched_by": ["official-hybrid"],
         }]
 
     monkeypatch.setattr(ui, "search_graph_evidence", fake_search)
@@ -339,6 +337,6 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
     assert answer == "請重新啟動。"
     assert captured["args"][5] == "E01 怎麼處理？"
     assert rows == [[
-        "原文", "E01 排除方式", "vector, fulltext",
-        "0.9100", "4.2000", "0.0300", "3", "2",
+        "原文", "E01 排除方式", "official-hybrid",
+        "0.0300", "3", "2",
     ]]

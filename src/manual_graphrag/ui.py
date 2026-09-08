@@ -548,16 +548,6 @@ def answer_question_for_ui(
             item["kind"],
             item["text"],
             ", ".join(item.get("matched_by", [])),
-            (
-                ""
-                if item.get("vector_score") is None
-                else f"{item['vector_score']:.4f}"
-            ),
-            (
-                ""
-                if item.get("keyword_score") is None
-                else f"{item['keyword_score']:.4f}"
-            ),
             f"{item.get('fusion_score', 0.0):.4f}",
             ", ".join(map(str, item.get("source_pages", []))),
             ", ".join(map(str, item.get("source_chunk_numbers", []))),
@@ -816,8 +806,8 @@ def build_app() -> gr.Blocks:
             gr.Markdown("### 檢索來源")
             answer_sources = gr.Dataframe(
                 headers=[
-                    "類型", "證據", "命中方式", "向量分數", "全文分數",
-                    "融合分數", "來源頁碼", "來源 Chunks",
+                    "類型", "證據", "Retriever", "官方混合分數",
+                    "來源頁碼", "來源 Chunks",
                 ],
                 interactive=False,
                 wrap=True,
