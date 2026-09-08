@@ -342,7 +342,9 @@ def test_schema_planning_stops_when_any_batch_fails(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="second batch failed"):
         graph_service.plan_graph_schema("http://models/v1", "", "llm", chunks)
-    assert calls == 2
+    # All batches are submitted to the thread pool up front, so another worker
+    # may start before the failing future is observed and cancellation begins.
+    assert 2 <= calls <= 3
     # Failure is contextualized with the exact batch and no partial plan is returned.
 
 
