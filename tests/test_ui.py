@@ -292,3 +292,53 @@ def test_import_graph_for_ui_requires_extraction() -> None:
         "http://models/v1", "key", "bolt://db", "neo4j", "user", "password",
         "embed", "保留既有圖譜", False, {},
     ) == ("❌ 請先完成知識圖譜抽取。", {})
+
+
+def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        ui,
+        "load_latest_graph",
+        lambda *args: {
+            "run_id": "run-1",
+            "document": "manual.pdf",
+            "embedding_model": "embed",
+        },
+    )
+    monkeypatch.setattr(ui, "embedding_vectors", lambda *args: [[0.1]])
+    captured = {}
+
+    def fake_search(*args):
+        captured["args"] = args
+        return [{
+            "evidence_id": "chunk-1",
+            "kind": "原文",
+            "text": "E01 排除方式",
+            "source_pages": [3],
+            "source_chunk_numbers": [2],
+            "score": 0.03,
+            "vector_score": 0.91,
+            "keyword_score": 4.2,
+            "fusion_score": 0.03,
+            "matched_by": ["vector", "fulltext"],
+        }]
+
+    monkeypatch.setattr(ui, "search_graph_evidence", fake_search)
+    monkeypatch.setattr(
+        ui,
+        "answer_graph_question",
+        lambda *args: {"answer": "請重新啟動。", "evidence": args[-1]},
+    )
+
+    status, answer, rows = ui.answer_question_for_ui(
+        "http://models/v1", "key", "bolt://db", "neo4j", "user", "password",
+        "answer", " E01 怎麼處理？ ", "向量 RAG", 8,
+    )
+
+    assert status.startswith("✅ 向量 RAG")
+    assert answer == "請重新啟動。"
+    assert captured["args"][5] == "E01 怎麼處理？"
+    assert rows == [[
+        "原文", "E01 排除方式", "vector, fulltext",
+        "0.9100", "4.2000", "0.0300", "3", "2",
+    ]]

@@ -505,7 +505,7 @@ def import_graph_for_ui(
     updated_state["neo4j_imported"] = True
     updated_state.pop("neo4j_error", None)
     return (
-        f"✅ 匯入模式：{import_mode}；已建立 {len(evidence)} 筆向量證據與 Vector Index；已匯入 Neo4j {imported.entity_count} 個實體與 "
+        f"✅ 匯入模式：{import_mode}；已建立 {len(evidence)} 筆向量證據、Vector Index 與 Full-text Index；已匯入 Neo4j {imported.entity_count} 個實體與 "
         f"{imported.relationship_count} 筆關係。",
         updated_state,
     )
@@ -535,7 +535,8 @@ def answer_question_for_ui(
         )[0]
         evidence = search_graph_evidence(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
-            graph_state["run_id"], question_vector, retrieval_mode, int(top_k),
+            graph_state["run_id"], question.strip(), question_vector,
+            retrieval_mode, int(top_k),
         )
         result = answer_graph_question(
             model_endpoint, api_key, answer_model, question, retrieval_mode, evidence
@@ -546,7 +547,18 @@ def answer_question_for_ui(
         [
             item["kind"],
             item["text"],
-            f"{item['score']:.4f}",
+            ", ".join(item.get("matched_by", [])),
+            (
+                ""
+                if item.get("vector_score") is None
+                else f"{item['vector_score']:.4f}"
+            ),
+            (
+                ""
+                if item.get("keyword_score") is None
+                else f"{item['keyword_score']:.4f}"
+            ),
+            f"{item.get('fusion_score', 0.0):.4f}",
             ", ".join(map(str, item.get("source_pages", []))),
             ", ".join(map(str, item.get("source_chunk_numbers", []))),
         ]
@@ -803,7 +815,10 @@ def build_app() -> gr.Blocks:
                 answer = gr.Markdown(elem_classes="answer-content")
             gr.Markdown("### 檢索來源")
             answer_sources = gr.Dataframe(
-                headers=["類型", "證據", "相似度", "來源頁碼", "來源 Chunks"],
+                headers=[
+                    "類型", "證據", "命中方式", "向量分數", "全文分數",
+                    "融合分數", "來源頁碼", "來源 Chunks",
+                ],
                 interactive=False,
                 wrap=True,
             )

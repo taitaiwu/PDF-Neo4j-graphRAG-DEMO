@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +13,69 @@ from neo4j.exceptions import DriverError, Neo4jError
 class ImportSummary:
     entity_count: int
     relationship_count: int
+
+
+RRF_RANK_CONSTANT = 60
+
+
+def _escape_fulltext_query(question: str) -> str:
+    """Escape Lucene query syntax while preserving terms for the CJK analyzer."""
+    return re.sub(
+        r"""([+\-!(){}\[\]^"~*?:\\/]|&&|\|\|)""",
+        r"""\\\1""",
+        question.strip(),
+    )
+
+
+def _fuse_search_results(
+    vector_evidence: list[dict[str, Any]],
+    fulltext_evidence: list[dict[str, Any]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Combine independently ranked result lists using reciprocal rank fusion."""
+    combined: dict[str, dict[str, Any]] = {}
+    for source, results, score_key in (
+        ("vector", vector_evidence, "vector_score"),
+        ("fulltext", fulltext_evidence, "keyword_score"),
+    ):
+        for rank, evidence in enumerate(results, start=1):
+            evidence_id = str(evidence.get("evidence_id", ""))
+            if not evidence_id:
+                continue
+            item = combined.setdefault(
+                evidence_id,
+                {
+                    **evidence,
+                    "vector_score": None,
+                    "keyword_score": None,
+                    "fusion_score": 0.0,
+                    "matched_by": [],
+                },
+            )
+            raw_score = evidence.get("score")
+            item[score_key] = float(raw_score) if raw_score is not None else None
+            if source not in item["matched_by"]:
+                item["matched_by"].append(source)
+            item["fusion_score"] += 1.0 / (RRF_RANK_CONSTANT + rank)
+
+    ranked = sorted(
+        combined.values(),
+        key=lambda item: (-item["fusion_score"], str(item["evidence_id"])),
+    )[:int(top_k)]
+    for item in ranked:
+        item["score"] = item["fusion_score"]
+    return ranked
+
+
+def _expanded_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **evidence,
+        "score": 0.0,
+        "vector_score": None,
+        "keyword_score": None,
+        "fusion_score": 0.0,
+        "matched_by": ["graph"],
+    }
 
 
 def check_neo4j_connection(
@@ -83,9 +147,13 @@ def load_latest_graph(
 
 def search_graph_evidence(
     uri: str, database: str, username: str, password: str,
-    run_id: str, embedding: list[float], retrieval_mode: str, top_k: int,
+    run_id: str,
+    question: str,
+    embedding: list[float],
+    retrieval_mode: str,
+    top_k: int,
 ) -> list[dict[str, Any]]:
-    query = """
+    vector_query = """
     CALL db.index.vector.queryNodes(
         'graph_evidence_embedding', $candidate_count, $embedding
     ) YIELD node, score
@@ -94,7 +162,18 @@ def search_graph_evidence(
         .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
         .source_chunk_numbers, score: score
     } AS evidence
-    ORDER BY score DESC LIMIT $top_k
+    ORDER BY score DESC LIMIT $candidate_limit
+    """
+    fulltext_query = """
+    CALL db.index.fulltext.queryNodes(
+        'graph_evidence_fulltext', $question, {limit: $candidate_count}
+    ) YIELD node, score
+    WHERE node.run_id = $run_id
+    RETURN node {
+        .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
+        .source_chunk_numbers, score: score
+    } AS evidence
+    ORDER BY score DESC LIMIT $candidate_limit
     """
     try:
         with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
@@ -106,14 +185,26 @@ def search_graph_evidence(
                     int(top_k),
                     int(total_record["count"]) if total_record else int(top_k),
                 )
-                records = session.run(
-                    query,
+                candidate_limit = max(int(top_k) * 3, int(top_k))
+                vector_records = session.run(
+                    vector_query,
                     run_id=run_id,
                     embedding=embedding,
-                    top_k=int(top_k),
                     candidate_count=candidate_count,
+                    candidate_limit=candidate_limit,
                 ).data()
-                selected = [record["evidence"] for record in records]
+                fulltext_records = session.run(
+                    fulltext_query,
+                    run_id=run_id,
+                    question=_escape_fulltext_query(question),
+                    candidate_count=candidate_count,
+                    candidate_limit=candidate_limit,
+                ).data()
+                selected = _fuse_search_results(
+                    [record["evidence"] for record in vector_records],
+                    [record["evidence"] for record in fulltext_records],
+                    int(top_k),
+                )
                 if retrieval_mode == "GraphRAG" and selected:
                     chunk_numbers = sorted({
                         number
@@ -146,7 +237,10 @@ def search_graph_evidence(
                         run_id=run_id,
                         chunk_numbers=graph_chunk_numbers,
                     ).data()
-                    source_chunks = [record["evidence"] for record in source_chunk_records]
+                    source_chunks = [
+                        _expanded_evidence(record["evidence"])
+                        for record in source_chunk_records
+                    ]
                     chunk_priority = {
                         number: index for index, number in enumerate(graph_chunk_numbers)
                     }
@@ -178,7 +272,10 @@ def search_graph_evidence(
                         chunk_numbers=chunk_numbers,
                         top_k=int(top_k),
                     ).data()
-                    entity_evidence = [record["evidence"] for record in related_entities]
+                    entity_evidence = [
+                        _expanded_evidence(record["evidence"])
+                        for record in related_entities
+                    ]
                     selected.extend(
                         item for item in entity_evidence
                         if item.get("evidence_id", "") not in selected_ids
@@ -206,11 +303,12 @@ def search_graph_evidence(
                         top_k=int(top_k),
                     ).data()
                     selected.extend(
-                        record["evidence"] for record in related
+                        _expanded_evidence(record["evidence"])
+                        for record in related
                         if record["evidence"].get("evidence_id", "") not in selected_ids
                     )
     except (DriverError, Neo4jError, OSError, ValueError) as exc:
-        raise ValueError(f"Neo4j Vector Search 失敗：{exc}") from exc
+        raise ValueError(f"Neo4j 混合檢索失敗：{exc}") from exc
     return selected
 
 
@@ -257,6 +355,11 @@ def import_extraction(
                     "indexConfig: {`vector.dimensions`: "
                     f"{dimensions}, "
                     "`vector.similarity_function`: 'cosine'}}"
+                ).consume()
+                session.run(
+                    "CREATE FULLTEXT INDEX graph_evidence_fulltext IF NOT EXISTS "
+                    "FOR (e:GraphEvidence) ON EACH [e.text, e.name, e.source, e.target] "
+                    "OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}"
                 ).consume()
                 counts = session.execute_write(
                     _write_graph,
