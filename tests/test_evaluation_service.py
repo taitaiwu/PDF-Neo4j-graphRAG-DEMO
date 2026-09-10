@@ -43,3 +43,40 @@ def test_judge_evaluation_answer_returns_boolean(monkeypatch) -> None:
     )
 
     assert result == {"passed": True, "reason": "語意相符"}
+
+
+def test_judge_rejects_abstention_when_expected_answer_has_fact(monkeypatch) -> None:
+    monkeypatch.setattr(
+        evaluation_service,
+        "_chat_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("明確拒答應由程式直接判錯，不應交給模型")
+        ),
+    )
+
+    result = evaluation_service.judge_evaluation_answer(
+        "url",
+        "key",
+        "model",
+        "Epson AcuLaser CX17 的中央輸出承接盤可容納多少張 A4 紙？",
+        "約 100 張 (A4)",
+        "根據提供的證據內容，沒有任何資訊提及容量。因此，無法回答此問題。",
+    )
+
+    assert result["passed"] is False
+    assert "標準答案包含明確事實" in result["reason"]
+
+
+def test_judge_rejects_empty_answer_without_model_call(monkeypatch) -> None:
+    monkeypatch.setattr(
+        evaluation_service,
+        "_chat_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("不應呼叫模型")),
+    )
+
+    result = evaluation_service.judge_evaluation_answer(
+        "url", "key", "model", "問題", "明確答案", "  "
+    )
+
+    assert result["passed"] is False
+    assert "實際答案為空" in result["reason"]

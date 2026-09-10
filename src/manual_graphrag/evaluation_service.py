@@ -80,6 +80,18 @@ def generate_evaluation_questions(
     return result["questions"]
 
 
+_ABSTENTION_PHRASES = (
+    "無法回答", "無法判斷", "沒有任何資訊", "找不到相關資訊",
+    "文件未提及", "證據未提及", "未提供相關", "證據不足",
+    "cannot answer", "not enough information", "insufficient evidence",
+)
+
+
+def _is_abstention(answer: str) -> bool:
+    normalized = " ".join(answer.casefold().split())
+    return any(phrase in normalized for phrase in _ABSTENTION_PHRASES)
+
+
 def judge_evaluation_answer(
     base_url: str,
     api_key: str,
@@ -88,6 +100,14 @@ def judge_evaluation_answer(
     expected_answer: str,
     actual_answer: str,
 ) -> dict[str, Any]:
+    if not actual_answer.strip():
+        return {"passed": False, "reason": "實際答案為空，未回答標準答案中的關鍵事實。"}
+    if _is_abstention(actual_answer) and not _is_abstention(expected_answer):
+        return {
+            "passed": False,
+            "reason": "實際答案表示無法回答或資料不足，但標準答案包含明確事實。",
+        }
+
     def validate(payload: dict[str, Any]) -> dict[str, Any]:
         passed = payload.get("passed")
         reason = str(payload.get("reason", "")).strip()
@@ -99,8 +119,12 @@ def judge_evaluation_answer(
         base_url,
         api_key,
         model,
-        "你是嚴謹的問答評測員。比較語意與關鍵事實，不要求逐字相同，只輸出 JSON。",
+        "你是嚴謹的問答評測員。只有實際答案包含標準答案的核心事實才能通過。"
+        "誠實表示不知道、文件未提及、找不到資訊或證據不足，不等於回答正確；"
+        "當標準答案有明確事實而實際答案拒答時，passed 必須為 false。"
+        "不要求逐字相同，只輸出 JSON。",
         f"問題：{question}\n標準答案：{expected_answer}\n實際答案：{actual_answer}\n"
+        "請逐項檢查標準答案中的數值、單位、名稱、條件與結論是否出現在實際答案。"
         '輸出格式：{"passed":true,"reason":"簡短理由"}。',
         validator=validate,
     )
