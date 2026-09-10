@@ -210,7 +210,7 @@ def save_project_for_ui(
     schema_granularity: str, max_entity_types: int, max_relationship_types: int,
     max_concurrent_requests: int, schema_sampling_mode: str,
     schema_sample_page_count: int, extraction_llm_model: str,
-    extraction_max_concurrent_requests: int, import_mode: str,
+    extraction_max_concurrent_requests: int,
     retrieval_mode: str, top_k: int, schema_text: str,
 ) -> tuple[dict[str, Any], str]:
     if not project_id:
@@ -232,7 +232,7 @@ def save_project_for_ui(
         "schema_sample_page_count": int(schema_sample_page_count),
         "extraction_llm_model": extraction_llm_model,
         "extraction_max_concurrent_requests": int(extraction_max_concurrent_requests),
-        "import_mode": import_mode, "retrieval_mode": retrieval_mode,
+        "retrieval_mode": retrieval_mode,
         "top_k": int(top_k), "schema_text": schema_text or "",
     }
     try:
@@ -289,7 +289,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
             visible=get("schema_sampling_mode", "全部頁面") == "隨機抽取 N 頁",
         ),
         get("schema_sample_page_count", 10), get("extraction_llm_model", env["BUILD_MODEL"]),
-        get("extraction_max_concurrent_requests", 3), get("import_mode", "保留既有圖譜"),
+        get("extraction_max_concurrent_requests", 3),
         get("retrieval_mode", "GraphRAG"), get("top_k", 8), get("schema_text", ""),
         preview, chunks, graph,
         gr.update(minimum=page_start, maximum=page_end, value=page_start, interactive=bool(chunks)),
@@ -874,16 +874,12 @@ def import_graph_for_ui(
     neo4j_username: str,
     neo4j_password: str,
     embedding_model: str,
-    import_mode: str,
-    destructive_confirmed: bool,
     graph_state: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     if not graph_state or not graph_state.get("run_id"):
         return "❌ 請先完成知識圖譜抽取。", graph_state or {}
     if not embedding_model.strip():
         return "❌ 請選擇 Embedding 模型。", graph_state
-    if import_mode != "保留既有圖譜" and not destructive_confirmed:
-        return "❌ 取代或清空資料前必須勾選確認。", graph_state
     updated_state = dict(graph_state)
     updated_state["embedding_model"] = embedding_model.strip()
     try:
@@ -915,8 +911,6 @@ def import_graph_for_ui(
             updated_state["entities"],
             updated_state["relationships"],
             evidence,
-            import_mode,
-            bool(destructive_confirmed),
         )
     except (KeyError, ValueError) as exc:
         updated_state["neo4j_imported"] = False
@@ -926,7 +920,7 @@ def import_graph_for_ui(
     updated_state["neo4j_imported"] = True
     updated_state.pop("neo4j_error", None)
     return (
-        f"✅ 匯入模式：{import_mode}；已建立 {len(evidence)} 筆向量證據、Vector Index 與 Full-text Index；已匯入 Neo4j {imported.entity_count} 個實體與 "
+        f"✅ 已清空本工具既有圖譜；建立 {len(evidence)} 筆向量證據、Vector Index 與 Full-text Index；已匯入 Neo4j {imported.entity_count} 個實體與 "
         f"{imported.relationship_count} 筆關係。",
         updated_state,
     )
@@ -1194,14 +1188,8 @@ def build_app() -> gr.Blocks:
                     allow_custom_value=True,
                     label="Embedding 模型",
                 )
-                import_mode = gr.Radio(
-                    ["保留既有圖譜", "取代最近一次圖譜", "清空本工具所有圖譜"],
-                    value="保留既有圖譜",
-                    label="匯入模式",
-                )
-                destructive_confirmed = gr.Checkbox(
-                    value=False,
-                    label="我確認取代或清空操作會刪除既有圖譜資料",
+                gr.Markdown(
+                    "⚠️ 每次匯入都會先清空本工具在目前 Neo4j Database 中建立的圖譜，再寫入本次結果。"
                 )
                 import_graph_button = gr.Button(
                     "Embedding 並匯入 Neo4j", variant="primary"
@@ -1375,7 +1363,7 @@ def build_app() -> gr.Blocks:
             graph_temperature, graph_max_output_tokens, schema_granularity,
             max_entity_types, max_relationship_types, max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
-            extraction_max_concurrent_requests, import_mode, retrieval_mode,
+            extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
         ]
         project_load_outputs = [
@@ -1386,7 +1374,7 @@ def build_app() -> gr.Blocks:
             graph_temperature, graph_max_output_tokens, schema_granularity,
             max_entity_types, max_relationship_types, max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
-            extraction_max_concurrent_requests, import_mode, retrieval_mode,
+            extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor, preview_state, chunk_state, graph_state,
             page_selector, chunk_table, page_status, history_table,
             entity_table, relationship_table, build_status, import_status,
@@ -1420,7 +1408,7 @@ def build_app() -> gr.Blocks:
             graph_temperature, graph_max_output_tokens, schema_granularity,
             max_entity_types, max_relationship_types, max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
-            extraction_max_concurrent_requests, import_mode, retrieval_mode,
+            extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
         ]
         for component in auto_save_components:
@@ -1547,8 +1535,6 @@ def build_app() -> gr.Blocks:
                 neo4j_username,
                 neo4j_password,
                 graph_embedding_model,
-                import_mode,
-                destructive_confirmed,
                 graph_state,
             ],
             outputs=[import_status, graph_state],

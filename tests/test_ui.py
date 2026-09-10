@@ -185,7 +185,7 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
         "bolt://db", "neo4j", "user", "pass", "http://models", "key",
         "build", "embed", "answer", 1, 5, 1200, 100, 0.2, 3000,
         "詳細", 10, 12, 2, "全部頁面", 4, "extract", 2,
-        "保留既有圖譜", "GraphRAG", 6, '{"entity_types": []}',
+        "GraphRAG", 6, '{"entity_types": []}',
     ]
     saved, save_status = ui.save_project_for_ui(*values)
     loaded = ui.load_project_for_ui(created["project_id"])
@@ -193,14 +193,14 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     assert Path(saved["document"]["path"]).read_bytes() == b"pdf"
     assert loaded[0]["project_id"] == created["project_id"]
     assert loaded[14:16] == (1200, 100)
-    assert loaded[31][0].text == "內容"
+    assert loaded[30][0].text == "內容"
     stored_project = ui.load_project(created["project_id"])
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
-    assert loaded[37][0][:2] == ["設備", "DEVICE"]
-    assert loaded[38][0][:3] == ["設備", "USES", "零件"]
-    assert "1 個實體、1 筆關係" in loaded[39]
-    assert "已匯入 Neo4j" in loaded[40]
+    assert loaded[36][0][:2] == ["設備", "DEVICE"]
+    assert loaded[37][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[38]
+    assert "已匯入 Neo4j" in loaded[39]
 
 
 def test_project_answer_appends_history(monkeypatch) -> None:
@@ -524,10 +524,10 @@ def test_import_graph_for_ui_imports_saved_extraction(monkeypatch) -> None:
 
     status, state = ui.import_graph_for_ui(
         "http://models/v1", "key", "bolt://db", "neo4j", "user", "password",
-        "embed", "保留既有圖譜", False, _importable_graph_state(),
+        "embed", _importable_graph_state(),
     )
 
-    assert status.startswith("✅ 匯入模式：保留既有圖譜")
+    assert status.startswith("✅ 已清空本工具既有圖譜")
     assert state["neo4j_imported"] is True
     assert state["embedding_model"] == "embed"
     assert state["embedding_dimensions"] == 1
@@ -545,7 +545,7 @@ def test_import_graph_for_ui_keeps_state_when_import_fails(monkeypatch) -> None:
 
     status, state = ui.import_graph_for_ui(
         "http://models/v1", "key", "bolt://db", "neo4j", "user", "password",
-        "embed", "保留既有圖譜", False, _importable_graph_state(),
+        "embed", _importable_graph_state(),
     )
 
     assert status == "❌ Neo4j 寫入失敗：offline"
@@ -556,7 +556,7 @@ def test_import_graph_for_ui_keeps_state_when_import_fails(monkeypatch) -> None:
 def test_import_graph_for_ui_requires_extraction() -> None:
     assert ui.import_graph_for_ui(
         "http://models/v1", "key", "bolt://db", "neo4j", "user", "password",
-        "embed", "保留既有圖譜", False, {},
+        "embed", {},
     ) == ("❌ 請先完成知識圖譜抽取。", {})
 
 

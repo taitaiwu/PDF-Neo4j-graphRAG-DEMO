@@ -137,14 +137,15 @@ def test_import_extraction_writes_document_entities_and_relationships(monkeypatc
     assert "CREATE VECTOR INDEX graph_evidence_embedding_1" in driver.session(database="neo4j").calls[0][0]
     assert "CREATE FULLTEXT INDEX" in driver.session(database="neo4j").calls[1][0]
     assert "fulltext.analyzer" in driver.session(database="neo4j").calls[1][0]
-    assert len(transaction.calls) == 4
-    assert "GraphDocument" in transaction.calls[0][0]
-    assert transaction.calls[0][1]["embedding_dimensions"] == 1
-    assert transaction.calls[0][1]["vector_index_name"] == "graph_evidence_embedding_1"
-    assert transaction.calls[1][1]["entities"] is entities
-    assert transaction.calls[2][1]["relationships"] is relationships
-    assert "EXTRACTED_RELATION" in transaction.calls[2][0]
-    assert "GraphEvidence" in transaction.calls[3][0]
+    assert len(transaction.calls) == 5
+    assert "DETACH DELETE node" in transaction.calls[0][0]
+    assert "GraphDocument" in transaction.calls[1][0]
+    assert transaction.calls[1][1]["embedding_dimensions"] == 1
+    assert transaction.calls[1][1]["vector_index_name"] == "graph_evidence_embedding_1"
+    assert transaction.calls[2][1]["entities"] is entities
+    assert transaction.calls[3][1]["relationships"] is relationships
+    assert "EXTRACTED_RELATION" in transaction.calls[3][0]
+    assert "GraphEvidence" in transaction.calls[4][0]
 
 
 @pytest.mark.parametrize(
