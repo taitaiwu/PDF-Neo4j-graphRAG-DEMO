@@ -100,7 +100,14 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     document.write_bytes(b"pdf")
     values = [
         created["project_id"], str(document), {"file_name": "manual.pdf"},
-        [TextChunk(1, "內容", (1,))], {"document": "manual.pdf"},
+        [TextChunk(1, "內容", (1,))], {
+            "run_id": "run-1", "document": "manual.pdf", "neo4j_imported": True,
+            "entities": [{"name": "設備", "type": "DEVICE", "description": "說明",
+                          "source_chunk_numbers": [1], "source_pages": [1]}],
+            "relationships": [{"source": "設備", "type": "USES", "target": "零件",
+                               "description": "使用", "source_chunk_numbers": [1],
+                               "source_pages": [1]}],
+        },
         "bolt://db", "neo4j", "user", "pass", "http://models", "key",
         "build", "embed", "answer", 1, 5, 1200, 100, 0.2, 3000,
         "詳細", 10, 12, 2, "全部頁面", 4, "extract", 2,
@@ -113,6 +120,13 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     assert loaded[0]["project_id"] == created["project_id"]
     assert loaded[14:16] == (1200, 100)
     assert loaded[31][0].text == "內容"
+    stored_project = ui.load_project(created["project_id"])
+    assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
+    assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
+    assert loaded[37][0][:2] == ["設備", "DEVICE"]
+    assert loaded[38][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[39]
+    assert "已匯入 Neo4j" in loaded[40]
 
 
 def test_project_answer_appends_history(monkeypatch) -> None:

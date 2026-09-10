@@ -156,6 +156,21 @@ def _history_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
              i.get("retrieval_mode", ""), i.get("document", "")] for i in reversed(questions)]
 
 
+def _graph_rows(graph: dict[str, Any]) -> tuple[list[list[object]], list[list[object]]]:
+    entities = [[
+        item.get("name", ""), item.get("type", ""), item.get("description", ""),
+        ", ".join(map(str, item.get("source_chunk_numbers", []))),
+        ", ".join(map(str, item.get("source_pages", []))),
+    ] for item in graph.get("entities", [])]
+    relationships = [[
+        item.get("source", ""), item.get("type", ""), item.get("target", ""),
+        item.get("description", ""),
+        ", ".join(map(str, item.get("source_chunk_numbers", []))),
+        ", ".join(map(str, item.get("source_pages", []))),
+    ] for item in graph.get("relationships", [])]
+    return entities, relationships
+
+
 def save_project_for_ui(
     project_id: str, pdf_file: str | None, preview_state: dict[str, Any],
     chunks: list[TextChunk], graph_state: dict[str, Any],
@@ -218,6 +233,18 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
     page_start = int(preview.get("page_start", get("start_page", 1)))
     page_end = int(preview.get("page_end", get("end_page") or page_start))
     rows = preview_rows_for_page(chunks, page_start) if chunks else []
+    entity_rows, relationship_rows = _graph_rows(graph)
+    if graph.get("run_id"):
+        graph_status = (
+            f"✅ 已載入專案保存的圖譜：{len(entity_rows)} 個實體、"
+            f"{len(relationship_rows)} 筆關係。"
+        )
+        import_status = (
+            "✅ 此圖譜已匯入 Neo4j。" if graph.get("neo4j_imported")
+            else "此圖譜尚未匯入 Neo4j。"
+        )
+    else:
+        graph_status, import_status = "尚未執行抽取。", "尚未執行 Embedding 與匯入。"
     return (
         project, f"✅ 已載入專案「{project['name']}」。", document_path,
         get("neo4j_uri", env["NEO4J_URI"]), get("neo4j_database", env["NEO4J_DATABASE"]),
@@ -240,6 +267,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         gr.update(minimum=page_start, maximum=page_end, value=page_start, interactive=bool(chunks)),
         rows, _page_status(page_start, page_end, len(rows)) if chunks else "請先解析 PDF。",
         _history_rows(project.get("questions") or []),
+        entity_rows, relationship_rows, graph_status, import_status,
     )
 
 
@@ -1303,6 +1331,7 @@ def build_app() -> gr.Blocks:
             extraction_max_concurrent_requests, import_mode, retrieval_mode,
             top_k, schema_editor, preview_state, chunk_state, graph_state,
             page_selector, chunk_table, page_status, history_table,
+            entity_table, relationship_table, build_status, import_status,
         ]
         project_tab.select(refresh_projects_for_ui, outputs=project_selector)
         create_project_button.click(
