@@ -22,6 +22,28 @@ def test_plan_schema_button_uses_primary_variant() -> None:
     assert button["props"]["variant"] == "primary"
 
 
+def test_project_page_uses_automatic_refresh_and_save() -> None:
+    app = build_app()
+    button_values = {
+        component.get("props", {}).get("value")
+        for component in app.config["components"]
+        if component.get("type") == "button"
+    }
+
+    assert "重新整理專案清單" not in button_values
+    assert "保存目前專案設定" not in button_values
+    assert any(
+        dependency.get("api_name") == "refresh_projects_for_ui"
+        and any(trigger[1] == "select" for trigger in dependency.get("targets", []))
+        for dependency in app.config["dependencies"]
+    )
+    assert any(
+        str(dependency.get("api_name", "")).startswith("save_project_for_ui")
+        and any(trigger[1] == "input" for trigger in dependency.get("targets", []))
+        for dependency in app.config["dependencies"]
+    )
+
+
 def test_build_app_has_manual_neo4j_import_button() -> None:
     app = build_app()
 

@@ -721,19 +721,17 @@ def build_app() -> gr.Blocks:
         chunk_state = gr.State([])
         graph_state = gr.State({})
 
-        with gr.Tab("0. 專案設定"):
+        with gr.Tab("0. 專案設定") as project_tab:
             gr.Markdown("### 專案工作區\n建立或載入專案後，可保存本頁面所有連線、模型、參數、Chunk、文件、建圖狀態與問答紀錄。")
             with gr.Row():
                 project_selector = gr.Dropdown(
                     choices=_project_choices(), label="現有專案", interactive=True
                 )
-                refresh_projects_button = gr.Button("重新整理專案清單")
                 load_project_button = gr.Button("載入專案", variant="primary")
             with gr.Row():
                 new_project_name = gr.Textbox(label="新專案名稱", placeholder="例如：ALCX17 使用手冊")
                 create_project_button = gr.Button("建立新專案", variant="primary")
-            save_project_button = gr.Button("保存目前專案設定", variant="primary")
-            project_status = gr.Markdown("尚未選擇專案。")
+            project_status = gr.Markdown("尚未選擇專案；載入後，設定與處理結果都會自動保存。")
             gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Password 與 API Key 為明文；請勿分享或提交該目錄。")
 
         with gr.Tab("1. 連線設定"):
@@ -996,7 +994,7 @@ def build_app() -> gr.Blocks:
             top_k, schema_editor, preview_state, chunk_state, graph_state,
             page_selector, chunk_table, page_status, history_table,
         ]
-        refresh_projects_button.click(refresh_projects_for_ui, outputs=project_selector)
+        project_tab.select(refresh_projects_for_ui, outputs=project_selector)
         create_project_button.click(
             create_project_for_ui, inputs=new_project_name,
             outputs=[project_selector, project_state, project_status],
@@ -1004,10 +1002,21 @@ def build_app() -> gr.Blocks:
         load_project_button.click(
             load_project_for_ui, inputs=project_selector, outputs=project_load_outputs,
         )
-        save_project_button.click(
-            save_project_for_ui, inputs=project_setting_inputs,
-            outputs=[project_state, project_status],
-        )
+        auto_save_components = [
+            neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            model_endpoint, api_key, graph_llm_model, graph_embedding_model,
+            answer_model, start_page, end_page, chunk_size, chunk_overlap,
+            graph_temperature, graph_max_output_tokens, schema_granularity,
+            max_entity_types, max_relationship_types, max_concurrent_requests,
+            schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
+            extraction_max_concurrent_requests, import_mode, retrieval_mode,
+            top_k, schema_editor,
+        ]
+        for component in auto_save_components:
+            component.input(
+                save_project_for_ui, inputs=project_setting_inputs,
+                outputs=[project_state, project_status], show_progress="hidden",
+            )
 
         neo4j_test_button.click(
             check_neo4j_for_ui,
@@ -1033,12 +1042,16 @@ def build_app() -> gr.Blocks:
         for component in env_inputs:
             component.change(persist_env_settings, inputs=env_inputs, outputs=env_status)
         reload_button.click(reload_env_settings, outputs=[*env_inputs, env_status])
-        pdf_file.upload(
+        pdf_upload_event = pdf_file.upload(
             initialize_page_range,
             inputs=pdf_file,
             outputs=[start_page, end_page, preview_status],
         )
-        preview_button.click(
+        pdf_upload_event.then(
+            save_project_for_ui, inputs=project_setting_inputs,
+            outputs=[project_state, project_status], show_progress="hidden",
+        )
+        preview_event = preview_button.click(
             preview_pdf,
             inputs=[
                 pdf_file,
@@ -1055,6 +1068,10 @@ def build_app() -> gr.Blocks:
                 page_selector,
                 page_status,
             ],
+        )
+        preview_event.then(
+            save_project_for_ui, inputs=project_setting_inputs,
+            outputs=[project_state, project_status], show_progress="hidden",
         )
         page_selector.change(
             preview_page,
@@ -1089,7 +1106,7 @@ def build_app() -> gr.Blocks:
             ],
             outputs=[plan_status, schema_editor],
         )
-        generate_graph_button.click(
+        extraction_event = generate_graph_button.click(
             extract_graph_for_ui,
             inputs=[
                 model_endpoint,
@@ -1105,7 +1122,11 @@ def build_app() -> gr.Blocks:
             outputs=[build_status, entity_table, relationship_table, graph_state],
             show_progress="minimal",
         )
-        import_graph_button.click(
+        extraction_event.then(
+            save_project_for_ui, inputs=project_setting_inputs,
+            outputs=[project_state, project_status], show_progress="hidden",
+        )
+        import_event = import_graph_button.click(
             import_graph_for_ui,
             inputs=[
                 model_endpoint,
@@ -1120,6 +1141,10 @@ def build_app() -> gr.Blocks:
                 graph_state,
             ],
             outputs=[import_status, graph_state],
+        )
+        import_event.then(
+            save_project_for_ui, inputs=project_setting_inputs,
+            outputs=[project_state, project_status], show_progress="hidden",
         )
         ask_button.click(
             answer_question_for_project_ui,
