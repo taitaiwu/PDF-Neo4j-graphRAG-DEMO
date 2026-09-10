@@ -336,17 +336,14 @@ def import_extraction(
                     "`vector.similarity_function`: 'cosine'}}"
                 ).consume()
                 session.run(
-                    "CALL db.awaitIndex($index_name, 300)", index_name=index_name
-                ).consume()
-                session.run(
                     "CREATE FULLTEXT INDEX graph_evidence_fulltext IF NOT EXISTS "
                     "FOR (e:GraphEvidence) ON EACH [e.text, e.name, e.source, e.target] "
                     "OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}"
                 ).consume()
-                session.run(
-                    "CALL db.awaitIndex($index_name, 300)",
-                    index_name="graph_evidence_fulltext",
-                ).consume()
+                # Waiting by a just-created index name can race Neo4j schema
+                # propagation and incorrectly raise IndexNotFound. Await all
+                # indexes only after both DDL statements have committed.
+                session.run("CALL db.awaitIndexes(300)").consume()
                 counts = session.execute_write(
                     _write_graph,
                     run_id,
