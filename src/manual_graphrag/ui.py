@@ -127,6 +127,11 @@ def reload_env_settings() -> tuple[str, ...]:
 
 
 
+def unlock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
+    enabled = bool(project_id)
+    return tuple(gr.update(interactive=enabled) for _ in range(6))
+
+
 def _project_choices() -> list[tuple[str, str]]:
     return list_projects()
 
@@ -505,7 +510,14 @@ def run_evaluation_for_ui(
     except (OSError, ValueError) as exc:
         return f"❌ 測試已完成，但保存失敗：{exc}", _evaluation_result_rows(results), updated
     passed = sum(bool(item["passed"]) for item in results)
-    return f"✅ 測試完成：{passed} / {len(results)} 題通過。", _evaluation_result_rows(results), updated
+    total = len(results)
+    failed = total - passed
+    accuracy = passed / total * 100 if total else 0
+    summary = (
+        f"## 測試完成｜答對 {passed} 題 / 共 {total} 題  "
+        f"\n答錯：{failed} 題｜正確率：{accuracy:.1f}%"
+    )
+    return summary, _evaluation_result_rows(results), updated
 
 def initialize_page_range(
     file_path: str | None,
@@ -983,7 +995,7 @@ def build_app() -> gr.Blocks:
             project_status = gr.Markdown("尚未選擇專案；載入後，設定與處理結果都會自動保存。")
             gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Password 與 API Key 為明文；請勿分享或提交該目錄。")
 
-        with gr.Tab("1. 連線設定"):
+        with gr.Tab("1. 連線設定", interactive=False) as connection_tab:
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Neo4j")
@@ -1003,7 +1015,7 @@ def build_app() -> gr.Blocks:
             gr.Markdown("⚠️ Password 與 API Key 會以明文寫入本機 `.env`；請勿提交此檔案。")
             env_status = gr.Markdown("啟動時已讀取 .env；欄位修改後會自動儲存。")
 
-        with gr.Tab("2. PDF 與參數"):
+        with gr.Tab("2. PDF 與參數", interactive=False) as pdf_tab:
             with gr.Row():
                 with gr.Column(scale=1):
                     pdf_file = gr.File(label="PDF 使用手冊", file_types=[".pdf"], type="filepath")
@@ -1040,7 +1052,7 @@ def build_app() -> gr.Blocks:
                         column_widths=[80, 120, 100, 900],
                     )
 
-        with gr.Tab("3. 建圖"):
+        with gr.Tab("3. 建圖", interactive=False) as graph_tab:
             gr.Markdown("### 規劃並抽取知識圖譜")
             with gr.Group():
                 gr.Markdown("#### ① 規劃 Schema")
@@ -1169,7 +1181,7 @@ def build_app() -> gr.Blocks:
                 )
                 import_status = gr.Markdown("尚未執行 Embedding 與匯入。")
 
-        with gr.Tab("4. 自動問答測試") as evaluation_tab:
+        with gr.Tab("4. 自動問答測試", interactive=False) as evaluation_tab:
             gr.Markdown(
                 "### 從 PDF 自動建立問答測試集\n"
                 "先建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
@@ -1190,20 +1202,31 @@ def build_app() -> gr.Blocks:
                 save_evaluation_questions_button = gr.Button("儲存題目", variant="primary")
                 export_evaluation_button = gr.Button("匯出題目")
                 evaluation_export_file = gr.File(label="題目 JSON", interactive=False)
-            evaluation_status = gr.Markdown("請先載入專案並解析 PDF。")
+            gr.HTML(
+                """<style>
+                .evaluation-metrics {font-size: 24px !important; line-height: 1.7 !important;}
+                .evaluation-table table {font-size: 18px !important;}
+                .evaluation-table td, .evaluation-table th {padding: 10px !important;}
+                </style>""",
+                padding=False,
+            )
+            evaluation_status = gr.Markdown(
+                "請先載入專案並解析 PDF。", elem_classes="evaluation-metrics"
+            )
             gr.Markdown("#### 測試題目")
             evaluation_questions_table = gr.Dataframe(
                 headers=["編號", "問題", "標準答案", "來源頁碼"],
                 datatype=["number", "str", "str", "str"],
                 type="array", interactive=True, wrap=True,
+                elem_classes="evaluation-table",
             )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
                 headers=["編號", "問題", "標準答案", "實際答案", "結果", "評判理由"],
-                interactive=False, wrap=True,
+                interactive=False, wrap=True, elem_classes="evaluation-table",
             )
 
-        with gr.Tab("5. 問答測試"):
+        with gr.Tab("5. 問答測試", interactive=False) as qa_tab:
             gr.Markdown(
                 "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
             )
@@ -1246,7 +1269,7 @@ def build_app() -> gr.Blocks:
                 wrap=True,
             )
 
-        with gr.Tab("6. 歷史紀錄"):
+        with gr.Tab("6. 歷史紀錄", interactive=False) as history_tab:
             gr.Markdown("目前專案的問答紀錄；成功問答後會自動追加並保存。")
             project_history_status = gr.Markdown()
             history_table = gr.Dataframe(
@@ -1334,12 +1357,21 @@ def build_app() -> gr.Blocks:
             entity_table, relationship_table, build_status, import_status,
         ]
         project_tab.select(refresh_projects_for_ui, outputs=project_selector)
-        create_project_button.click(
+        create_project_event = create_project_button.click(
             create_project_for_ui, inputs=new_project_name,
             outputs=[project_selector, project_state, project_status],
         )
-        load_project_button.click(
+        load_project_event = load_project_button.click(
             load_project_for_ui, inputs=project_selector, outputs=project_load_outputs,
+        )
+        protected_tabs = [
+            connection_tab, pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab,
+        ]
+        create_project_event.success(
+            unlock_project_tabs_for_ui, inputs=project_selector, outputs=protected_tabs,
+        )
+        load_project_event.success(
+            unlock_project_tabs_for_ui, inputs=project_selector, outputs=protected_tabs,
         )
         auto_save_components = [
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,

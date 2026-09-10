@@ -44,6 +44,29 @@ def test_project_page_uses_automatic_refresh_and_save() -> None:
     )
 
 
+def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
+    app = build_app()
+    protected_labels = {
+        "1. 連線設定", "2. PDF 與參數", "3. 建圖",
+        "4. 自動問答測試", "5. 問答測試", "6. 歷史紀錄",
+    }
+    tabs = [
+        component for component in app.config["components"]
+        if component.get("props", {}).get("label") in protected_labels
+    ]
+
+    assert len(tabs) == 6
+    assert all(tab["props"]["interactive"] is False for tab in tabs)
+    assert all(update["interactive"] is False for update in ui.unlock_project_tabs_for_ui(""))
+    assert all(update["interactive"] is True for update in ui.unlock_project_tabs_for_ui("project"))
+    unlock_dependencies = [
+        dependency for dependency in app.config["dependencies"]
+        if str(dependency.get("api_name", "")).startswith("unlock_project_tabs_for_ui")
+    ]
+    assert len(unlock_dependencies) == 2
+    assert all(len(dependency["outputs"]) == 6 for dependency in unlock_dependencies)
+
+
 def test_build_app_has_automatic_evaluation_page() -> None:
     app = build_app()
     values = [
@@ -178,7 +201,9 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
         "model", "GraphRAG", 8, evaluation,
     )
 
-    assert status == "✅ 測試完成：1 / 1 題通過。"
+    assert "答對 1 題 / 共 1 題" in status
+    assert "答錯：0 題" in status
+    assert "正確率：100.0%" in status
     assert rows[0][3:] == ["實際答案", "✅ 通過", "正確"]
     assert updated["results"][0]["passed"] is True
     assert captured["evaluation"] == updated
