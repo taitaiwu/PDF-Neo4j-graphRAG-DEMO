@@ -330,7 +330,8 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
     )
 
     status, answer, rows = ui.answer_question_for_ui(
-        "http://models/v1", "key", "bolt://db", "neo4j", "user", "password",
+        "http://models/v1", "key", "http://embed/v1", "embed-key",
+        "bolt://db", "neo4j", "user", "password",
         "answer", " E01 怎麼處理？ ", "向量 RAG", 8,
     )
 
