@@ -46,6 +46,12 @@ class FakeSession:
 
     def run(self, query, **parameters):
         self.calls.append((query, parameters))
+        if "SHOW VECTOR INDEXES" in query:
+            return FakeResult(rows=[
+                {"name": "graph_evidence_embedding"},
+                {"name": "graph_evidence_embedding_3072"},
+                {"name": "unrelated_vector_index"},
+            ])
         return FakeResult()
 
     def execute_write(self, callback, *args):
@@ -134,12 +140,16 @@ def test_import_extraction_writes_document_entities_and_relationships(monkeypatc
     assert driver.verified is True
     assert driver.database == "neo4j"
     index_calls = driver.session(database="neo4j").calls
-    assert len(index_calls) == 3
-    assert "CREATE VECTOR INDEX graph_evidence_embedding_1" in index_calls[0][0]
-    assert "CREATE FULLTEXT INDEX" in index_calls[1][0]
-    assert "fulltext.analyzer" in index_calls[1][0]
-    assert "db.awaitIndexes(300)" in index_calls[2][0]
-    assert index_calls[2][1] == {}
+    assert len(index_calls) == 6
+    assert "SHOW VECTOR INDEXES" in index_calls[0][0]
+    assert "DROP INDEX `graph_evidence_embedding`" in index_calls[1][0]
+    assert "DROP INDEX `graph_evidence_embedding_3072`" in index_calls[2][0]
+    assert all("unrelated_vector_index" not in query for query, _ in index_calls)
+    assert "CREATE VECTOR INDEX graph_evidence_embedding_1" in index_calls[3][0]
+    assert "CREATE FULLTEXT INDEX" in index_calls[4][0]
+    assert "fulltext.analyzer" in index_calls[4][0]
+    assert "db.awaitIndexes(300)" in index_calls[5][0]
+    assert index_calls[5][1] == {}
     assert len(transaction.calls) == 5
     assert "DETACH DELETE node" in transaction.calls[0][0]
     assert "GraphDocument" in transaction.calls[1][0]

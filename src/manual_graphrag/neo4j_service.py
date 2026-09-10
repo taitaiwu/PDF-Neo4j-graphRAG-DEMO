@@ -328,6 +328,20 @@ def import_extraction(
             with driver.session(database=database.strip()) as session:
                 dimensions = len(evidence[0]["embedding"])
                 index_name = vector_index_name(dimensions)
+                # Neo4j permits only one vector index for the same label and
+                # property schema. IF NOT EXISTS would silently keep an older
+                # index with a different dimension, so remove all indexes
+                # owned by this application before creating the current one.
+                existing_indexes = session.run(
+                    "SHOW VECTOR INDEXES YIELD name "
+                    "WHERE name = 'graph_evidence_embedding' "
+                    "OR name STARTS WITH 'graph_evidence_embedding_' "
+                    "RETURN name"
+                ).data()
+                for record in existing_indexes:
+                    old_index_name = str(record.get("name", ""))
+                    if re.fullmatch(r"graph_evidence_embedding(?:_\d+)?", old_index_name):
+                        session.run(f"DROP INDEX `{old_index_name}` IF EXISTS").consume()
                 session.run(
                     f"CREATE VECTOR INDEX {index_name} IF NOT EXISTS "
                     "FOR (e:GraphEvidence) ON (e.embedding) OPTIONS {"
