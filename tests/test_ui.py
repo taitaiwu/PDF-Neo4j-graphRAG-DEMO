@@ -53,6 +53,9 @@ def test_build_app_has_automatic_evaluation_page() -> None:
 
     assert "從 PDF 建立題目與答案" in values
     assert "一鍵測試" in values
+    assert "匯入題目" in values
+    assert "儲存題目" in values
+    assert "匯出題目" in values
     assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "5. 問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
@@ -165,6 +168,62 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     assert rows[0][3:] == ["實際答案", "✅ 通過", "正確"]
     assert updated["results"][0]["passed"] is True
     assert captured["evaluation"] == updated
+
+
+def test_edit_questions_marks_dirty_and_requires_save() -> None:
+    state, status = ui.mark_evaluation_questions_dirty_for_ui(
+        [[9, "修改後問題", "修改後答案", "2, 3"]], {"results": [{"passed": True}]}
+    )
+
+    assert state["dirty"] is True
+    assert state["results"] == []
+    assert state["questions"][0]["number"] == 1
+    assert state["questions"][0]["source_pages"] == [2, 3]
+    assert "尚未儲存" in status
+    run_status, _, _ = ui.run_evaluation_for_ui(
+        "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
+        "model", "GraphRAG", 8, state,
+    )
+    assert "尚未儲存" in run_status
+
+
+def test_save_and_export_edited_questions(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("project")
+    rows = [[1, "問題", "答案", "1, 4"]]
+
+    status, state, _ = ui.save_evaluation_questions_for_ui(
+        project["project_id"], rows, {"dirty": True}
+    )
+    export_status, export_path = ui.export_evaluation_questions_for_ui(
+        project["project_id"], rows
+    )
+
+    assert status.startswith("✅")
+    assert state["dirty"] is False
+    assert export_status.startswith("✅")
+    payload = json.loads(Path(export_path).read_text(encoding="utf-8"))
+    assert payload["questions"][0]["source_pages"] == [1, 4]
+
+
+def test_import_questions_supports_json_and_csv(tmp_path) -> None:
+    json_file = tmp_path / "questions.json"
+    json_file.write_text(json.dumps({"questions": [
+        {"question": "JSON Q", "expected_answer": "JSON A", "source_pages": [2]}
+    ]}), encoding="utf-8")
+    csv_file = tmp_path / "questions.csv"
+    csv_file.write_text(
+        "number,question,expected_answer,source_pages\n1,CSV Q,CSV A,3\n",
+        encoding="utf-8",
+    )
+
+    json_result = ui.import_evaluation_questions_for_ui(str(json_file), {})
+    csv_result = ui.import_evaluation_questions_for_ui(str(csv_file), {})
+
+    assert json_result[2]["questions"][0]["question"] == "JSON Q"
+    assert csv_result[2]["questions"][0]["expected_answer"] == "CSV A"
+    assert json_result[2]["dirty"] is True
+    assert "尚未儲存" in csv_result[0]
 
 def test_preview_page_filters_chunks_and_reports_page() -> None:
     chunks = [

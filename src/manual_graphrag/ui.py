@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import random
 from pathlib import Path
@@ -266,6 +267,110 @@ def _evaluation_question_rows(questions: list[dict[str, Any]]) -> list[list[obje
              ", ".join(map(str, item.get("source_pages", [])))] for item in questions]
 
 
+def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
+    if hasattr(rows, "values"):
+        rows = rows.values.tolist()
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("題目不可為空")
+    questions = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, (list, tuple)) or len(row) < 3:
+            raise ValueError(f"第 {index} 列格式不正確")
+        question = str(row[1] or "").strip()
+        answer = str(row[2] or "").strip()
+        if not question or not answer:
+            raise ValueError(f"第 {index} 題的問題與標準答案不可為空")
+        raw_pages = row[3] if len(row) > 3 else ""
+        if isinstance(raw_pages, (list, tuple)):
+            page_values = raw_pages
+        else:
+            page_values = str(raw_pages or "").replace("，", ",").split(",")
+        try:
+            pages = [int(value) for value in page_values if str(value).strip()]
+        except ValueError as exc:
+            raise ValueError(f"第 {index} 題的來源頁碼必須是逗號分隔的整數") from exc
+        questions.append({
+            "number": index, "question": question,
+            "expected_answer": answer, "source_pages": pages,
+        })
+    return questions
+
+
+def mark_evaluation_questions_dirty_for_ui(
+    rows: Any, evaluation: dict[str, Any]
+) -> tuple[dict[str, Any], str]:
+    try:
+        questions = _questions_from_rows(rows)
+    except ValueError as exc:
+        return evaluation or {}, f"❌ {exc}；尚未儲存。"
+    updated = dict(evaluation or {})
+    updated.update({"questions": questions, "results": [], "dirty": True})
+    return updated, "⚠️ 題目或答案已修改，尚未儲存。"
+
+
+def save_evaluation_questions_for_ui(
+    project_id: str, rows: Any, evaluation: dict[str, Any]
+) -> tuple[str, dict[str, Any], list[list[object]]]:
+    if not project_id:
+        return "❌ 請先建立或載入專案。", evaluation or {}, []
+    try:
+        questions = _questions_from_rows(rows)
+        updated = dict(evaluation or {})
+        updated.update({"questions": questions, "results": [], "dirty": False})
+        save_project(project_id, {"evaluation": updated})
+    except (OSError, ValueError) as exc:
+        return f"❌ {exc}；尚未儲存。", evaluation or {}, []
+    return f"✅ 已儲存 {len(questions)} 道題目。", updated, []
+
+
+def import_evaluation_questions_for_ui(
+    file_path: str | None, evaluation: dict[str, Any]
+) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
+    if not file_path:
+        return "❌ 請選擇 JSON 或 CSV 題目檔。", [], evaluation or {}, []
+    try:
+        path = Path(file_path)
+        if path.suffix.lower() == ".json":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            items = payload.get("questions") if isinstance(payload, dict) else payload
+            if not isinstance(items, list):
+                raise ValueError("JSON 必須是題目陣列或包含 questions 陣列")
+            rows = [[item.get("number", index), item.get("question", ""),
+                     item.get("expected_answer", ""), item.get("source_pages", [])]
+                    for index, item in enumerate(items, start=1) if isinstance(item, dict)]
+        elif path.suffix.lower() == ".csv":
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                items = list(csv.DictReader(handle))
+            rows = [[item.get("number", index), item.get("question", ""),
+                     item.get("expected_answer", ""), item.get("source_pages", "")]
+                    for index, item in enumerate(items, start=1)]
+        else:
+            raise ValueError("只支援 .json 或 .csv 題目檔")
+        questions = _questions_from_rows(rows)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        return f"❌ 匯入失敗：{exc}", [], evaluation or {}, []
+    updated = dict(evaluation or {})
+    updated.update({"questions": questions, "results": [], "dirty": True})
+    return (f"⚠️ 已匯入 {len(questions)} 道題目，尚未儲存。",
+            _evaluation_question_rows(questions), updated, [])
+
+
+def export_evaluation_questions_for_ui(
+    project_id: str, rows: Any
+) -> tuple[str, str | None]:
+    if not project_id:
+        return "❌ 請先建立或載入專案。", None
+    try:
+        questions = _questions_from_rows(rows)
+        output = write_json(
+            Path("data/projects") / project_id / "exports" / "questions.json",
+            {"questions": questions},
+        )
+    except (OSError, ValueError) as exc:
+        return f"❌ 匯出失敗：{exc}", None
+    return f"✅ 已匯出 {len(questions)} 道題目。", str(output)
+
+
 def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]:
     return [[item["number"], item["question"], item["expected_answer"],
              item.get("actual_answer", ""), "✅ 通過" if item.get("passed") else "❌ 未通過",
@@ -279,7 +384,8 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         project = load_project(project_id)
     except (OSError, ValueError) as exc:
         return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
-    evaluation = project.get("evaluation") or {}
+    evaluation = dict(project.get("evaluation") or {})
+    evaluation.setdefault("dirty", False)
     preferences = evaluation.get("preferences") or {}
     questions = evaluation.get("questions") or []
     results = evaluation.get("results") or []
@@ -324,7 +430,7 @@ def generate_evaluation_for_ui(
         evaluation = {
             "preferences": {"model": model, "question_count": int(question_count),
                             "retrieval_mode": retrieval_mode, "top_k": int(top_k)},
-            "questions": questions, "results": [],
+            "questions": questions, "results": [], "dirty": False,
         }
         save_project(project_id, {"evaluation": evaluation})
     except (OSError, TypeError, ValueError) as exc:
@@ -343,6 +449,8 @@ def run_evaluation_for_ui(
         return "❌ 請先建立或載入專案。", [], evaluation or {}
     if not questions:
         return "❌ 請先建立測試題目。", [], evaluation or {}
+    if evaluation.get("dirty"):
+        return "❌ 題目或答案尚未儲存，請先按「儲存題目」。", [], evaluation
     results = []
     for index, item in enumerate(questions, start=1):
         progress((index - 1) / len(questions), desc=f"測試第 {index} / {len(questions)} 題")
@@ -1046,11 +1154,20 @@ def build_app() -> gr.Blocks:
             with gr.Row():
                 generate_evaluation_button = gr.Button("從 PDF 建立題目與答案", variant="primary")
                 run_evaluation_button = gr.Button("一鍵測試", variant="primary")
+            with gr.Row():
+                evaluation_import_file = gr.File(
+                    label="匯入題目（JSON／CSV）", file_types=[".json", ".csv"], type="filepath"
+                )
+                import_evaluation_button = gr.Button("匯入題目")
+                save_evaluation_questions_button = gr.Button("儲存題目", variant="primary")
+                export_evaluation_button = gr.Button("匯出題目")
+                evaluation_export_file = gr.File(label="題目 JSON", interactive=False)
             evaluation_status = gr.Markdown("請先載入專案並解析 PDF。")
             gr.Markdown("#### 測試題目")
             evaluation_questions_table = gr.Dataframe(
                 headers=["編號", "問題", "標準答案", "來源頁碼"],
-                interactive=False, wrap=True,
+                datatype=["number", "str", "str", "str"],
+                type="array", interactive=True, wrap=True,
             )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
@@ -1126,6 +1243,27 @@ def build_app() -> gr.Blocks:
                 inputs=evaluation_preference_inputs, outputs=evaluation_status,
                 show_progress="hidden",
             )
+        evaluation_questions_table.input(
+            mark_evaluation_questions_dirty_for_ui,
+            inputs=[evaluation_questions_table, evaluation_state],
+            outputs=[evaluation_state, evaluation_status], show_progress="hidden",
+        )
+        import_evaluation_button.click(
+            import_evaluation_questions_for_ui,
+            inputs=[evaluation_import_file, evaluation_state],
+            outputs=[evaluation_status, evaluation_questions_table,
+                     evaluation_state, evaluation_results_table],
+        )
+        save_evaluation_questions_button.click(
+            save_evaluation_questions_for_ui,
+            inputs=[project_selector, evaluation_questions_table, evaluation_state],
+            outputs=[evaluation_status, evaluation_state, evaluation_results_table],
+        )
+        export_evaluation_button.click(
+            export_evaluation_questions_for_ui,
+            inputs=[project_selector, evaluation_questions_table],
+            outputs=[evaluation_status, evaluation_export_file],
+        )
         generate_evaluation_button.click(
             generate_evaluation_for_ui,
             inputs=[project_selector, model_endpoint, api_key, evaluation_model,
