@@ -114,6 +114,25 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "5. 問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
+    components = app.config["components"]
+    question_table_index = next(
+        index for index, component in enumerate(components)
+        if component.get("props", {}).get("headers") == ["編號", "問題", "標準答案", "來源頁碼"]
+    )
+    metrics_box_index = next(
+        index for index, component in enumerate(components)
+        if "evaluation-metrics-box" in component.get("props", {}).get("elem_classes", [])
+    )
+    result_title_index = next(
+        index for index, component in enumerate(components)
+        if component.get("props", {}).get("value") == "#### 測試結果"
+    )
+    result_table_index = next(
+        index for index, component in enumerate(components)
+        if component.get("props", {}).get("headers")
+        == ["編號", "問題", "標準答案", "實際答案", "結果", "評判理由"]
+    )
+    assert question_table_index < metrics_box_index < result_title_index < result_table_index
 
 
 def test_build_app_has_manual_neo4j_import_button() -> None:

@@ -1228,14 +1228,18 @@ def build_app() -> gr.Blocks:
                 evaluation_export_file = gr.File(label="題目 JSON", interactive=False)
             gr.HTML(
                 """<style>
+                .evaluation-metrics-box {
+                    border: 2px solid var(--border-color-primary) !important;
+                    border-radius: 12px !important;
+                    padding: 16px 22px !important;
+                    margin: 18px 0 12px !important;
+                    background: var(--background-fill-secondary) !important;
+                }
                 .evaluation-metrics {font-size: 24px !important; line-height: 1.7 !important;}
                 .evaluation-table table {font-size: 18px !important;}
                 .evaluation-table td, .evaluation-table th {padding: 10px !important;}
                 </style>""",
                 padding=False,
-            )
-            evaluation_status = gr.Markdown(
-                "請先載入專案並解析 PDF。", elem_classes="evaluation-metrics"
             )
             gr.Markdown("#### 測試題目")
             evaluation_questions_table = gr.Dataframe(
@@ -1244,6 +1248,10 @@ def build_app() -> gr.Blocks:
                 type="array", interactive=True, wrap=True,
                 elem_classes="evaluation-table",
             )
+            with gr.Group(elem_classes="evaluation-metrics-box"):
+                evaluation_status = gr.Markdown(
+                    "請先載入專案並解析 PDF。", elem_classes="evaluation-metrics"
+                )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
                 headers=["編號", "問題", "標準答案", "實際答案", "結果", "評判理由"],
