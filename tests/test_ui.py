@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import gradio as gr
 from manual_graphrag import ui
 from manual_graphrag.chunking import PageText, TextChunk
@@ -50,6 +51,46 @@ def test_persist_env_settings_writes_all_fields(tmp_path, monkeypatch) -> None:
     assert 'NEO4J_PASSWORD="pass"' in content
     assert 'ANSWER_MODEL="answer"' in content
 
+
+
+def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _, created, status = ui.create_project_for_ui("手冊專案")
+    assert status.startswith("✅")
+    document = tmp_path / "manual.pdf"
+    document.write_bytes(b"pdf")
+    values = [
+        created["project_id"], str(document), {"file_name": "manual.pdf"},
+        [TextChunk(1, "內容", (1,))], {"document": "manual.pdf"},
+        "bolt://db", "neo4j", "user", "pass", "http://models", "key",
+        "build", "embed", "answer", 1, 5, 1200, 100, 0.2, 3000,
+        "詳細", 10, 12, 2, "全部頁面", 4, "extract", 2,
+        "保留既有圖譜", "GraphRAG", 6, '{"entity_types": []}',
+    ]
+    saved, save_status = ui.save_project_for_ui(*values)
+    loaded = ui.load_project_for_ui(created["project_id"])
+    assert save_status.startswith("✅")
+    assert Path(saved["document"]["path"]).read_bytes() == b"pdf"
+    assert loaded[0]["project_id"] == created["project_id"]
+    assert loaded[14:16] == (1200, 100)
+    assert loaded[31][0].text == "內容"
+
+
+def test_project_answer_appends_history(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "答案", [["來源"]]))
+    monkeypatch.setattr(ui, "load_project", lambda project_id: {"graph_state": {"document": "manual.pdf"}})
+    captured = {}
+    def fake_append(project_id, record):
+        captured.update(record)
+        return {"questions": [record]}
+    monkeypatch.setattr(ui, "append_question", fake_append)
+    result = ui.answer_question_for_project_ui(
+        "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
+        "answer-model", "問題", "GraphRAG", 8,
+    )
+    assert captured["document"] == "manual.pdf"
+    assert captured["sources"] == [["來源"]]
+    assert result[3][0][1:3] == ["問題", "答案"]
 
 def test_preview_page_filters_chunks_and_reports_page() -> None:
     chunks = [

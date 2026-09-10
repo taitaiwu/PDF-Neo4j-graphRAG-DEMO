@@ -24,6 +24,7 @@ from .neo4j_service import (
     search_graph_evidence,
 )
 from .pdf_service import extract_pdf, get_pdf_page_count
+from .project_store import append_question, create_project, list_projects, load_project, save_project
 from .qa_service import answer_graph_question, embedding_vectors
 from .storage import write_json
 
@@ -122,6 +123,141 @@ def reload_env_settings() -> tuple[str, ...]:
         "✅ 已重新讀取 .env",
     )
 
+
+
+def _project_choices() -> list[tuple[str, str]]:
+    return list_projects()
+
+
+def create_project_for_ui(name: str) -> tuple[dict[str, Any], dict[str, Any], str]:
+    try:
+        project = create_project(name)
+    except ValueError as exc:
+        return gr.update(), {}, f"❌ {exc}"
+    return gr.update(choices=_project_choices(), value=project["project_id"]), project, f"✅ 已建立專案「{project['name']}」。"
+
+
+def refresh_projects_for_ui() -> dict[str, Any]:
+    return gr.update(choices=_project_choices())
+
+
+def _chunk_dicts(chunks: list[TextChunk]) -> list[dict[str, Any]]:
+    return [{"number": c.number, "text": c.text, "pages": list(c.pages)} for c in chunks]
+
+
+def _stored_chunks(items: list[dict[str, Any]]) -> list[TextChunk]:
+    return [TextChunk(int(i["number"]), str(i["text"]), tuple(i.get("pages") or [])) for i in items]
+
+
+def _history_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
+    return [[i.get("asked_at", ""), i.get("question", ""), i.get("answer", ""),
+             i.get("retrieval_mode", ""), i.get("document", "")] for i in reversed(questions)]
+
+
+def save_project_for_ui(
+    project_id: str, pdf_file: str | None, preview_state: dict[str, Any],
+    chunks: list[TextChunk], graph_state: dict[str, Any],
+    neo4j_uri: str, neo4j_database: str, neo4j_username: str, neo4j_password: str,
+    model_endpoint: str, api_key: str, graph_llm_model: str,
+    graph_embedding_model: str, answer_model: str, start_page: int,
+    end_page: int | None, chunk_size: int, chunk_overlap: int,
+    graph_temperature: float, graph_max_output_tokens: int,
+    schema_granularity: str, max_entity_types: int, max_relationship_types: int,
+    max_concurrent_requests: int, schema_sampling_mode: str,
+    schema_sample_page_count: int, extraction_llm_model: str,
+    extraction_max_concurrent_requests: int, import_mode: str,
+    retrieval_mode: str, top_k: int, schema_text: str,
+) -> tuple[dict[str, Any], str]:
+    if not project_id:
+        return {}, "❌ 請先建立或載入專案。"
+    settings = {
+        "neo4j_uri": neo4j_uri, "neo4j_database": neo4j_database,
+        "neo4j_username": neo4j_username, "neo4j_password": neo4j_password,
+        "model_endpoint": model_endpoint, "api_key": api_key,
+        "graph_llm_model": graph_llm_model, "graph_embedding_model": graph_embedding_model,
+        "answer_model": answer_model, "start_page": int(start_page),
+        "end_page": None if end_page is None else int(end_page),
+        "chunk_size": int(chunk_size), "chunk_overlap": int(chunk_overlap),
+        "graph_temperature": float(graph_temperature),
+        "graph_max_output_tokens": int(graph_max_output_tokens),
+        "schema_granularity": schema_granularity,
+        "max_entity_types": int(max_entity_types), "max_relationship_types": int(max_relationship_types),
+        "max_concurrent_requests": int(max_concurrent_requests),
+        "schema_sampling_mode": schema_sampling_mode,
+        "schema_sample_page_count": int(schema_sample_page_count),
+        "extraction_llm_model": extraction_llm_model,
+        "extraction_max_concurrent_requests": int(extraction_max_concurrent_requests),
+        "import_mode": import_mode, "retrieval_mode": retrieval_mode,
+        "top_k": int(top_k), "schema_text": schema_text or "",
+    }
+    try:
+        project = save_project(project_id, {
+            "settings": settings, "preview_state": preview_state or {},
+            "chunks": _chunk_dicts(chunks or []), "graph_state": graph_state or {},
+        }, pdf_file)
+    except (OSError, ValueError) as exc:
+        return {}, f"❌ {exc}"
+    return project, f"✅ 專案「{project['name']}」已保存。"
+
+
+def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
+    try:
+        project = load_project(project_id)
+    except (OSError, ValueError) as exc:
+        raise gr.Error(str(exc))
+    settings = project.get("settings") or {}
+    env, get = load_env(), settings.get
+    document_path = (project.get("document") or {}).get("path")
+    if document_path and not Path(document_path).is_file():
+        document_path = None
+    preview = project.get("preview_state") or {}
+    chunks = _stored_chunks(project.get("chunks") or [])
+    graph = project.get("graph_state") or {}
+    page_start = int(preview.get("page_start", get("start_page", 1)))
+    page_end = int(preview.get("page_end", get("end_page") or page_start))
+    rows = preview_rows_for_page(chunks, page_start) if chunks else []
+    return (
+        project, f"✅ 已載入專案「{project['name']}」。", document_path,
+        get("neo4j_uri", env["NEO4J_URI"]), get("neo4j_database", env["NEO4J_DATABASE"]),
+        get("neo4j_username", env["NEO4J_USERNAME"]), get("neo4j_password", env["NEO4J_PASSWORD"]),
+        get("model_endpoint", env["MODEL_API_BASE"]), get("api_key", env["MODEL_API_KEY"]),
+        get("graph_llm_model", env["BUILD_MODEL"]), get("graph_embedding_model", env["EMBEDDING_MODEL"]),
+        get("answer_model", env["ANSWER_MODEL"]), get("start_page", 1), get("end_page"),
+        get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
+        get("graph_max_output_tokens", 4096), get("schema_granularity", "平衡"),
+        get("max_entity_types", 15), get("max_relationship_types", 20),
+        get("max_concurrent_requests", 3),
+        gr.update(
+            value=get("schema_sampling_mode", "全部頁面"),
+            visible=get("schema_sampling_mode", "全部頁面") == "隨機抽取 N 頁",
+        ),
+        get("schema_sample_page_count", 10), get("extraction_llm_model", env["BUILD_MODEL"]),
+        get("extraction_max_concurrent_requests", 3), get("import_mode", "保留既有圖譜"),
+        get("retrieval_mode", "GraphRAG"), get("top_k", 8), get("schema_text", ""),
+        preview, chunks, graph,
+        gr.update(minimum=page_start, maximum=page_end, value=page_start, interactive=bool(chunks)),
+        rows, _page_status(page_start, page_end, len(rows)) if chunks else "請先解析 PDF。",
+        _history_rows(project.get("questions") or []),
+    )
+
+
+def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ...]:
+    status, answer, sources = answer_question_for_ui(*args)
+    if not status.startswith("✅") or not project_id:
+        note = "" if project_id else "⚠️ 未選擇專案，問答未加入專案紀錄。"
+        return status, answer, sources, gr.update(), note
+    try:
+        current = load_project(project_id)
+        record = {
+            "question": str(args[7]).strip(), "answer": answer,
+            "answer_model": str(args[6]), "retrieval_mode": str(args[8]),
+            "top_k": int(args[9]), "sources": sources,
+            "document": (current.get("graph_state") or {}).get("document", ""),
+        }
+        project = append_question(project_id, record)
+    except (OSError, ValueError) as exc:
+        return status, answer, sources, gr.update(), f"⚠️ 回答成功，但專案紀錄保存失敗：{exc}"
+    return status, answer, sources, _history_rows(project.get("questions") or []), "✅ 問答紀錄已加入目前專案。"
 
 def initialize_page_range(
     file_path: str | None,
@@ -580,9 +716,25 @@ def build_app() -> gr.Blocks:
             "# PDF GraphRAG 測試工具\n"
             "上傳使用手冊、調整建圖參數，並測試 Neo4j GraphRAG。"
         )
+        project_state = gr.State({})
         preview_state = gr.State({})
         chunk_state = gr.State([])
         graph_state = gr.State({})
+
+        with gr.Tab("0. 專案設定"):
+            gr.Markdown("### 專案工作區\n建立或載入專案後，可保存本頁面所有連線、模型、參數、Chunk、文件、建圖狀態與問答紀錄。")
+            with gr.Row():
+                project_selector = gr.Dropdown(
+                    choices=_project_choices(), label="現有專案", interactive=True
+                )
+                refresh_projects_button = gr.Button("重新整理專案清單")
+                load_project_button = gr.Button("載入專案", variant="primary")
+            with gr.Row():
+                new_project_name = gr.Textbox(label="新專案名稱", placeholder="例如：ALCX17 使用手冊")
+                create_project_button = gr.Button("建立新專案", variant="primary")
+            save_project_button = gr.Button("保存目前專案設定", variant="primary")
+            project_status = gr.Markdown("尚未選擇專案。")
+            gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Password 與 API Key 為明文；請勿分享或提交該目錄。")
 
         with gr.Tab("1. 連線設定"):
             with gr.Row():
@@ -814,7 +966,48 @@ def build_app() -> gr.Blocks:
             )
 
         with gr.Tab("5. 歷史紀錄"):
-            gr.Markdown("建圖與問答紀錄將在後續開發階段顯示於此。")
+            gr.Markdown("目前專案的問答紀錄；成功問答後會自動追加並保存。")
+            project_history_status = gr.Markdown()
+            history_table = gr.Dataframe(
+                headers=["時間", "問題", "回答", "模式", "文件"],
+                interactive=False, wrap=True,
+            )
+
+        project_setting_inputs = [
+            project_selector, pdf_file, preview_state, chunk_state, graph_state,
+            neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            model_endpoint, api_key, graph_llm_model, graph_embedding_model,
+            answer_model, start_page, end_page, chunk_size, chunk_overlap,
+            graph_temperature, graph_max_output_tokens, schema_granularity,
+            max_entity_types, max_relationship_types, max_concurrent_requests,
+            schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
+            extraction_max_concurrent_requests, import_mode, retrieval_mode,
+            top_k, schema_editor,
+        ]
+        project_load_outputs = [
+            project_state, project_status, pdf_file,
+            neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            model_endpoint, api_key, graph_llm_model, graph_embedding_model,
+            answer_model, start_page, end_page, chunk_size, chunk_overlap,
+            graph_temperature, graph_max_output_tokens, schema_granularity,
+            max_entity_types, max_relationship_types, max_concurrent_requests,
+            schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
+            extraction_max_concurrent_requests, import_mode, retrieval_mode,
+            top_k, schema_editor, preview_state, chunk_state, graph_state,
+            page_selector, chunk_table, page_status, history_table,
+        ]
+        refresh_projects_button.click(refresh_projects_for_ui, outputs=project_selector)
+        create_project_button.click(
+            create_project_for_ui, inputs=new_project_name,
+            outputs=[project_selector, project_state, project_status],
+        )
+        load_project_button.click(
+            load_project_for_ui, inputs=project_selector, outputs=project_load_outputs,
+        )
+        save_project_button.click(
+            save_project_for_ui, inputs=project_setting_inputs,
+            outputs=[project_state, project_status],
+        )
 
         neo4j_test_button.click(
             check_neo4j_for_ui,
@@ -840,7 +1033,7 @@ def build_app() -> gr.Blocks:
         for component in env_inputs:
             component.change(persist_env_settings, inputs=env_inputs, outputs=env_status)
         reload_button.click(reload_env_settings, outputs=[*env_inputs, env_status])
-        pdf_file.change(
+        pdf_file.upload(
             initialize_page_range,
             inputs=pdf_file,
             outputs=[start_page, end_page, preview_status],
@@ -929,8 +1122,9 @@ def build_app() -> gr.Blocks:
             outputs=[import_status, graph_state],
         )
         ask_button.click(
-            answer_question_for_ui,
+            answer_question_for_project_ui,
             inputs=[
+                project_selector,
                 model_endpoint,
                 api_key,
                 neo4j_uri,
@@ -942,6 +1136,6 @@ def build_app() -> gr.Blocks:
                 retrieval_mode,
                 top_k,
             ],
-            outputs=[answer_status, answer, answer_sources],
+            outputs=[answer_status, answer, answer_sources, history_table, project_history_status],
         )
     return app
