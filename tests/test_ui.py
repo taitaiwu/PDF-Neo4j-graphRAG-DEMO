@@ -72,24 +72,29 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     assert all(len(dependency["outputs"]) == 5 for dependency in unlock_dependencies)
 
 
-def test_delete_project_requires_confirmation(tmp_path, monkeypatch) -> None:
+def test_delete_project_refreshes_list_after_server_delete(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("刪除測試")
 
-    cancelled = ui.delete_project_for_ui(project["project_id"], False)
-    assert ui.load_project(project["project_id"])["name"] == "刪除測試"
-    assert "取消" in cancelled[2]
-    assert cancelled[-1] is False
-    assert "choices" not in ui.refresh_projects_after_delete_for_ui(False)
+    deleted = ui.delete_project_for_ui(project["project_id"])
 
-    deleted = ui.delete_project_for_ui(project["project_id"], True)
     assert "已刪除" in deleted[2]
     assert all(update["interactive"] is False for update in deleted[3:-1])
     assert deleted[-1] is True
-    refreshed = ui.refresh_projects_after_delete_for_ui(True)
+    refreshed = ui.refresh_projects_after_delete_for_ui(deleted[-1])
     assert refreshed["choices"] == []
     assert refreshed["value"] is None
     assert ui.list_projects() == []
+
+
+def test_failed_delete_does_not_clear_selection(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = ui.delete_project_for_ui("missing")
+
+    assert result[2].startswith("❌")
+    assert result[-1] is False
+    assert "choices" not in ui.refresh_projects_after_delete_for_ui(result[-1])
 
 
 def test_delete_button_uses_browser_confirmation() -> None:
@@ -103,6 +108,8 @@ def test_delete_button_uses_browser_confirmation() -> None:
         if any(target[0] == button["id"] for target in item.get("targets", []))
     )
     assert "window.confirm" in dependency["js"]
+    assert "throw new Error" in dependency["js"]
+    assert len(dependency["inputs"]) == 1
     assert any(
         str(item.get("api_name", "")).startswith("refresh_projects_after_delete_for_ui")
         and item.get("trigger_after") == dependency["id"]

@@ -141,13 +141,8 @@ def unlock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
 
 
 def delete_project_for_ui(
-    project_id: str, confirmed: bool
+    project_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any], str, *tuple[Any, ...]]:
-    if not confirmed:
-        return (
-            gr.update(), gr.update(), "已取消刪除專案。",
-            *unlock_project_tabs_for_ui(project_id), False,
-        )
     try:
         name = delete_project(project_id)
     except (OSError, ValueError) as exc:
@@ -1024,7 +1019,6 @@ def build_app() -> gr.Blocks:
                 new_project_name = gr.Textbox(label="新專案名稱", placeholder="例如：ALCX17 使用手冊")
                 create_project_button = gr.Button("建立新專案", variant="primary")
                 delete_project_button = gr.Button("刪除專案", variant="stop")
-                delete_project_confirmed = gr.State(False)
                 delete_project_completed = gr.State(False)
             project_status = gr.Markdown("尚未選擇專案；載入後，設定與處理結果都會自動保存。")
             gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Password 與 API Key 為明文；請勿分享或提交該目錄。")
@@ -1403,11 +1397,16 @@ def build_app() -> gr.Blocks:
         protected_tabs = [pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
         delete_project_event = delete_project_button.click(
             delete_project_for_ui,
-            inputs=[project_selector, delete_project_confirmed],
+            inputs=project_selector,
             outputs=[project_selector, project_state, project_status,
                      pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab,
                      delete_project_completed],
-            js="(projectId) => [projectId, window.confirm('確定要刪除此專案嗎？專案設定、PDF、圖譜、題庫與紀錄都會永久刪除。')]",
+            js="""(projectId) => {
+                if (!window.confirm('確定要刪除此專案嗎？專案設定、PDF、圖譜、題庫與紀錄都會永久刪除。')) {
+                    throw new Error('使用者取消刪除');
+                }
+                return projectId;
+            }""",
         )
         delete_project_event.then(
             refresh_projects_after_delete_for_ui,
