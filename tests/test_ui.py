@@ -47,15 +47,20 @@ def test_project_page_uses_automatic_refresh_and_save() -> None:
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
-        "1. 連線設定", "2. PDF 與參數", "3. 建圖",
-        "4. 自動問答測試", "5. 問答測試", "6. 歷史紀錄",
+        "2. PDF 與參數", "3. 建圖", "4. 自動問答測試",
+        "5. 問答測試", "6. 歷史紀錄",
     }
     tabs = [
         component for component in app.config["components"]
         if component.get("props", {}).get("label") in protected_labels
     ]
 
-    assert len(tabs) == 6
+    assert len(tabs) == 5
+    connection_tab = next(
+        component for component in app.config["components"]
+        if component.get("props", {}).get("label") == "1. 連線設定"
+    )
+    assert connection_tab["props"].get("interactive", True) is True
     assert all(tab["props"]["interactive"] is False for tab in tabs)
     assert all(update["interactive"] is False for update in ui.unlock_project_tabs_for_ui(""))
     assert all(update["interactive"] is True for update in ui.unlock_project_tabs_for_ui("project"))
@@ -64,7 +69,34 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
         if str(dependency.get("api_name", "")).startswith("unlock_project_tabs_for_ui")
     ]
     assert len(unlock_dependencies) == 2
-    assert all(len(dependency["outputs"]) == 6 for dependency in unlock_dependencies)
+    assert all(len(dependency["outputs"]) == 5 for dependency in unlock_dependencies)
+
+
+def test_delete_project_requires_confirmation(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("刪除測試")
+
+    cancelled = ui.delete_project_for_ui(project["project_id"], False)
+    assert ui.load_project(project["project_id"])["name"] == "刪除測試"
+    assert "取消" in cancelled[2]
+
+    deleted = ui.delete_project_for_ui(project["project_id"], True)
+    assert "已刪除" in deleted[2]
+    assert all(update["interactive"] is False for update in deleted[3:])
+    assert ui.list_projects() == []
+
+
+def test_delete_button_uses_browser_confirmation() -> None:
+    app = build_app()
+    button = next(
+        component for component in app.config["components"]
+        if component.get("props", {}).get("value") == "刪除專案"
+    )
+    dependency = next(
+        item for item in app.config["dependencies"]
+        if any(target[0] == button["id"] for target in item.get("targets", []))
+    )
+    assert "window.confirm" in dependency["js"]
 
 
 def test_build_app_has_automatic_evaluation_page() -> None:

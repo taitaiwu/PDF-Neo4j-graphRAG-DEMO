@@ -26,7 +26,14 @@ from .neo4j_service import (
     search_graph_evidence,
 )
 from .pdf_service import extract_pdf, get_pdf_page_count
-from .project_store import append_question, create_project, list_projects, load_project, save_project
+from .project_store import (
+    append_question,
+    create_project,
+    delete_project,
+    list_projects,
+    load_project,
+    save_project,
+)
 from .qa_service import answer_graph_question, embedding_vectors
 from .storage import write_json
 
@@ -129,7 +136,22 @@ def reload_env_settings() -> tuple[str, ...]:
 
 def unlock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
     enabled = bool(project_id)
-    return tuple(gr.update(interactive=enabled) for _ in range(6))
+    return tuple(gr.update(interactive=enabled) for _ in range(5))
+
+
+def delete_project_for_ui(
+    project_id: str, confirmed: bool
+) -> tuple[dict[str, Any], dict[str, Any], str, *tuple[dict[str, Any], ...]]:
+    if not confirmed:
+        return gr.update(), gr.update(), "已取消刪除專案。", *unlock_project_tabs_for_ui(project_id)
+    try:
+        name = delete_project(project_id)
+    except (OSError, ValueError) as exc:
+        return gr.update(), gr.update(), f"❌ {exc}", *unlock_project_tabs_for_ui(project_id)
+    return (
+        gr.update(choices=_project_choices(), value=None), {},
+        f"✅ 已刪除專案「{name}」。", *unlock_project_tabs_for_ui("")
+    )
 
 
 def _project_choices() -> list[tuple[str, str]]:
@@ -992,10 +1014,12 @@ def build_app() -> gr.Blocks:
             with gr.Row():
                 new_project_name = gr.Textbox(label="新專案名稱", placeholder="例如：ALCX17 使用手冊")
                 create_project_button = gr.Button("建立新專案", variant="primary")
+                delete_project_button = gr.Button("刪除專案", variant="stop")
+                delete_project_confirmed = gr.State(False)
             project_status = gr.Markdown("尚未選擇專案；載入後，設定與處理結果都會自動保存。")
             gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Password 與 API Key 為明文；請勿分享或提交該目錄。")
 
-        with gr.Tab("1. 連線設定", interactive=False) as connection_tab:
+        with gr.Tab("1. 連線設定") as connection_tab:
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Neo4j")
@@ -1364,9 +1388,14 @@ def build_app() -> gr.Blocks:
         load_project_event = load_project_button.click(
             load_project_for_ui, inputs=project_selector, outputs=project_load_outputs,
         )
-        protected_tabs = [
-            connection_tab, pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab,
-        ]
+        protected_tabs = [pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
+        delete_project_button.click(
+            delete_project_for_ui,
+            inputs=[project_selector, delete_project_confirmed],
+            outputs=[project_selector, project_state, project_status,
+                     pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab],
+            js="(projectId) => [projectId, window.confirm('確定要刪除此專案嗎？專案設定、PDF、圖譜、題庫與紀錄都會永久刪除。')]",
+        )
         create_project_event.success(
             unlock_project_tabs_for_ui, inputs=project_selector, outputs=protected_tabs,
         )

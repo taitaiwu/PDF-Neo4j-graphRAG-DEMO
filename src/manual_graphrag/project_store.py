@@ -67,6 +67,13 @@ def load_project(project_id: str, root: str | Path = PROJECTS_DIR) -> dict[str, 
     return read_json(target)
 
 
+def delete_project(project_id: str, root: str | Path = PROJECTS_DIR) -> str:
+    project = load_project(project_id, root)
+    target = Path(root) / project_id
+    shutil.rmtree(target)
+    return str(project["name"])
+
+
 def save_project(
     project_id: str,
     payload: dict[str, Any],

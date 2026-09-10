@@ -5,6 +5,7 @@ import pytest
 from manual_graphrag.project_store import (
     append_question,
     create_project,
+    delete_project,
     list_projects,
     load_project,
     save_project,
@@ -54,3 +55,16 @@ def test_create_project_validates_name_and_collision(tmp_path) -> None:
     create_project("same", tmp_path)
     with pytest.raises(ValueError, match="相同識別碼"):
         create_project("same", tmp_path)
+
+
+def test_delete_project_removes_only_selected_project(tmp_path) -> None:
+    first = create_project("first", tmp_path)
+    second = create_project("second", tmp_path)
+
+    deleted_name = delete_project(first["project_id"], tmp_path)
+
+    assert deleted_name == "first"
+    assert not (tmp_path / first["project_id"]).exists()
+    assert load_project(second["project_id"], tmp_path)["name"] == "second"
+    with pytest.raises(ValueError, match="找不到"):
+        delete_project(first["project_id"], tmp_path)
