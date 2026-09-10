@@ -133,6 +133,7 @@ def search_graph_evidence(
     retrieval_mode: str,
     top_k: int,
 ) -> list[dict[str, Any]]:
+    target_vector_index = vector_index_name(len(embedding))
     retrieval_query = """
     WITH node, score
     WHERE node.run_id = $run_id
@@ -154,7 +155,7 @@ def search_graph_evidence(
 
             retriever = HybridCypherRetriever(
                 driver=driver,
-                vector_index_name=vector_index_name(len(embedding)),
+                vector_index_name=target_vector_index,
                 fulltext_index_name="graph_evidence_fulltext",
                 retrieval_query=retrieval_query,
                 result_formatter=_format_hybrid_record,
@@ -283,9 +284,17 @@ def search_graph_evidence(
             guidance = " 請使用目前的 Embedding 模型重新執行「Embedding 並匯入 Neo4j」以建立對應維度索引。"
         raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}{guidance}") from exc
     except Exception as exc:
-        # The official retriever currently raises a plain Exception when an
-        # expected index is missing; keep the UI error contract consistent.
-        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}") from exc
+        # neo4j-graphrag 1.19.0 tries to format a missing-index error with the
+        # nonexistent `self.index_name` attribute. Replace that implementation
+        # detail with the actual index requested by this application.
+        if isinstance(exc, AttributeError) and "index_name" in str(exc):
+            detail = f"找不到向量索引 `{target_vector_index}`。"
+        else:
+            detail = str(exc)
+        raise ValueError(
+            f"Neo4j 官方混合檢索失敗：{detail} "
+            "請使用目前的 Embedding 模型重新執行「Embedding 並匯入 Neo4j」。"
+        ) from exc
     return selected
 
 
@@ -327,9 +336,16 @@ def import_extraction(
                     "`vector.similarity_function`: 'cosine'}}"
                 ).consume()
                 session.run(
+                    "CALL db.awaitIndex($index_name, 300)", index_name=index_name
+                ).consume()
+                session.run(
                     "CREATE FULLTEXT INDEX graph_evidence_fulltext IF NOT EXISTS "
                     "FOR (e:GraphEvidence) ON EACH [e.text, e.name, e.source, e.target] "
                     "OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}"
+                ).consume()
+                session.run(
+                    "CALL db.awaitIndex($index_name, 300)",
+                    index_name="graph_evidence_fulltext",
                 ).consume()
                 counts = session.execute_write(
                     _write_graph,

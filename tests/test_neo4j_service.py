@@ -133,10 +133,15 @@ def test_import_extraction_writes_document_entities_and_relationships(monkeypatc
     assert captured == {"uri": "bolt://db", "auth": ("user", "password")}
     assert driver.verified is True
     assert driver.database == "neo4j"
-    assert len(driver.session(database="neo4j").calls) == 2
-    assert "CREATE VECTOR INDEX graph_evidence_embedding_1" in driver.session(database="neo4j").calls[0][0]
-    assert "CREATE FULLTEXT INDEX" in driver.session(database="neo4j").calls[1][0]
-    assert "fulltext.analyzer" in driver.session(database="neo4j").calls[1][0]
+    index_calls = driver.session(database="neo4j").calls
+    assert len(index_calls) == 4
+    assert "CREATE VECTOR INDEX graph_evidence_embedding_1" in index_calls[0][0]
+    assert "db.awaitIndex" in index_calls[1][0]
+    assert index_calls[1][1]["index_name"] == "graph_evidence_embedding_1"
+    assert "CREATE FULLTEXT INDEX" in index_calls[2][0]
+    assert "fulltext.analyzer" in index_calls[2][0]
+    assert "db.awaitIndex" in index_calls[3][0]
+    assert index_calls[3][1]["index_name"] == "graph_evidence_fulltext"
     assert len(transaction.calls) == 5
     assert "DETACH DELETE node" in transaction.calls[0][0]
     assert "GraphDocument" in transaction.calls[1][0]
@@ -287,6 +292,34 @@ class FakeOfficialRetriever:
         return type("Result", (), {
             "items": [type("Item", (), {"content": item}) for item in evidence]
         })()
+
+
+def test_missing_dimension_index_replaces_upstream_attribute_error(monkeypatch) -> None:
+    session = SearchSession()
+    monkeypatch.setattr(
+        neo4j_service.GraphDatabase,
+        "driver",
+        lambda *args, **kwargs: SearchDriver(session),
+    )
+
+    class MissingIndexRetriever:
+        def __init__(self, **kwargs):
+            raise AttributeError("'HybridCypherRetriever' object has no attribute 'index_name'")
+
+    monkeypatch.setattr(
+        neo4j_service, "HybridCypherRetriever", MissingIndexRetriever
+    )
+
+    with pytest.raises(ValueError) as error:
+        neo4j_service.search_graph_evidence(
+            "bolt://db", "neo4j", "user", "password", "run-1",
+            "question", [0.1] * 1536, "向量 RAG", 3,
+        )
+
+    message = str(error.value)
+    assert "graph_evidence_embedding_1536" in message
+    assert "重新執行「Embedding 並匯入 Neo4j」" in message
+    assert "object has no attribute" not in message
 
 
 def test_search_dimension_error_instructs_user_to_reimport(monkeypatch) -> None:
