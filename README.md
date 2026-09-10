@@ -52,7 +52,9 @@
 
 兩個問答模式都會使用官方 HybridCypherRetriever 進行向量與全文混合檢索；GraphRAG 會額外執行圖譜擴展。匯入階段預先建立 Embedding、向量索引與全文索引，是後續問答能快速檢索的關鍵。
 
-從舊版升級時，請在介面重新執行一次「Embedding 並匯入 Neo4j」，以建立 `graph_evidence_fulltext` 全文索引；既有資料不會只因更新程式碼而自動建立索引。
+向量索引會依 Embedding 維度分開建立，例如 `graph_evidence_embedding_1536` 與 `graph_evidence_embedding_3072`，因此同一個 Neo4j 可保存不同供應商或不同維度模型建立的圖譜。更換 Embedding 模型後仍需重新執行「Embedding 並匯入 Neo4j」。
+
+從舊版升級時，請在介面重新執行一次「Embedding 並匯入 Neo4j」，以建立 `graph_evidence_fulltext` 全文索引及新的維度專屬向量索引；既有資料不會只因更新程式碼而自動建立索引。
 
 ## 基本使用流程
 

@@ -18,6 +18,12 @@ class ImportSummary:
     relationship_count: int
 
 
+def vector_index_name(dimensions: int) -> str:
+    if int(dimensions) < 1:
+        raise ValueError("Embedding 向量維度必須大於 0")
+    return f"graph_evidence_embedding_{int(dimensions)}"
+
+
 def _escape_fulltext_query(question: str) -> str:
     """Escape Lucene query syntax while preserving terms for the CJK analyzer."""
     return re.sub(
@@ -90,7 +96,9 @@ def load_latest_graph(
     OPTIONAL MATCH (source:ExtractedEntity)-[relation:EXTRACTED_RELATION]->(target:ExtractedEntity)
     WHERE relation.run_id = document.run_id
     RETURN document.run_id AS run_id, document.file_name AS document,
-           document.embedding_model AS embedding_model, entities,
+           document.embedding_model AS embedding_model,
+           document.embedding_dimensions AS embedding_dimensions,
+           document.vector_index_name AS vector_index_name, entities,
            collect(DISTINCT relation {
                source: source.name, target: target.name, .type, .description,
                .source_chunk_numbers, .source_pages
@@ -146,7 +154,7 @@ def search_graph_evidence(
 
             retriever = HybridCypherRetriever(
                 driver=driver,
-                vector_index_name="graph_evidence_embedding",
+                vector_index_name=vector_index_name(len(embedding)),
                 fulltext_index_name="graph_evidence_fulltext",
                 retrieval_query=retrieval_query,
                 result_formatter=_format_hybrid_record,
@@ -269,7 +277,11 @@ def search_graph_evidence(
                         if record["evidence"].get("evidence_id", "") not in selected_ids
                     )
     except (DriverError, Neo4jError, Neo4jGraphRagError, OSError, ValueError) as exc:
-        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}") from exc
+        detail = str(exc)
+        guidance = ""
+        if "dimensionality" in detail.casefold() or "dimension" in detail.casefold() or "index" in detail.casefold():
+            guidance = " 請使用目前的 Embedding 模型重新執行「Embedding 並匯入 Neo4j」以建立對應維度索引。"
+        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}{guidance}") from exc
     except Exception as exc:
         # The official retriever currently raises a plain Exception when an
         # expected index is missing; keep the UI error contract consistent.
@@ -314,8 +326,9 @@ def import_extraction(
             driver.verify_connectivity()
             with driver.session(database=database.strip()) as session:
                 dimensions = len(evidence[0]["embedding"])
+                index_name = vector_index_name(dimensions)
                 session.run(
-                    "CREATE VECTOR INDEX graph_evidence_embedding IF NOT EXISTS "
+                    f"CREATE VECTOR INDEX {index_name} IF NOT EXISTS "
                     "FOR (e:GraphEvidence) ON (e.embedding) OPTIONS {"
                     "indexConfig: {`vector.dimensions`: "
                     f"{dimensions}, "
@@ -337,6 +350,8 @@ def import_extraction(
                     relationships,
                     evidence,
                     import_mode,
+                    dimensions,
+                    index_name,
                 )
     except (DriverError, Neo4jError, OSError, ValueError) as exc:
         if isinstance(exc, ValueError) and str(exc).startswith("請先填寫"):
@@ -356,6 +371,8 @@ def _write_graph(
     relationships: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
     import_mode: str,
+    embedding_dimensions: int,
+    vector_index: str,
 ) -> dict[str, int]:
     if import_mode == "清空本工具所有圖譜":
         transaction.run(
@@ -385,6 +402,8 @@ def _write_graph(
         SET document.file_name = $document_name,
             document.llm_model = $llm_model,
             document.embedding_model = $embedding_model,
+            document.embedding_dimensions = $embedding_dimensions,
+            document.vector_index_name = $vector_index_name,
             document.schema_json = $schema_json,
             document.updated_at = datetime()
         """,
@@ -392,6 +411,8 @@ def _write_graph(
         document_name=document_name,
         llm_model=llm_model,
         embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
+        vector_index_name=vector_index,
         schema_json=json.dumps(schema, ensure_ascii=False),
     ).consume()
     entity_result = transaction.run(

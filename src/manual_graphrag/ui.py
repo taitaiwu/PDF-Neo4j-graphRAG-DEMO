@@ -24,6 +24,7 @@ from .neo4j_service import (
     import_extraction,
     load_latest_graph,
     search_graph_evidence,
+    vector_index_name,
 )
 from .pdf_service import extract_pdf, get_pdf_page_count
 from .project_store import (
@@ -899,6 +900,8 @@ def import_graph_for_ui(
         )
         for item, vector in zip(evidence, vectors):
             item["embedding"] = vector
+        updated_state["embedding_dimensions"] = len(vectors[0])
+        updated_state["vector_index_name"] = vector_index_name(len(vectors[0]))
         imported = import_extraction(
             neo4j_uri,
             neo4j_database,

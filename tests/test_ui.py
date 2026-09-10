@@ -530,6 +530,8 @@ def test_import_graph_for_ui_imports_saved_extraction(monkeypatch) -> None:
     assert status.startswith("✅ 匯入模式：保留既有圖譜")
     assert state["neo4j_imported"] is True
     assert state["embedding_model"] == "embed"
+    assert state["embedding_dimensions"] == 1
+    assert state["vector_index_name"] == "graph_evidence_embedding_1"
     assert captured["args"][4] == "run-1"
 
 

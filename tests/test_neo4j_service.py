@@ -134,11 +134,13 @@ def test_import_extraction_writes_document_entities_and_relationships(monkeypatc
     assert driver.verified is True
     assert driver.database == "neo4j"
     assert len(driver.session(database="neo4j").calls) == 2
-    assert "CREATE VECTOR INDEX" in driver.session(database="neo4j").calls[0][0]
+    assert "CREATE VECTOR INDEX graph_evidence_embedding_1" in driver.session(database="neo4j").calls[0][0]
     assert "CREATE FULLTEXT INDEX" in driver.session(database="neo4j").calls[1][0]
     assert "fulltext.analyzer" in driver.session(database="neo4j").calls[1][0]
     assert len(transaction.calls) == 4
     assert "GraphDocument" in transaction.calls[0][0]
+    assert transaction.calls[0][1]["embedding_dimensions"] == 1
+    assert transaction.calls[0][1]["vector_index_name"] == "graph_evidence_embedding_1"
     assert transaction.calls[1][1]["entities"] is entities
     assert transaction.calls[2][1]["relationships"] is relationships
     assert "EXTRACTED_RELATION" in transaction.calls[2][0]
@@ -204,6 +206,13 @@ def _evidence(evidence_id: str, score: float, kind: str = "原文") -> dict:
         "source_chunk_numbers": [1],
         "score": score,
     }
+
+
+def test_vector_index_name_uses_embedding_dimensions() -> None:
+    assert neo4j_service.vector_index_name(1536) == "graph_evidence_embedding_1536"
+    assert neo4j_service.vector_index_name(3072) == "graph_evidence_embedding_3072"
+    with pytest.raises(ValueError, match="維度"):
+        neo4j_service.vector_index_name(0)
 
 
 def test_escape_fulltext_query_escapes_lucene_syntax() -> None:
@@ -279,6 +288,33 @@ class FakeOfficialRetriever:
         })()
 
 
+def test_search_dimension_error_instructs_user_to_reimport(monkeypatch) -> None:
+    session = SearchSession()
+    monkeypatch.setattr(
+        neo4j_service.GraphDatabase,
+        "driver",
+        lambda *args, **kwargs: SearchDriver(session),
+    )
+
+    class BrokenRetriever:
+        def __init__(self, **kwargs):
+            pass
+
+        def search(self, **kwargs):
+            raise ValueError(
+                "Vector index has configured dimensionality 3072, "
+                "but the provided vector has dimension 1536"
+            )
+
+    monkeypatch.setattr(neo4j_service, "HybridCypherRetriever", BrokenRetriever)
+
+    with pytest.raises(ValueError, match="重新執行.*Embedding 並匯入 Neo4j"):
+        neo4j_service.search_graph_evidence(
+            "bolt://db", "neo4j", "user", "password", "run-1",
+            "question", [0.1] * 1536, "向量 RAG", 3,
+        )
+
+
 def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> None:
     session = SearchSession()
     monkeypatch.setattr(
@@ -299,7 +335,7 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
         "both", "vector-only", "keyword-only",
     ]
     initialization = FakeOfficialRetriever.initialization
-    assert initialization["vector_index_name"] == "graph_evidence_embedding"
+    assert initialization["vector_index_name"] == "graph_evidence_embedding_1"
     assert initialization["fulltext_index_name"] == "graph_evidence_fulltext"
     assert initialization["neo4j_database"] == "neo4j"
     assert "$run_id" in initialization["retrieval_query"]
