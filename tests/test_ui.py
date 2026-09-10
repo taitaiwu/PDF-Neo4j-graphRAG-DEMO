@@ -79,10 +79,16 @@ def test_delete_project_requires_confirmation(tmp_path, monkeypatch) -> None:
     cancelled = ui.delete_project_for_ui(project["project_id"], False)
     assert ui.load_project(project["project_id"])["name"] == "刪除測試"
     assert "取消" in cancelled[2]
+    assert cancelled[-1] is False
+    assert "choices" not in ui.refresh_projects_after_delete_for_ui(False)
 
     deleted = ui.delete_project_for_ui(project["project_id"], True)
     assert "已刪除" in deleted[2]
-    assert all(update["interactive"] is False for update in deleted[3:])
+    assert all(update["interactive"] is False for update in deleted[3:-1])
+    assert deleted[-1] is True
+    refreshed = ui.refresh_projects_after_delete_for_ui(True)
+    assert refreshed["choices"] == []
+    assert refreshed["value"] is None
     assert ui.list_projects() == []
 
 
@@ -97,6 +103,11 @@ def test_delete_button_uses_browser_confirmation() -> None:
         if any(target[0] == button["id"] for target in item.get("targets", []))
     )
     assert "window.confirm" in dependency["js"]
+    assert any(
+        str(item.get("api_name", "")).startswith("refresh_projects_after_delete_for_ui")
+        and item.get("trigger_after") == dependency["id"]
+        for item in app.config["dependencies"]
+    )
 
 
 def test_build_app_has_automatic_evaluation_page() -> None:
