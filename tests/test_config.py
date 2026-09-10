@@ -1,6 +1,12 @@
 import pytest
 
-from manual_graphrag.config import BuildConfig, public_settings
+from manual_graphrag.config import (
+    OPENAI_EMBEDDING_MODELS,
+    OPENAI_LLM_MODELS,
+    BuildConfig,
+    model_choices,
+    public_settings,
+)
 
 
 def test_build_config_accepts_valid_values() -> None:
@@ -17,3 +23,19 @@ def test_build_config_rejects_invalid_chunk_values(size: int, overlap: int) -> N
 def test_public_settings_removes_secrets() -> None:
     safe = public_settings({"api_key": "secret", "neo4j_password": "secret", "uri": "bolt://db"})
     assert safe == {"uri": "bolt://db"}
+
+
+def test_model_choices_include_openai_options_and_keep_custom_current_value() -> None:
+    llm_choices = model_choices("provider/custom", defaults=OPENAI_LLM_MODELS)
+    embedding_choices = model_choices(
+        "provider/embed", defaults=OPENAI_EMBEDDING_MODELS
+    )
+
+    assert llm_choices[0] == "provider/custom"
+    assert {"gpt-4.1", "gpt-4o-mini"}.issubset(llm_choices)
+    assert embedding_choices[0] == "provider/embed"
+    assert {
+        "text-embedding-3-large",
+        "text-embedding-3-small",
+        "text-embedding-ada-002",
+    }.issubset(embedding_choices)

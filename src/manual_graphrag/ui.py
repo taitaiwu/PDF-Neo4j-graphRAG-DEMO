@@ -10,7 +10,12 @@ from uuid import uuid4
 import gradio as gr
 
 from .chunking import TextChunk, chunk_pages, preview_rows_for_page
-from .config import public_settings
+from .config import (
+    OPENAI_EMBEDDING_MODELS,
+    OPENAI_LLM_MODELS,
+    model_choices,
+    public_settings,
+)
 from .env_store import load_env, save_env
 from .evaluation_service import generate_evaluation_questions, judge_evaluation_answer
 from .graph_service import (
@@ -1089,7 +1094,10 @@ def build_app() -> gr.Blocks:
                 )
                 with gr.Row():
                     graph_llm_model = gr.Dropdown(
-                        choices=list(dict.fromkeys([env["BUILD_MODEL"], env["ANSWER_MODEL"]])),
+                        choices=model_choices(
+                            env["BUILD_MODEL"], env["ANSWER_MODEL"],
+                            defaults=OPENAI_LLM_MODELS,
+                        ),
                         value=env["BUILD_MODEL"],
                         allow_custom_value=True,
                         label="Schema 規劃 LLM",
@@ -1155,8 +1163,9 @@ def build_app() -> gr.Blocks:
                     "確認上方 JSON 後執行全部 chunks；檢查抽取結果後，再手動匯入 Neo4j。"
                 )
                 extraction_llm_model = gr.Dropdown(
-                    choices=list(
-                        dict.fromkeys([env["BUILD_MODEL"], env["ANSWER_MODEL"]])
+                    choices=model_choices(
+                        env["BUILD_MODEL"], env["ANSWER_MODEL"],
+                        defaults=OPENAI_LLM_MODELS,
                     ),
                     value=env["BUILD_MODEL"],
                     allow_custom_value=True,
@@ -1190,7 +1199,9 @@ def build_app() -> gr.Blocks:
                     "確認上方抽取結果後，選擇 Embedding 模型並匯入 Neo4j。"
                 )
                 graph_embedding_model = gr.Dropdown(
-                    choices=[env["EMBEDDING_MODEL"]],
+                    choices=model_choices(
+                        env["EMBEDDING_MODEL"], defaults=OPENAI_EMBEDDING_MODELS
+                    ),
                     value=env["EMBEDDING_MODEL"],
                     allow_custom_value=True,
                     label="Embedding 模型",
@@ -1209,7 +1220,15 @@ def build_app() -> gr.Blocks:
                 "先建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
             )
             with gr.Row():
-                evaluation_model = gr.Textbox(label="產題、回答與評判模型", value=env["ANSWER_MODEL"])
+                evaluation_model = gr.Dropdown(
+                    choices=model_choices(
+                        env["ANSWER_MODEL"], env["BUILD_MODEL"],
+                        defaults=OPENAI_LLM_MODELS,
+                    ),
+                    value=env["ANSWER_MODEL"],
+                    allow_custom_value=True,
+                    label="產題、回答與評判模型",
+                )
                 evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="題目數量 N")
                 evaluation_retrieval_mode = gr.Radio(["GraphRAG", "向量 RAG"], value="GraphRAG", label="檢索模式")
                 evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
@@ -1260,7 +1279,15 @@ def build_app() -> gr.Blocks:
             gr.Markdown(
                 "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
             )
-            answer_model = gr.Textbox(label="問答 LLM", value=env["ANSWER_MODEL"])
+            answer_model = gr.Dropdown(
+                choices=model_choices(
+                    env["ANSWER_MODEL"], env["BUILD_MODEL"],
+                    defaults=OPENAI_LLM_MODELS,
+                ),
+                value=env["ANSWER_MODEL"],
+                allow_custom_value=True,
+                label="問答 LLM",
+            )
             question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
             with gr.Row():
                 retrieval_mode = gr.Radio(["GraphRAG", "向量 RAG"], value="GraphRAG", label="檢索模式")

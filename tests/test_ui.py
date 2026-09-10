@@ -11,6 +11,31 @@ def test_build_app_returns_blocks() -> None:
     assert isinstance(build_app(), gr.Blocks)
 
 
+def test_model_fields_offer_openai_models_and_allow_custom_values() -> None:
+    app = build_app()
+    labels = {
+        "Schema 規劃 LLM",
+        "知識圖譜抽取 LLM",
+        "Embedding 模型",
+        "產題、回答與評判模型",
+        "問答 LLM",
+    }
+    fields = {
+        component.get("props", {}).get("label"): component
+        for component in app.config["components"]
+        if component.get("props", {}).get("label") in labels
+    }
+
+    assert set(fields) == labels
+    assert all(field["type"] == "dropdown" for field in fields.values())
+    assert all(field["props"]["allow_custom_value"] for field in fields.values())
+    llm_choices = fields["問答 LLM"]["props"]["choices"]
+    embedding_choices = fields["Embedding 模型"]["props"]["choices"]
+    assert ("gpt-4.1", "gpt-4.1") in llm_choices
+    assert ("gpt-4o-mini", "gpt-4o-mini") in llm_choices
+    assert ("text-embedding-3-large", "text-embedding-3-large") in embedding_choices
+
+
 def test_plan_schema_button_uses_primary_variant() -> None:
     app = build_app()
     button = next(
