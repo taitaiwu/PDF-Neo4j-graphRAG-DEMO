@@ -44,6 +44,20 @@ def test_project_page_uses_automatic_refresh_and_save() -> None:
     )
 
 
+def test_build_app_has_automatic_evaluation_page() -> None:
+    app = build_app()
+    values = [
+        component.get("props", {}).get("value")
+        for component in app.config["components"]
+    ]
+
+    assert "從 PDF 建立題目與答案" in values
+    assert "一鍵測試" in values
+    assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "5. 問答測試" for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
+
+
 def test_build_app_has_manual_neo4j_import_button() -> None:
     app = build_app()
 
@@ -113,6 +127,44 @@ def test_project_answer_appends_history(monkeypatch) -> None:
     assert captured["document"] == "manual.pdf"
     assert captured["sources"] == [["來源"]]
     assert result[3][0][1:3] == ["問題", "答案"]
+
+
+def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
+    questions = [{"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}]
+    monkeypatch.setattr(ui, "generate_evaluation_questions", lambda *args: questions)
+    captured = {}
+    monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
+
+    status, rows, state, results = ui.generate_evaluation_for_ui(
+        "project", "endpoint", "key", "model", 1, "GraphRAG", 8,
+        [TextChunk(1, "text", (1,))],
+    )
+
+    assert status.startswith("✅")
+    assert rows[0][1:3] == ["Q", "A"]
+    assert state["questions"] == questions
+    assert captured["evaluation"]["questions"] == questions
+    assert results == []
+
+
+def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "實際答案", []))
+    monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *args: {"passed": True, "reason": "正確"})
+    captured = {}
+    monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
+    evaluation = {"questions": [
+        {"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}
+    ]}
+
+    status, rows, updated = ui.run_evaluation_for_ui(
+        "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
+        "model", "GraphRAG", 8, evaluation,
+    )
+
+    assert status == "✅ 測試完成：1 / 1 題通過。"
+    assert rows[0][3:] == ["實際答案", "✅ 通過", "正確"]
+    assert updated["results"][0]["passed"] is True
+    assert captured["evaluation"] == updated
 
 def test_preview_page_filters_chunks_and_reports_page() -> None:
     chunks = [

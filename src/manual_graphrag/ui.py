@@ -11,6 +11,7 @@ import gradio as gr
 from .chunking import TextChunk, chunk_pages, preview_rows_for_page
 from .config import public_settings
 from .env_store import load_env, save_env
+from .evaluation_service import generate_evaluation_questions, judge_evaluation_answer
 from .graph_service import (
     extract_graph,
     plan_graph_schema,
@@ -258,6 +259,117 @@ def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ..
     except (OSError, ValueError) as exc:
         return status, answer, sources, gr.update(), f"⚠️ 回答成功，但專案紀錄保存失敗：{exc}"
     return status, answer, sources, _history_rows(project.get("questions") or []), "✅ 問答紀錄已加入目前專案。"
+
+
+def _evaluation_question_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
+    return [[item["number"], item["question"], item["expected_answer"],
+             ", ".join(map(str, item.get("source_pages", [])))] for item in questions]
+
+
+def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]:
+    return [[item["number"], item["question"], item["expected_answer"],
+             item.get("actual_answer", ""), "✅ 通過" if item.get("passed") else "❌ 未通過",
+             item.get("reason", "")] for item in results]
+
+
+def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
+    if not project_id:
+        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
+    try:
+        project = load_project(project_id)
+    except (OSError, ValueError) as exc:
+        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
+    evaluation = project.get("evaluation") or {}
+    preferences = evaluation.get("preferences") or {}
+    questions = evaluation.get("questions") or []
+    results = evaluation.get("results") or []
+    env = load_env()
+    return (
+        evaluation, _evaluation_question_rows(questions), _evaluation_result_rows(results),
+        preferences.get("model", env["ANSWER_MODEL"]), preferences.get("question_count", 10),
+        preferences.get("retrieval_mode", "GraphRAG"), preferences.get("top_k", 8),
+        f"已載入 {len(questions)} 道題目與 {len(results)} 筆測試結果。",
+    )
+
+
+def save_evaluation_preferences_for_ui(
+    project_id: str, model: str, question_count: int, retrieval_mode: str, top_k: int
+) -> str:
+    if not project_id:
+        return "⚠️ 請先選擇專案。"
+    try:
+        project = load_project(project_id)
+        evaluation = dict(project.get("evaluation") or {})
+        evaluation["preferences"] = {
+            "model": model, "question_count": int(question_count),
+            "retrieval_mode": retrieval_mode, "top_k": int(top_k),
+        }
+        save_project(project_id, {"evaluation": evaluation})
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ 自動保存失敗：{exc}"
+    return "✅ 自動測試設定已保存。"
+
+
+def generate_evaluation_for_ui(
+    project_id: str, model_endpoint: str, api_key: str, model: str,
+    question_count: int, retrieval_mode: str, top_k: int,
+    chunks: list[TextChunk],
+) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
+    if not project_id:
+        return "❌ 請先建立或載入專案。", [], {}, []
+    try:
+        questions = generate_evaluation_questions(
+            model_endpoint, api_key, model, chunks, int(question_count)
+        )
+        evaluation = {
+            "preferences": {"model": model, "question_count": int(question_count),
+                            "retrieval_mode": retrieval_mode, "top_k": int(top_k)},
+            "questions": questions, "results": [],
+        }
+        save_project(project_id, {"evaluation": evaluation})
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ {exc}", [], {}, []
+    return f"✅ 已從 PDF 建立 {len(questions)} 道題目與標準答案。", _evaluation_question_rows(questions), evaluation, []
+
+
+def run_evaluation_for_ui(
+    project_id: str, model_endpoint: str, api_key: str,
+    neo4j_uri: str, neo4j_database: str, neo4j_username: str, neo4j_password: str,
+    model: str, retrieval_mode: str, top_k: int, evaluation: dict[str, Any],
+    progress=gr.Progress(),
+) -> tuple[str, list[list[object]], dict[str, Any]]:
+    questions = evaluation.get("questions") if evaluation else None
+    if not project_id:
+        return "❌ 請先建立或載入專案。", [], evaluation or {}
+    if not questions:
+        return "❌ 請先建立測試題目。", [], evaluation or {}
+    results = []
+    for index, item in enumerate(questions, start=1):
+        progress((index - 1) / len(questions), desc=f"測試第 {index} / {len(questions)} 題")
+        status, actual, _ = answer_question_for_ui(
+            model_endpoint, api_key, neo4j_uri, neo4j_database,
+            neo4j_username, neo4j_password, model, item["question"],
+            retrieval_mode, int(top_k),
+        )
+        if status.startswith("✅"):
+            try:
+                judgment = judge_evaluation_answer(
+                    model_endpoint, api_key, model, item["question"],
+                    item["expected_answer"], actual,
+                )
+            except ValueError as exc:
+                judgment = {"passed": False, "reason": f"評判失敗：{exc}"}
+        else:
+            judgment = {"passed": False, "reason": status}
+        results.append({**item, "actual_answer": actual, **judgment})
+    updated = dict(evaluation)
+    updated["results"] = results
+    try:
+        save_project(project_id, {"evaluation": updated})
+    except (OSError, ValueError) as exc:
+        return f"❌ 測試已完成，但保存失敗：{exc}", _evaluation_result_rows(results), updated
+    passed = sum(bool(item["passed"]) for item in results)
+    return f"✅ 測試完成：{passed} / {len(results)} 題通過。", _evaluation_result_rows(results), updated
 
 def initialize_page_range(
     file_path: str | None,
@@ -720,6 +832,7 @@ def build_app() -> gr.Blocks:
         preview_state = gr.State({})
         chunk_state = gr.State([])
         graph_state = gr.State({})
+        evaluation_state = gr.State({})
 
         with gr.Tab("0. 專案設定") as project_tab:
             gr.Markdown("### 專案工作區\n建立或載入專案後，可保存本頁面所有連線、模型、參數、Chunk、文件、建圖狀態與問答紀錄。")
@@ -920,7 +1033,32 @@ def build_app() -> gr.Blocks:
                 )
                 import_status = gr.Markdown("尚未執行 Embedding 與匯入。")
 
-        with gr.Tab("4. 問答測試"):
+        with gr.Tab("4. 自動問答測試") as evaluation_tab:
+            gr.Markdown(
+                "### 從 PDF 自動建立問答測試集\n"
+                "先建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
+            )
+            with gr.Row():
+                evaluation_model = gr.Textbox(label="產題、回答與評判模型", value=env["ANSWER_MODEL"])
+                evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="題目數量 N")
+                evaluation_retrieval_mode = gr.Radio(["GraphRAG", "向量 RAG"], value="GraphRAG", label="檢索模式")
+                evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
+            with gr.Row():
+                generate_evaluation_button = gr.Button("從 PDF 建立題目與答案", variant="primary")
+                run_evaluation_button = gr.Button("一鍵測試", variant="primary")
+            evaluation_status = gr.Markdown("請先載入專案並解析 PDF。")
+            gr.Markdown("#### 測試題目")
+            evaluation_questions_table = gr.Dataframe(
+                headers=["編號", "問題", "標準答案", "來源頁碼"],
+                interactive=False, wrap=True,
+            )
+            gr.Markdown("#### 測試結果")
+            evaluation_results_table = gr.Dataframe(
+                headers=["編號", "問題", "標準答案", "實際答案", "結果", "評判理由"],
+                interactive=False, wrap=True,
+            )
+
+        with gr.Tab("5. 問答測試"):
             gr.Markdown(
                 "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
             )
@@ -963,13 +1101,47 @@ def build_app() -> gr.Blocks:
                 wrap=True,
             )
 
-        with gr.Tab("5. 歷史紀錄"):
+        with gr.Tab("6. 歷史紀錄"):
             gr.Markdown("目前專案的問答紀錄；成功問答後會自動追加並保存。")
             project_history_status = gr.Markdown()
             history_table = gr.Dataframe(
                 headers=["時間", "問題", "回答", "模式", "文件"],
                 interactive=False, wrap=True,
             )
+
+        evaluation_tab.select(
+            load_evaluation_for_ui, inputs=project_selector,
+            outputs=[evaluation_state, evaluation_questions_table, evaluation_results_table,
+                     evaluation_model, evaluation_question_count,
+                     evaluation_retrieval_mode, evaluation_top_k, evaluation_status],
+        )
+        evaluation_preference_inputs = [
+            project_selector, evaluation_model, evaluation_question_count,
+            evaluation_retrieval_mode, evaluation_top_k,
+        ]
+        for component in [evaluation_model, evaluation_question_count,
+                          evaluation_retrieval_mode, evaluation_top_k]:
+            component.input(
+                save_evaluation_preferences_for_ui,
+                inputs=evaluation_preference_inputs, outputs=evaluation_status,
+                show_progress="hidden",
+            )
+        generate_evaluation_button.click(
+            generate_evaluation_for_ui,
+            inputs=[project_selector, model_endpoint, api_key, evaluation_model,
+                    evaluation_question_count, evaluation_retrieval_mode,
+                    evaluation_top_k, chunk_state],
+            outputs=[evaluation_status, evaluation_questions_table,
+                     evaluation_state, evaluation_results_table],
+        )
+        run_evaluation_button.click(
+            run_evaluation_for_ui,
+            inputs=[project_selector, model_endpoint, api_key, neo4j_uri,
+                    neo4j_database, neo4j_username, neo4j_password,
+                    evaluation_model, evaluation_retrieval_mode,
+                    evaluation_top_k, evaluation_state],
+            outputs=[evaluation_status, evaluation_results_table, evaluation_state],
+        )
 
         project_setting_inputs = [
             project_selector, pdf_file, preview_state, chunk_state, graph_state,
