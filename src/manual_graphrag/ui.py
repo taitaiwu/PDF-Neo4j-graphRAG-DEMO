@@ -196,6 +196,13 @@ def _history_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
              i.get("retrieval_mode", ""), i.get("document", "")] for i in reversed(questions)]
 
 
+def _display_retrieval_mode(value: str | None) -> str:
+    return {
+        "GraphRAG": "關聯擴展檢索",
+        "向量 RAG": "基本檢索",
+    }.get(value or "", value or "關聯擴展檢索")
+
+
 def _graph_rows(graph: dict[str, Any]) -> tuple[list[list[object]], list[list[object]]]:
     entities = [[
         item.get("name", ""), item.get("type", ""), item.get("description", ""),
@@ -302,7 +309,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         ),
         get("schema_sample_page_count", 10), get("extraction_llm_model", env["BUILD_MODEL"]),
         get("extraction_max_concurrent_requests", 3),
-        get("retrieval_mode", "GraphRAG"), get("top_k", 8), get("schema_text", ""),
+        _display_retrieval_mode(get("retrieval_mode")), get("top_k", 8), get("schema_text", ""),
         preview, chunks, graph,
         gr.update(minimum=page_start, maximum=page_end, value=page_start, interactive=bool(chunks)),
         rows, _page_status(page_start, page_end, len(rows)) if chunks else "請先解析 PDF。",
@@ -463,7 +470,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         evaluation, _evaluation_question_rows(questions), _evaluation_result_rows(results),
         preferences.get("generation_model", legacy_model),
         preferences.get("test_model", legacy_model), preferences.get("question_count", 10),
-        preferences.get("retrieval_mode", "GraphRAG"), preferences.get("top_k", 8),
+        preferences._display_retrieval_mode(get("retrieval_mode")), preferences.get("top_k", 8),
         f"已載入 {len(questions)} 道題目與 {len(results)} 筆測試結果。",
     )
 
@@ -1250,7 +1257,7 @@ def build_app() -> gr.Blocks:
                         allow_custom_value=True,
                         label="回答與評判模型",
                     )
-                    evaluation_retrieval_mode = gr.Radio(["GraphRAG", "向量 RAG"], value="GraphRAG", label="檢索模式")
+                    evaluation_retrieval_mode = gr.Radio(["基本檢索", "關聯擴展檢索"], value="關聯擴展檢索", label="檢索模式")
                     evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
                 run_evaluation_button = gr.Button("一鍵測試", variant="primary")
             with gr.Row():
@@ -1308,7 +1315,7 @@ def build_app() -> gr.Blocks:
             )
             question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
             with gr.Row():
-                retrieval_mode = gr.Radio(["GraphRAG", "向量 RAG"], value="GraphRAG", label="檢索模式")
+                retrieval_mode = gr.Radio(["基本檢索", "關聯擴展檢索"], value="關聯擴展檢索", label="檢索模式")
                 top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
             ask_button = gr.Button("送出問題", variant="primary")
             answer_status = gr.Markdown()

@@ -174,7 +174,7 @@ def search_graph_evidence(
                 if isinstance(item.content, dict)
             ][:int(top_k)]
 
-            if retrieval_mode == "GraphRAG" and selected:
+            if retrieval_mode in {"關聯擴展檢索", "GraphRAG"} and selected:
                 with driver.session(database=database.strip()) as session:
                     chunk_numbers = sorted({
                         number

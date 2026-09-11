@@ -321,7 +321,7 @@ def test_missing_dimension_index_replaces_upstream_attribute_error(monkeypatch) 
     with pytest.raises(ValueError) as error:
         neo4j_service.search_graph_evidence(
             "bolt://db", "neo4j", "user", "password", "run-1",
-            "question", [0.1] * 1536, "向量 RAG", 3,
+            "question", [0.1] * 1536, "基本檢索", 3,
         )
 
     message = str(error.value)
@@ -353,7 +353,7 @@ def test_search_dimension_error_instructs_user_to_reimport(monkeypatch) -> None:
     with pytest.raises(ValueError, match="重新執行.*Embedding 並匯入 Neo4j"):
         neo4j_service.search_graph_evidence(
             "bolt://db", "neo4j", "user", "password", "run-1",
-            "question", [0.1] * 1536, "向量 RAG", 3,
+            "question", [0.1] * 1536, "基本檢索", 3,
         )
 
 
@@ -370,7 +370,7 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
 
     results = neo4j_service.search_graph_evidence(
         "bolt://db", "neo4j", "user", "password", "run-1",
-        "E01 +(重試)", [0.1], "向量 RAG", 3,
+        "E01 +(重試)", [0.1], "基本檢索", 3,
     )
 
     assert [item["evidence_id"] for item in results] == [

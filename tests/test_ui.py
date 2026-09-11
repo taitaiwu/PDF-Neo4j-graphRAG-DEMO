@@ -231,7 +231,7 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
         "bolt://db", "neo4j", "user", "pass", "http://models", "key",
         "build", "embed", "answer", 1, 5, 1200, 100, 0.2, 3000,
         "詳細", 10, 12, 2, "全部頁面", 4, "extract", 2,
-        "GraphRAG", 6, '{"entity_types": []}',
+        "關聯擴展檢索", 6, '{"entity_types": []}',
     ]
     saved, save_status = ui.save_project_for_ui(*values)
     loaded = ui.load_project_for_ui(created["project_id"])
@@ -259,7 +259,7 @@ def test_project_answer_appends_history(monkeypatch) -> None:
     monkeypatch.setattr(ui, "append_question", fake_append)
     result = ui.answer_question_for_project_ui(
         "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
-        "answer-model", "問題", "GraphRAG", 8,
+        "answer-model", "問題", "關聯擴展檢索", 8,
     )
     assert captured["document"] == "manual.pdf"
     assert captured["sources"] == [["來源"]]
@@ -273,7 +273,7 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
 
     status, rows, state, results = ui.generate_evaluation_for_ui(
-        "project", "endpoint", "key", "generation-model", "test-model", 1, "GraphRAG", 8,
+        "project", "endpoint", "key", "generation-model", "test-model", 1, "關聯擴展檢索", 8,
         [TextChunk(1, "text", (1,))],
     )
 
@@ -296,7 +296,7 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
 
     status, rows, updated = ui.run_evaluation_for_ui(
         "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
-        "model", "GraphRAG", 8, evaluation,
+        "model", "關聯擴展檢索", 8, evaluation,
     )
 
     assert "答對 1 題 / 共 1 題" in status
@@ -319,7 +319,7 @@ def test_edit_questions_marks_dirty_and_requires_save() -> None:
     assert "尚未儲存" in status
     run_status, _, _ = ui.run_evaluation_for_ui(
         "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
-        "model", "GraphRAG", 8, state,
+        "model", "關聯擴展檢索", 8, state,
     )
     assert "尚未儲存" in run_status
 
@@ -643,10 +643,10 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
 
     status, answer, rows = ui.answer_question_for_ui(
         "http://models/v1", "key", "bolt://db", "neo4j", "user", "password",
-        "answer", " E01 怎麼處理？ ", "向量 RAG", 8,
+        "answer", " E01 怎麼處理？ ", "基本檢索", 8,
     )
 
-    assert status.startswith("✅ 向量 RAG")
+    assert status.startswith("✅ 基本檢索")
     assert answer == "請重新啟動。"
     assert captured["args"][5] == "E01 怎麼處理？"
     assert rows == [[
@@ -661,7 +661,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
 
     status = ui.save_evaluation_preferences_for_ui(
-        "project", "generation-model", "test-model", 12, "向量 RAG", 6
+        "project", "generation-model", "test-model", 12, "基本檢索", 6
     )
 
     assert status.startswith("✅")
@@ -669,16 +669,17 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
         "generation_model": "generation-model",
         "test_model": "test-model",
         "question_count": 12,
-        "retrieval_mode": "向量 RAG",
+        "retrieval_mode": "基本檢索",
         "top_k": 6,
     }
 
 
 def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     monkeypatch.setattr(ui, "load_project", lambda project_id: {
-        "evaluation": {"preferences": {"model": "legacy-model"}}
+        "evaluation": {"preferences": {"model": "legacy-model", "retrieval_mode": "GraphRAG"}}
     })
 
     loaded = ui.load_evaluation_for_ui("project")
 
     assert loaded[3:5] == ("legacy-model", "legacy-model")
+    assert loaded[6] == "關聯擴展檢索"

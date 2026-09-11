@@ -41,7 +41,7 @@ def answer_graph_question(
         raise ValueError("請輸入問題")
     if not answer_model.strip():
         raise ValueError("請選擇問答 LLM")
-    if retrieval_mode not in {"GraphRAG", "向量 RAG"}:
+    if retrieval_mode not in {"基本檢索", "關聯擴展檢索", "GraphRAG", "向量 RAG"}:
         raise ValueError("不支援的檢索模式")
     if not evidence:
         raise ValueError("Neo4j Vector Search 找不到相關證據")
