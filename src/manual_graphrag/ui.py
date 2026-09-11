@@ -147,7 +147,7 @@ def unlock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
 
 def delete_project_for_ui(
     project_id: str,
-) -> tuple[dict[str, Any], dict[str, Any], str, *tuple[Any, ...]]:
+) -> tuple[Any, ...]:
     try:
         name = delete_project(project_id)
     except (OSError, ValueError) as exc:
