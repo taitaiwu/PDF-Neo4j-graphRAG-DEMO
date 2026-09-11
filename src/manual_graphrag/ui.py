@@ -468,7 +468,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         evaluation, _evaluation_question_rows(questions), _evaluation_result_rows(results),
         preferences.get("generation_model", legacy_model),
         preferences.get("test_model", legacy_model), preferences.get("question_count", 10),
-        preferences._display_retrieval_mode(get("retrieval_mode")), preferences.get("top_k", 8),
+        _display_retrieval_mode(preferences.get("retrieval_mode")), preferences.get("top_k", 8),
         f"已載入 {len(questions)} 道題目與 {len(results)} 筆測試結果。",
     )
 
