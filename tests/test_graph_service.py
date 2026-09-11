@@ -239,8 +239,8 @@ def test_schema_planning_retries_when_type_limit_is_exceeded(monkeypatch) -> Non
 def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> None:
     monkeypatch.setattr(graph_service, "EXTRACTION_BATCH_LIMIT", 45)
     chunks = [
-        TextChunk(1, "設備 A", (1,)),
-        TextChunk(2, "設備 A 使用設備 B", (2,)),
+        TextChunk(1, "設備 A", (1,), document="manual-a.pdf"),
+        TextChunk(2, "設備 A 使用設備 B", (2,), document="manual-b.pdf"),
     ]
     responses = iter(
         [
@@ -297,6 +297,7 @@ def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> No
     assert len(extraction.entities) == 2
     assert extraction.entities[0]["source_chunk_numbers"] == [1, 2]
     assert extraction.entities[0]["source_pages"] == [1, 2]
+    assert extraction.entities[0]["source_documents"] == ["manual-a.pdf", "manual-b.pdf"]
     assert extraction.relationships == [
         {
             "source": "設備 A",
@@ -305,6 +306,7 @@ def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> No
             "description": "搭配使用",
             "source_chunk_numbers": [2],
             "source_pages": [2],
+            "source_documents": ["manual-b.pdf"],
         }
     ]
 

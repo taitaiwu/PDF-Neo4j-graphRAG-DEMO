@@ -14,10 +14,16 @@ class TextChunk:
     number: int
     text: str
     pages: tuple[int, ...]
+    document: str = ""
 
 
 def chunk_pages(
-    pages: list[PageText], chunk_size: int, chunk_overlap: int
+    pages: list[PageText],
+    chunk_size: int,
+    chunk_overlap: int,
+    *,
+    document: str = "",
+    start_number: int = 1,
 ) -> list[TextChunk]:
     if chunk_size <= 0:
         raise ValueError("chunk_size 必須大於 0")
@@ -43,14 +49,14 @@ def chunk_pages(
         text = "".join(char for char, _ in section).strip()
         pages_in_chunk = tuple(dict.fromkeys(page for _, page in section))
         if text:
-            chunks.append(TextChunk(len(chunks) + 1, text, pages_in_chunk))
+            chunks.append(TextChunk(start_number + len(chunks), text, pages_in_chunk, document))
         start += step
     return chunks
 
 
 def preview_rows(chunks: list[TextChunk], limit: int = 10) -> list[list[object]]:
     return [
-        [chunk.number, ", ".join(map(str, chunk.pages)), len(chunk.text), chunk.text]
+        [chunk.number, chunk.document, ", ".join(map(str, chunk.pages)), len(chunk.text), chunk.text]
         for chunk in chunks[:limit]
     ]
 
@@ -59,7 +65,7 @@ def preview_rows_for_page(
     chunks: list[TextChunk], page_number: int
 ) -> list[list[object]]:
     return [
-        [chunk.number, ", ".join(map(str, chunk.pages)), len(chunk.text), chunk.text]
+        [chunk.number, chunk.document, ", ".join(map(str, chunk.pages)), len(chunk.text), chunk.text]
         for chunk in chunks
         if page_number in chunk.pages
     ]

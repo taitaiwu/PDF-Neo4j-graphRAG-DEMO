@@ -91,7 +91,8 @@ def load_latest_graph(
     WITH document ORDER BY document.updated_at DESC LIMIT 1
     OPTIONAL MATCH (entity:ExtractedEntity)-[:IN_DOCUMENT]->(document)
     WITH document, collect(DISTINCT entity {
-        .name, .type, .description, .source_chunk_numbers, .source_pages
+        .name, .type, .description, .source_chunk_numbers, .source_pages,
+        .source_documents
     }) AS entities
     OPTIONAL MATCH (source:ExtractedEntity)-[relation:EXTRACTED_RELATION]->(target:ExtractedEntity)
     WHERE relation.run_id = document.run_id
@@ -101,7 +102,7 @@ def load_latest_graph(
            document.vector_index_name AS vector_index_name, entities,
            collect(DISTINCT relation {
                source: source.name, target: target.name, .type, .description,
-               .source_chunk_numbers, .source_pages
+               .source_chunk_numbers, .source_pages, .source_documents
            }) AS relationships
     """
     try:
@@ -139,7 +140,7 @@ def search_graph_evidence(
     WHERE node.run_id = $run_id
     RETURN node {
         .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
-        .source_chunk_numbers
+        .source_chunk_numbers, .source_documents
     } AS evidence, score
     """
     try:
@@ -201,7 +202,7 @@ def search_graph_evidence(
                         )
                         RETURN chunk {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers
+                            .source_pages, .source_chunk_numbers, .source_documents
                         } AS evidence
                         """,
                         run_id=run_id,
@@ -233,7 +234,7 @@ def search_graph_evidence(
                         )
                         RETURN entity {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers
+                            .source_pages, .source_chunk_numbers, .source_documents
                         } AS evidence
                         LIMIT $top_k
                         """,
@@ -263,7 +264,7 @@ def search_graph_evidence(
                         )
                         RETURN relation {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers
+                            .source_pages, .source_chunk_numbers, .source_documents
                         } AS evidence
                         LIMIT $top_k
                         """,
@@ -429,7 +430,8 @@ def _write_graph(
         })
         SET entity.description = item.description,
             entity.source_chunk_numbers = item.source_chunk_numbers,
-            entity.source_pages = item.source_pages
+            entity.source_pages = item.source_pages,
+            entity.source_documents = item.source_documents
         MERGE (entity)-[:IN_DOCUMENT]->(document)
         RETURN count(entity) AS count
         """,
@@ -448,7 +450,8 @@ def _write_graph(
         }]->(target)
         SET relation.description = item.description,
             relation.source_chunk_numbers = item.source_chunk_numbers,
-            relation.source_pages = item.source_pages
+            relation.source_pages = item.source_pages,
+            relation.source_documents = item.source_documents
         RETURN count(relation) AS count
         """,
         run_id=run_id,
@@ -463,6 +466,7 @@ def _write_graph(
             evidence.source = item.source, evidence.target = item.target,
             evidence.text = item.text, evidence.source_pages = item.source_pages,
             evidence.source_chunk_numbers = item.source_chunk_numbers,
+            evidence.source_documents = item.source_documents,
             evidence.embedding = item.embedding
         MERGE (evidence)-[:IN_DOCUMENT]->(document)
         """,

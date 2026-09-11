@@ -230,8 +230,9 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     document = tmp_path / "manual.pdf"
     document.write_bytes(b"pdf")
     values = [
-        created["project_id"], str(document), {"file_name": "manual.pdf"},
-        [TextChunk(1, "內容", (1,))], {
+        created["project_id"],
+        [{"file_name": "manual.pdf", "file_path": str(document)}],
+        [TextChunk(1, "內容", (1,), "manual.pdf")], {
             "run_id": "run-1", "document": "manual.pdf", "neo4j_imported": True,
             "entities": [{"name": "設備", "type": "DEVICE", "description": "說明",
                           "source_chunk_numbers": [1], "source_pages": [1]}],
@@ -247,17 +248,17 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     saved, save_status = ui.save_project_for_ui(*values)
     loaded = ui.load_project_for_ui(created["project_id"])
     assert save_status.startswith("✅")
-    assert Path(saved["document"]["path"]).read_bytes() == b"pdf"
+    assert Path(saved["documents"][0]["path"]).read_bytes() == b"pdf"
     assert loaded[0]["project_id"] == created["project_id"]
-    assert loaded[14:16] == (1200, 100)
-    assert loaded[30][0].text == "內容"
+    assert loaded[13:15] == (1200, 100)
+    assert loaded[29][0].text == "內容"
     stored_project = ui.load_project(created["project_id"])
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
-    assert loaded[36][0][:2] == ["設備", "DEVICE"]
-    assert loaded[37][0][:3] == ["設備", "USES", "零件"]
-    assert "1 個實體、1 筆關係" in loaded[38]
-    assert "已匯入 Neo4j" in loaded[39]
+    assert loaded[38][0][:2] == ["設備", "DEVICE"]
+    assert loaded[39][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[40]
+    assert "已匯入 Neo4j" in loaded[41]
 
 
 def test_project_answer_appends_history(monkeypatch) -> None:
@@ -411,29 +412,70 @@ def test_page_navigation_stays_within_document_bounds() -> None:
     assert ui.next_page(4, ranged_state) == 4
 
 
-def test_preview_pdf_initializes_page_navigation(monkeypatch) -> None:
+def test_add_document_for_ui_initializes_page_navigation(monkeypatch) -> None:
     pages = [PageText(2, "two"), PageText(3, "three")]
     chunks = [
-        TextChunk(1, "two", (2,)),
-        TextChunk(2, "three", (3,)),
+        TextChunk(1, "two", (2,), "manual.pdf"),
+        TextChunk(2, "three", (3,), "manual.pdf"),
     ]
     monkeypatch.setattr(ui, "extract_pdf", lambda path, start, end: (pages, []))
-    monkeypatch.setattr(ui, "chunk_pages", lambda *args: chunks)
+    monkeypatch.setattr(ui, "chunk_pages", lambda *args, **kwargs: chunks)
 
-    result = ui.preview_pdf("manual.pdf", 100, 0, 2, 3)
-    status, rows, state, stored_chunks, slider_update, page_status = result
+    result = ui.add_document_for_ui("manual.pdf", 100, 0, 2, 3, [], [])
+    (
+        status, rows, documents, stored_chunks, active_preview, active_chunks,
+        slider_update, page_status, documents_rows, pdf_reset,
+    ) = result
 
-    assert status.startswith("已解析第 2–3 頁，產生 2 個 chunk。")
+    assert status.startswith("✅「manual.pdf」第 2–3 頁，產生 2 個 chunk")
     assert [row[0] for row in rows] == [1]
-    assert state["page_count"] == 2
-    assert state["page_start"] == 2
-    assert state["page_end"] == 3
-    assert "chunks" not in state
-    assert stored_chunks is chunks
+    assert documents[0]["file_name"] == "manual.pdf"
+    assert documents[0]["page_count"] == 2
+    assert documents[0]["page_start"] == 2
+    assert documents[0]["page_end"] == 3
+    assert stored_chunks == chunks
+    assert active_chunks == chunks
+    assert active_preview["file_name"] == "manual.pdf"
     assert slider_update["minimum"] == 2
     assert slider_update["maximum"] == 3
     assert slider_update["value"] == 2
     assert page_status == "第 2 / 3 頁；顯示 1 個相關 chunk。"
+    assert documents_rows == [["manual.pdf", "2–3", 2]]
+
+
+def test_add_document_for_ui_rejects_duplicate_document_name(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ui, "extract_pdf", lambda path, start, end: ((_ for _ in ()).throw(AssertionError()))
+    )
+    existing = [{"file_name": "manual.pdf"}]
+
+    status, *_ = ui.add_document_for_ui("manual.pdf", 100, 0, 1, None, existing, [])
+
+    assert status.startswith("❌")
+    assert "同名文件" in status
+
+
+def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None:
+    def fake_extract_pdf(path, start, end):
+        name = Path(path).stem
+        return [PageText(1, name)], []
+
+    monkeypatch.setattr(ui, "extract_pdf", fake_extract_pdf)
+
+    result = ui.add_document_for_ui(
+        ["a.pdf", "b.pdf"], 1500, 200, 1, None, [], []
+    )
+    (
+        status, rows, documents, chunks, active_preview, active_chunks,
+        slider_update, page_status, documents_rows, pdf_reset,
+    ) = result
+
+    assert [doc["file_name"] for doc in documents] == ["a.pdf", "b.pdf"]
+    assert [chunk.number for chunk in chunks] == [1, 2]
+    assert [chunk.document for chunk in chunks] == ["a.pdf", "b.pdf"]
+    assert active_preview["file_name"] == "b.pdf"
+    assert "a.pdf" in status and "b.pdf" in status
+    assert "2 份文件" in status
 
 
 def test_initialize_page_range_defaults_end_to_last_page(monkeypatch) -> None:
@@ -530,7 +572,7 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
         3,
         [TextChunk(1, "text", (3,))],
         json.dumps(schema),
-        {"file_name": "manual.pdf"},
+        [{"file_name": "manual.pdf"}],
     )
 
     assert status.startswith("✅ 已處理 1 個 chunk")
@@ -667,7 +709,7 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
     assert captured["args"][5] == "E01 怎麼處理？"
     assert rows == [[
         "原文", "E01 排除方式", "official-hybrid",
-        "0.0300", "3", "2",
+        "0.0300", "3", "2", "",
     ]]
 
 

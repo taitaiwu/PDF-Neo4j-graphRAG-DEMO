@@ -555,6 +555,7 @@ def extract_graph(
                     "description": str(item.get("description", "")).strip(),
                     "source_chunk_numbers": [],
                     "source_pages": [],
+                    "source_documents": [],
                 },
             )
             _merge_sources(current, numbers, chunk_lookup)
@@ -582,6 +583,7 @@ def extract_graph(
                     "description": str(item.get("description", "")).strip(),
                     "source_chunk_numbers": [],
                     "source_pages": [],
+                    "source_documents": [],
                 },
             )
             _merge_sources(current, numbers, chunk_lookup)
@@ -616,3 +618,6 @@ def _merge_sources(
         for page in chunk_lookup[number].pages:
             if page not in item["source_pages"]:
                 item["source_pages"].append(page)
+        document = chunk_lookup[number].document
+        if document and document not in item["source_documents"]:
+            item["source_documents"].append(document)
