@@ -18,6 +18,12 @@ class ImportSummary:
     relationship_count: int
 
 
+def vector_index_name(dimensions: int) -> str:
+    if int(dimensions) < 1:
+        raise ValueError("Embedding 向量維度必須大於 0")
+    return f"graph_evidence_embedding_{int(dimensions)}"
+
+
 def _escape_fulltext_query(question: str) -> str:
     """Escape Lucene query syntax while preserving terms for the CJK analyzer."""
     return re.sub(
@@ -90,7 +96,9 @@ def load_latest_graph(
     OPTIONAL MATCH (source:ExtractedEntity)-[relation:EXTRACTED_RELATION]->(target:ExtractedEntity)
     WHERE relation.run_id = document.run_id
     RETURN document.run_id AS run_id, document.file_name AS document,
-           document.embedding_model AS embedding_model, entities,
+           document.embedding_model AS embedding_model,
+           document.embedding_dimensions AS embedding_dimensions,
+           document.vector_index_name AS vector_index_name, entities,
            collect(DISTINCT relation {
                source: source.name, target: target.name, .type, .description,
                .source_chunk_numbers, .source_pages
@@ -125,6 +133,7 @@ def search_graph_evidence(
     retrieval_mode: str,
     top_k: int,
 ) -> list[dict[str, Any]]:
+    target_vector_index = vector_index_name(len(embedding))
     retrieval_query = """
     WITH node, score
     WHERE node.run_id = $run_id
@@ -146,7 +155,7 @@ def search_graph_evidence(
 
             retriever = HybridCypherRetriever(
                 driver=driver,
-                vector_index_name="graph_evidence_embedding",
+                vector_index_name=target_vector_index,
                 fulltext_index_name="graph_evidence_fulltext",
                 retrieval_query=retrieval_query,
                 result_formatter=_format_hybrid_record,
@@ -165,7 +174,7 @@ def search_graph_evidence(
                 if isinstance(item.content, dict)
             ][:int(top_k)]
 
-            if retrieval_mode == "GraphRAG" and selected:
+            if retrieval_mode in {"關聯擴展檢索", "GraphRAG"} and selected:
                 with driver.session(database=database.strip()) as session:
                     chunk_numbers = sorted({
                         number
@@ -269,11 +278,23 @@ def search_graph_evidence(
                         if record["evidence"].get("evidence_id", "") not in selected_ids
                     )
     except (DriverError, Neo4jError, Neo4jGraphRagError, OSError, ValueError) as exc:
-        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}") from exc
+        detail = str(exc)
+        guidance = ""
+        if "dimensionality" in detail.casefold() or "dimension" in detail.casefold() or "index" in detail.casefold():
+            guidance = " 請使用目前的 Embedding 模型重新執行「Embedding 並匯入 Neo4j」以建立對應維度索引。"
+        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}{guidance}") from exc
     except Exception as exc:
-        # The official retriever currently raises a plain Exception when an
-        # expected index is missing; keep the UI error contract consistent.
-        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}") from exc
+        # neo4j-graphrag 1.19.0 tries to format a missing-index error with the
+        # nonexistent `self.index_name` attribute. Replace that implementation
+        # detail with the actual index requested by this application.
+        if isinstance(exc, AttributeError) and "index_name" in str(exc):
+            detail = f"找不到向量索引 `{target_vector_index}`。"
+        else:
+            detail = str(exc)
+        raise ValueError(
+            f"Neo4j 官方混合檢索失敗：{detail} "
+            "請使用目前的 Embedding 模型重新執行「Embedding 並匯入 Neo4j」。"
+        ) from exc
     return selected
 
 
@@ -290,8 +311,6 @@ def import_extraction(
     entities: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
-    import_mode: str = "保留既有圖譜",
-    destructive_confirmed: bool = False,
 ) -> ImportSummary:
     if not uri.strip():
         raise ValueError("請先填寫 Neo4j URI")
@@ -303,19 +322,28 @@ def import_extraction(
         raise ValueError("請先填寫 Neo4j Password")
     if not evidence or not evidence[0].get("embedding"):
         raise ValueError("沒有可寫入 Neo4j Vector Index 的向量證據")
-    allowed_modes = {"保留既有圖譜", "取代最近一次圖譜", "清空本工具所有圖譜"}
-    if import_mode not in allowed_modes:
-        raise ValueError("不支援的 Neo4j 匯入模式")
-    if import_mode != "保留既有圖譜" and not destructive_confirmed:
-        raise ValueError("取代或清空資料前必須勾選確認")
-
     try:
         with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
             driver.verify_connectivity()
             with driver.session(database=database.strip()) as session:
                 dimensions = len(evidence[0]["embedding"])
+                index_name = vector_index_name(dimensions)
+                # Neo4j permits only one vector index for the same label and
+                # property schema. IF NOT EXISTS would silently keep an older
+                # index with a different dimension, so remove all indexes
+                # owned by this application before creating the current one.
+                existing_indexes = session.run(
+                    "SHOW VECTOR INDEXES YIELD name "
+                    "WHERE name = 'graph_evidence_embedding' "
+                    "OR name STARTS WITH 'graph_evidence_embedding_' "
+                    "RETURN name"
+                ).data()
+                for record in existing_indexes:
+                    old_index_name = str(record.get("name", ""))
+                    if re.fullmatch(r"graph_evidence_embedding(?:_\d+)?", old_index_name):
+                        session.run(f"DROP INDEX `{old_index_name}` IF EXISTS").consume()
                 session.run(
-                    "CREATE VECTOR INDEX graph_evidence_embedding IF NOT EXISTS "
+                    f"CREATE VECTOR INDEX {index_name} IF NOT EXISTS "
                     "FOR (e:GraphEvidence) ON (e.embedding) OPTIONS {"
                     "indexConfig: {`vector.dimensions`: "
                     f"{dimensions}, "
@@ -326,6 +354,10 @@ def import_extraction(
                     "FOR (e:GraphEvidence) ON EACH [e.text, e.name, e.source, e.target] "
                     "OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}"
                 ).consume()
+                # Waiting by a just-created index name can race Neo4j schema
+                # propagation and incorrectly raise IndexNotFound. Await all
+                # indexes only after both DDL statements have committed.
+                session.run("CALL db.awaitIndexes(300)").consume()
                 counts = session.execute_write(
                     _write_graph,
                     run_id,
@@ -336,7 +368,8 @@ def import_extraction(
                     entities,
                     relationships,
                     evidence,
-                    import_mode,
+                    dimensions,
+                    index_name,
                 )
     except (DriverError, Neo4jError, OSError, ValueError) as exc:
         if isinstance(exc, ValueError) and str(exc).startswith("請先填寫"):
@@ -355,29 +388,16 @@ def _write_graph(
     entities: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
-    import_mode: str,
+    embedding_dimensions: int,
+    vector_index: str,
 ) -> dict[str, int]:
-    if import_mode == "清空本工具所有圖譜":
-        transaction.run(
-            """
-            MATCH (node)
-            WHERE node:GraphDocument OR node:ExtractedEntity OR node:GraphEvidence
-            DETACH DELETE node
-            """
-        ).consume()
-    elif import_mode == "取代最近一次圖譜":
-        record = transaction.run(
-            """
-            MATCH (document:GraphDocument)
-            RETURN document.run_id AS run_id
-            ORDER BY document.updated_at DESC LIMIT 1
-            """
-        ).single()
-        if record:
-            transaction.run(
-                "MATCH (node) WHERE node.run_id = $run_id DETACH DELETE node",
-                run_id=record["run_id"],
-            ).consume()
+    transaction.run(
+        """
+        MATCH (node)
+        WHERE node:GraphDocument OR node:ExtractedEntity OR node:GraphEvidence
+        DETACH DELETE node
+        """
+    ).consume()
 
     transaction.run(
         """
@@ -385,6 +405,8 @@ def _write_graph(
         SET document.file_name = $document_name,
             document.llm_model = $llm_model,
             document.embedding_model = $embedding_model,
+            document.embedding_dimensions = $embedding_dimensions,
+            document.vector_index_name = $vector_index_name,
             document.schema_json = $schema_json,
             document.updated_at = datetime()
         """,
@@ -392,6 +414,8 @@ def _write_graph(
         document_name=document_name,
         llm_model=llm_model,
         embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
+        vector_index_name=vector_index,
         schema_json=json.dumps(schema, ensure_ascii=False),
     ).consume()
     entity_result = transaction.run(

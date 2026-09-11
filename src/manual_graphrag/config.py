@@ -3,6 +3,31 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 
+OPENAI_LLM_MODELS = (
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4o",
+    "gpt-4o-mini",
+)
+
+OPENAI_EMBEDDING_MODELS = (
+    "text-embedding-3-large",
+    "text-embedding-3-small",
+    "text-embedding-ada-002",
+)
+
+
+def model_choices(*current_models: str, defaults: tuple[str, ...]) -> list[str]:
+    """Return unique model choices while retaining provider-specific current values."""
+    return list(
+        dict.fromkeys(
+            model.strip()
+            for model in (*current_models, *defaults)
+            if model and model.strip()
+        )
+    )
+
+
 @dataclass(frozen=True)
 class BuildConfig:
     build_model: str
