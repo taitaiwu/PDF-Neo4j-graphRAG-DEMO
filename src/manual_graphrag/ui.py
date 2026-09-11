@@ -447,27 +447,30 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
 
 def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     if not project_id:
-        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
+        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
     try:
         project = load_project(project_id)
     except (OSError, ValueError) as exc:
-        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
+        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
     evaluation = dict(project.get("evaluation") or {})
     evaluation.setdefault("dirty", False)
     preferences = evaluation.get("preferences") or {}
     questions = evaluation.get("questions") or []
     results = evaluation.get("results") or []
     env = load_env()
+    legacy_model = preferences.get("model", env["ANSWER_MODEL"])
     return (
         evaluation, _evaluation_question_rows(questions), _evaluation_result_rows(results),
-        preferences.get("model", env["ANSWER_MODEL"]), preferences.get("question_count", 10),
+        preferences.get("generation_model", legacy_model),
+        preferences.get("test_model", legacy_model), preferences.get("question_count", 10),
         preferences.get("retrieval_mode", "GraphRAG"), preferences.get("top_k", 8),
         f"已載入 {len(questions)} 道題目與 {len(results)} 筆測試結果。",
     )
 
 
 def save_evaluation_preferences_for_ui(
-    project_id: str, model: str, question_count: int, retrieval_mode: str, top_k: int
+    project_id: str, generation_model: str, test_model: str, question_count: int,
+    retrieval_mode: str, top_k: int,
 ) -> str:
     if not project_id:
         return "⚠️ 請先選擇專案。"
@@ -475,7 +478,8 @@ def save_evaluation_preferences_for_ui(
         project = load_project(project_id)
         evaluation = dict(project.get("evaluation") or {})
         evaluation["preferences"] = {
-            "model": model, "question_count": int(question_count),
+            "generation_model": generation_model, "test_model": test_model,
+            "question_count": int(question_count),
             "retrieval_mode": retrieval_mode, "top_k": int(top_k),
         }
         save_project(project_id, {"evaluation": evaluation})
@@ -485,18 +489,19 @@ def save_evaluation_preferences_for_ui(
 
 
 def generate_evaluation_for_ui(
-    project_id: str, model_endpoint: str, api_key: str, model: str,
-    question_count: int, retrieval_mode: str, top_k: int,
+    project_id: str, model_endpoint: str, api_key: str, generation_model: str,
+    test_model: str, question_count: int, retrieval_mode: str, top_k: int,
     chunks: list[TextChunk],
 ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
     if not project_id:
         return "❌ 請先建立或載入專案。", [], {}, []
     try:
         questions = generate_evaluation_questions(
-            model_endpoint, api_key, model, chunks, int(question_count)
+            model_endpoint, api_key, generation_model, chunks, int(question_count)
         )
         evaluation = {
-            "preferences": {"model": model, "question_count": int(question_count),
+            "preferences": {"generation_model": generation_model, "test_model": test_model,
+                            "question_count": int(question_count),
                             "retrieval_mode": retrieval_mode, "top_k": int(top_k)},
             "questions": questions, "results": [], "dirty": False,
         }
@@ -1219,21 +1224,34 @@ def build_app() -> gr.Blocks:
                 "### 從 PDF 自動建立問答測試集\n"
                 "先建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
             )
-            with gr.Row():
-                evaluation_model = gr.Dropdown(
-                    choices=model_choices(
-                        env["ANSWER_MODEL"], env["BUILD_MODEL"],
-                        defaults=OPENAI_LLM_MODELS,
-                    ),
-                    value=env["ANSWER_MODEL"],
-                    allow_custom_value=True,
-                    label="產題、回答與評判模型",
-                )
-                evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="題目數量 N")
-                evaluation_retrieval_mode = gr.Radio(["GraphRAG", "向量 RAG"], value="GraphRAG", label="檢索模式")
-                evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
-            with gr.Row():
+            with gr.Group():
+                gr.Markdown("#### 生題設定")
+                with gr.Row():
+                    evaluation_generation_model = gr.Dropdown(
+                        choices=model_choices(
+                            env["ANSWER_MODEL"], env["BUILD_MODEL"],
+                            defaults=OPENAI_LLM_MODELS,
+                        ),
+                        value=env["ANSWER_MODEL"],
+                        allow_custom_value=True,
+                        label="生題模型",
+                    )
+                    evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="題目數量 N")
                 generate_evaluation_button = gr.Button("從 PDF 建立題目與答案", variant="primary")
+            with gr.Group():
+                gr.Markdown("#### 測試模型設定")
+                with gr.Row():
+                    evaluation_test_model = gr.Dropdown(
+                        choices=model_choices(
+                            env["ANSWER_MODEL"], env["BUILD_MODEL"],
+                            defaults=OPENAI_LLM_MODELS,
+                        ),
+                        value=env["ANSWER_MODEL"],
+                        allow_custom_value=True,
+                        label="回答與評判模型",
+                    )
+                    evaluation_retrieval_mode = gr.Radio(["GraphRAG", "向量 RAG"], value="GraphRAG", label="檢索模式")
+                    evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
                 run_evaluation_button = gr.Button("一鍵測試", variant="primary")
             with gr.Row():
                 evaluation_import_file = gr.File(
@@ -1337,14 +1355,14 @@ def build_app() -> gr.Blocks:
         evaluation_tab.select(
             load_evaluation_for_ui, inputs=project_selector,
             outputs=[evaluation_state, evaluation_questions_table, evaluation_results_table,
-                     evaluation_model, evaluation_question_count,
+                     evaluation_generation_model, evaluation_test_model, evaluation_question_count,
                      evaluation_retrieval_mode, evaluation_top_k, evaluation_status],
         )
         evaluation_preference_inputs = [
-            project_selector, evaluation_model, evaluation_question_count,
+            project_selector, evaluation_generation_model, evaluation_test_model, evaluation_question_count,
             evaluation_retrieval_mode, evaluation_top_k,
         ]
-        for component in [evaluation_model, evaluation_question_count,
+        for component in [evaluation_generation_model, evaluation_test_model, evaluation_question_count,
                           evaluation_retrieval_mode, evaluation_top_k]:
             component.input(
                 save_evaluation_preferences_for_ui,
@@ -1374,8 +1392,8 @@ def build_app() -> gr.Blocks:
         )
         generate_evaluation_button.click(
             generate_evaluation_for_ui,
-            inputs=[project_selector, model_endpoint, api_key, evaluation_model,
-                    evaluation_question_count, evaluation_retrieval_mode,
+            inputs=[project_selector, model_endpoint, api_key, evaluation_generation_model,
+                    evaluation_test_model, evaluation_question_count, evaluation_retrieval_mode,
                     evaluation_top_k, chunk_state],
             outputs=[evaluation_status, evaluation_questions_table,
                      evaluation_state, evaluation_results_table],
@@ -1384,7 +1402,7 @@ def build_app() -> gr.Blocks:
             run_evaluation_for_ui,
             inputs=[project_selector, model_endpoint, api_key, neo4j_uri,
                     neo4j_database, neo4j_username, neo4j_password,
-                    evaluation_model, evaluation_retrieval_mode,
+                    evaluation_test_model, evaluation_retrieval_mode,
                     evaluation_top_k, evaluation_state],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
         )

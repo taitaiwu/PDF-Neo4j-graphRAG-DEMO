@@ -17,7 +17,8 @@ def test_model_fields_offer_openai_models_and_allow_custom_values() -> None:
         "Schema 規劃 LLM",
         "知識圖譜抽取 LLM",
         "Embedding 模型",
-        "產題、回答與評判模型",
+        "生題模型",
+        "回答與評判模型",
         "問答 LLM",
     }
     fields = {
@@ -154,6 +155,8 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     assert "匯入題目" in values
     assert "儲存題目" in values
     assert "匯出題目" in values
+    assert "#### 生題設定" in values
+    assert "#### 測試模型設定" in values
     assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "5. 問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
@@ -270,13 +273,14 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
 
     status, rows, state, results = ui.generate_evaluation_for_ui(
-        "project", "endpoint", "key", "model", 1, "GraphRAG", 8,
+        "project", "endpoint", "key", "generation-model", "test-model", 1, "GraphRAG", 8,
         [TextChunk(1, "text", (1,))],
     )
 
     assert status.startswith("✅")
     assert rows[0][1:3] == ["Q", "A"]
     assert state["questions"] == questions
+    assert state["preferences"]["generation_model"] == "generation-model"
     assert captured["evaluation"]["questions"] == questions
     assert results == []
 
@@ -649,3 +653,32 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
         "原文", "E01 排除方式", "official-hybrid",
         "0.0300", "3", "2",
     ]]
+
+
+def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(ui, "load_project", lambda project_id: {"evaluation": {}})
+    monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
+
+    status = ui.save_evaluation_preferences_for_ui(
+        "project", "generation-model", "test-model", 12, "向量 RAG", 6
+    )
+
+    assert status.startswith("✅")
+    assert captured["evaluation"]["preferences"] == {
+        "generation_model": "generation-model",
+        "test_model": "test-model",
+        "question_count": 12,
+        "retrieval_mode": "向量 RAG",
+        "top_k": 6,
+    }
+
+
+def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "load_project", lambda project_id: {
+        "evaluation": {"preferences": {"model": "legacy-model"}}
+    })
+
+    loaded = ui.load_evaluation_for_ui("project")
+
+    assert loaded[3:5] == ("legacy-model", "legacy-model")
