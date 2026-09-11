@@ -298,7 +298,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         get("neo4j_username", env["NEO4J_USERNAME"]), get("neo4j_password", env["NEO4J_PASSWORD"]),
         get("model_endpoint", env["MODEL_API_BASE"]), get("api_key", env["MODEL_API_KEY"]),
         get("graph_llm_model", env["BUILD_MODEL"]), get("graph_embedding_model", env["EMBEDDING_MODEL"]),
-        get("answer_model", env["ANSWER_MODEL"]), get("start_page", 1), get("end_page"),
+        get("answer_model", env["ANSWER_MODEL"]), get("start_page", 1), get("end_page") or 1,
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
         get("graph_max_output_tokens", 4096), get("schema_granularity", "平衡"),
         get("max_entity_types", 15), get("max_relationship_types", 20),
@@ -570,13 +570,13 @@ def initialize_page_range(
     if not file_path:
         return (
             gr.update(value=1),
-            gr.update(value=None),
+            gr.update(value=1),
             "尚未解析 PDF。",
         )
     try:
         page_count = get_pdf_page_count(file_path)
     except ValueError as exc:
-        return gr.update(value=1), gr.update(value=None), f"❌ {exc}"
+        return gr.update(value=1), gr.update(value=1), f"❌ {exc}"
     return (
         gr.update(value=1, maximum=page_count),
         gr.update(value=page_count, maximum=page_count),
@@ -1067,7 +1067,7 @@ def build_app() -> gr.Blocks:
                             value=1, minimum=1, precision=0, label="解析起始頁"
                         )
                         end_page = gr.Number(
-                            value=None,
+                            value=1,
                             minimum=1,
                             precision=0,
                             label="解析結束頁（上傳後自動設為最後一頁）",

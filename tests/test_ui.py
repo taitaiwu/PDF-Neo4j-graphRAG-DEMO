@@ -70,6 +70,18 @@ def test_project_page_uses_automatic_refresh_and_save() -> None:
     )
 
 
+def test_pdf_page_range_has_valid_values_before_upload() -> None:
+    app = build_app()
+    fields = {
+        component.get("props", {}).get("label"): component
+        for component in app.config["components"]
+    }
+
+    assert fields["解析起始頁"]["props"]["value"] == 1
+    assert fields["解析結束頁（上傳後自動設為最後一頁）"]["props"]["value"] == 1
+    assert fields["解析結束頁（上傳後自動設為最後一頁）"]["props"]["minimum"] == 1
+
+
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
@@ -433,6 +445,14 @@ def test_preview_pdf_initializes_page_navigation(monkeypatch) -> None:
     assert slider_update["maximum"] == 3
     assert slider_update["value"] == 2
     assert page_status == "第 2 / 3 頁；顯示 1 個相關 chunk。"
+
+
+def test_initialize_page_range_without_pdf_keeps_valid_page_values() -> None:
+    start_update, end_update, status = ui.initialize_page_range(None)
+
+    assert start_update["value"] == 1
+    assert end_update["value"] == 1
+    assert status == "尚未解析 PDF。"
 
 
 def test_initialize_page_range_defaults_end_to_last_page(monkeypatch) -> None:
