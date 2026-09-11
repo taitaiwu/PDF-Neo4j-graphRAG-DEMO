@@ -153,10 +153,20 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     assert "從 PDF 建立題目與答案" in values
     assert "一鍵測試" in values
     assert "匯入題目" in values
-    assert "儲存題目" in values
+    assert "儲存題目" not in values
     assert "匯出題目" in values
     assert "#### 生題設定" in values
     assert "#### 測試模型設定" in values
+    question_table = next(
+        component for component in app.config["components"]
+        if component.get("props", {}).get("headers")
+        == ["編號", "問題", "標準答案", "來源頁碼"]
+    )
+    assert any(
+        str(dependency.get("api_name", "")).startswith("save_evaluation_questions_for_ui")
+        and [question_table["id"], "input"] in dependency.get("targets", [])
+        for dependency in app.config["dependencies"]
+    )
     assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "5. 問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
@@ -307,21 +317,22 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     assert captured["evaluation"] == updated
 
 
-def test_edit_questions_marks_dirty_and_requires_save() -> None:
-    state, status = ui.mark_evaluation_questions_dirty_for_ui(
-        [[9, "修改後問題", "修改後答案", "2, 3"]], {"results": [{"passed": True}]}
+def test_edit_questions_auto_save_and_clear_results(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
+
+    status, state, results = ui.save_evaluation_questions_for_ui(
+        "project", [[9, "修改後問題", "修改後答案", "2, 3"]],
+        {"results": [{"passed": True}]},
     )
 
-    assert state["dirty"] is True
+    assert status.startswith("✅ 已自動儲存")
+    assert state["dirty"] is False
     assert state["results"] == []
     assert state["questions"][0]["number"] == 1
     assert state["questions"][0]["source_pages"] == [2, 3]
-    assert "尚未儲存" in status
-    run_status, _, _ = ui.run_evaluation_for_ui(
-        "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
-        "model", "關聯擴展檢索", 8, state,
-    )
-    assert "尚未儲存" in run_status
+    assert captured["evaluation"] == state
+    assert results == []
 
 
 def test_save_and_export_edited_questions(tmp_path, monkeypatch) -> None:
@@ -343,7 +354,9 @@ def test_save_and_export_edited_questions(tmp_path, monkeypatch) -> None:
     assert payload["questions"][0]["source_pages"] == [1, 4]
 
 
-def test_import_questions_supports_json_and_csv(tmp_path) -> None:
+def test_import_questions_supports_json_and_csv(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("import-test")
     json_file = tmp_path / "questions.json"
     json_file.write_text(json.dumps({"questions": [
         {"question": "JSON Q", "expected_answer": "JSON A", "source_pages": [2]}
@@ -354,13 +367,14 @@ def test_import_questions_supports_json_and_csv(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    json_result = ui.import_evaluation_questions_for_ui(str(json_file), {})
-    csv_result = ui.import_evaluation_questions_for_ui(str(csv_file), {})
+    json_result = ui.import_evaluation_questions_for_ui(project["project_id"], str(json_file), {})
+    csv_result = ui.import_evaluation_questions_for_ui(project["project_id"], str(csv_file), {})
 
     assert json_result[2]["questions"][0]["question"] == "JSON Q"
     assert csv_result[2]["questions"][0]["expected_answer"] == "CSV A"
-    assert json_result[2]["dirty"] is True
-    assert "尚未儲存" in csv_result[0]
+    assert json_result[2]["dirty"] is False
+    assert csv_result[2]["dirty"] is False
+    assert "已匯入並自動儲存" in csv_result[0]
 
 def test_preview_page_filters_chunks_and_reports_page() -> None:
     chunks = [

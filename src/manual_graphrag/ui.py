@@ -371,18 +371,6 @@ def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
     return questions
 
 
-def mark_evaluation_questions_dirty_for_ui(
-    rows: Any, evaluation: dict[str, Any]
-) -> tuple[dict[str, Any], str]:
-    try:
-        questions = _questions_from_rows(rows)
-    except ValueError as exc:
-        return evaluation or {}, f"❌ {exc}；尚未儲存。"
-    updated = dict(evaluation or {})
-    updated.update({"questions": questions, "results": [], "dirty": True})
-    return updated, "⚠️ 題目或答案已修改，尚未儲存。"
-
-
 def save_evaluation_questions_for_ui(
     project_id: str, rows: Any, evaluation: dict[str, Any]
 ) -> tuple[str, dict[str, Any], list[list[object]]]:
@@ -394,13 +382,18 @@ def save_evaluation_questions_for_ui(
         updated.update({"questions": questions, "results": [], "dirty": False})
         save_project(project_id, {"evaluation": updated})
     except (OSError, ValueError) as exc:
-        return f"❌ {exc}；尚未儲存。", evaluation or {}, []
-    return f"✅ 已儲存 {len(questions)} 道題目。", updated, []
+        failed = dict(evaluation or {})
+        if "questions" in locals():
+            failed.update({"questions": questions, "results": [], "dirty": True})
+        return f"❌ {exc}；自動儲存失敗。", failed, []
+    return f"✅ 已自動儲存 {len(questions)} 道題目。", updated, []
 
 
 def import_evaluation_questions_for_ui(
-    file_path: str | None, evaluation: dict[str, Any]
+    project_id: str, file_path: str | None, evaluation: dict[str, Any]
 ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
+    if not project_id:
+        return "❌ 請先建立或載入專案。", [], evaluation or {}, []
     if not file_path:
         return "❌ 請選擇 JSON 或 CSV 題目檔。", [], evaluation or {}, []
     try:
@@ -425,8 +418,13 @@ def import_evaluation_questions_for_ui(
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return f"❌ 匯入失敗：{exc}", [], evaluation or {}, []
     updated = dict(evaluation or {})
-    updated.update({"questions": questions, "results": [], "dirty": True})
-    return (f"⚠️ 已匯入 {len(questions)} 道題目，尚未儲存。",
+    updated.update({"questions": questions, "results": [], "dirty": False})
+    try:
+        save_project(project_id, {"evaluation": updated})
+    except (OSError, ValueError) as exc:
+        updated["dirty"] = True
+        return f"❌ 匯入成功但自動儲存失敗：{exc}", _evaluation_question_rows(questions), updated, []
+    return (f"✅ 已匯入並自動儲存 {len(questions)} 道題目。",
             _evaluation_question_rows(questions), updated, [])
 
 
@@ -530,7 +528,7 @@ def run_evaluation_for_ui(
     if not questions:
         return "❌ 請先建立測試題目。", [], evaluation or {}
     if evaluation.get("dirty"):
-        return "❌ 題目或答案尚未儲存，請先按「儲存題目」。", [], evaluation
+        return "❌ 題目或答案尚未完成自動儲存，請稍後再試。", [], evaluation
     results = []
     for index, item in enumerate(questions, start=1):
         progress((index - 1) / len(questions), desc=f"測試第 {index} / {len(questions)} 題")
@@ -1265,7 +1263,6 @@ def build_app() -> gr.Blocks:
                     label="匯入題目（JSON／CSV）", file_types=[".json", ".csv"], type="filepath"
                 )
                 import_evaluation_button = gr.Button("匯入題目")
-                save_evaluation_questions_button = gr.Button("儲存題目", variant="primary")
                 export_evaluation_button = gr.Button("匯出題目")
                 evaluation_export_file = gr.File(label="題目 JSON", interactive=False)
             gr.HTML(
@@ -1377,20 +1374,16 @@ def build_app() -> gr.Blocks:
                 show_progress="hidden",
             )
         evaluation_questions_table.input(
-            mark_evaluation_questions_dirty_for_ui,
-            inputs=[evaluation_questions_table, evaluation_state],
-            outputs=[evaluation_state, evaluation_status], show_progress="hidden",
-        )
-        import_evaluation_button.click(
-            import_evaluation_questions_for_ui,
-            inputs=[evaluation_import_file, evaluation_state],
-            outputs=[evaluation_status, evaluation_questions_table,
-                     evaluation_state, evaluation_results_table],
-        )
-        save_evaluation_questions_button.click(
             save_evaluation_questions_for_ui,
             inputs=[project_selector, evaluation_questions_table, evaluation_state],
             outputs=[evaluation_status, evaluation_state, evaluation_results_table],
+            show_progress="hidden",
+        )
+        import_evaluation_button.click(
+            import_evaluation_questions_for_ui,
+            inputs=[project_selector, evaluation_import_file, evaluation_state],
+            outputs=[evaluation_status, evaluation_questions_table,
+                     evaluation_state, evaluation_results_table],
         )
         export_evaluation_button.click(
             export_evaluation_questions_for_ui,
