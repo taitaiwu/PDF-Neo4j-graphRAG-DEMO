@@ -255,10 +255,10 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     stored_project = ui.load_project(created["project_id"])
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
-    assert loaded[38][0][:2] == ["設備", "DEVICE"]
-    assert loaded[39][0][:3] == ["設備", "USES", "零件"]
-    assert "1 個實體、1 筆關係" in loaded[40]
-    assert "已匯入 Neo4j" in loaded[41]
+    assert loaded[39][0][:2] == ["設備", "DEVICE"]
+    assert loaded[40][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[41]
+    assert "已匯入 Neo4j" in loaded[42]
 
 
 def test_project_answer_appends_history(monkeypatch) -> None:
@@ -424,7 +424,7 @@ def test_add_document_for_ui_initializes_page_navigation(monkeypatch) -> None:
     result = ui.add_document_for_ui("manual.pdf", 100, 0, 2, 3, [], [])
     (
         status, rows, documents, stored_chunks, active_preview, active_chunks,
-        slider_update, page_status, documents_rows, pdf_reset,
+        slider_update, page_status, documents_rows, pdf_reset, remove_choices,
     ) = result
 
     assert status.startswith("✅「manual.pdf」第 2–3 頁，產生 2 個 chunk")
@@ -441,6 +441,7 @@ def test_add_document_for_ui_initializes_page_navigation(monkeypatch) -> None:
     assert slider_update["value"] == 2
     assert page_status == "第 2 / 3 頁；顯示 1 個相關 chunk。"
     assert documents_rows == [["manual.pdf", "2–3", 2]]
+    assert remove_choices["choices"] == ["manual.pdf"]
 
 
 def test_add_document_for_ui_rejects_duplicate_document_name(monkeypatch) -> None:
@@ -455,6 +456,78 @@ def test_add_document_for_ui_rejects_duplicate_document_name(monkeypatch) -> Non
     assert "同名文件" in status
 
 
+def test_remove_document_for_ui_prunes_documents_and_chunks_without_project(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ui, "remove_document", lambda *args: (_ for _ in ()).throw(AssertionError("不應呼叫"))
+    )
+    documents = [
+        {"file_name": "a.pdf", "page_start": 1, "page_end": 2},
+        {"file_name": "b.pdf", "page_start": 1, "page_end": 2},
+    ]
+    chunks = [
+        TextChunk(1, "a-text", (1,), "a.pdf"),
+        TextChunk(2, "b-text", (1,), "b.pdf"),
+    ]
+
+    result = ui.remove_document_for_ui("", "a.pdf", documents, chunks)
+    (
+        status, remaining_documents, remaining_chunks, active_preview, active_chunks,
+        slider_update, page_status, documents_rows, remove_choices, rows,
+    ) = result
+
+    assert status.startswith("✅ 已移除 1 份文件「a.pdf」")
+    assert [doc["file_name"] for doc in remaining_documents] == ["b.pdf"]
+    assert [chunk.document for chunk in remaining_chunks] == ["b.pdf"]
+    assert active_preview["file_name"] == "b.pdf"
+    assert active_chunks == remaining_chunks
+    assert documents_rows == [["b.pdf", "1–2", 0]]
+    assert remove_choices["choices"] == ["b.pdf"]
+
+
+def test_remove_document_for_ui_deletes_from_project_when_loaded(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        ui, "remove_document",
+        lambda project_id, file_name: captured.update(project_id=project_id, file_name=file_name),
+    )
+    documents = [{"file_name": "a.pdf", "page_start": 1, "page_end": 1}]
+
+    status, remaining_documents, *_ = ui.remove_document_for_ui(
+        "project-1", "a.pdf", documents, []
+    )
+
+    assert captured == {"project_id": "project-1", "file_name": "a.pdf"}
+    assert remaining_documents == []
+    assert status.startswith("✅")
+
+
+def test_remove_document_for_ui_supports_multi_select(monkeypatch) -> None:
+    removed = []
+    monkeypatch.setattr(
+        ui, "remove_document",
+        lambda project_id, file_name: removed.append(file_name),
+    )
+    documents = [
+        {"file_name": "a.pdf", "page_start": 1, "page_end": 1},
+        {"file_name": "b.pdf", "page_start": 1, "page_end": 1},
+        {"file_name": "c.pdf", "page_start": 1, "page_end": 1},
+    ]
+    chunks = [
+        TextChunk(1, "a", (1,), "a.pdf"),
+        TextChunk(2, "b", (1,), "b.pdf"),
+        TextChunk(3, "c", (1,), "c.pdf"),
+    ]
+
+    status, remaining_documents, remaining_chunks, *_ = ui.remove_document_for_ui(
+        "project-1", ["a.pdf", "b.pdf"], documents, chunks
+    )
+
+    assert sorted(removed) == ["a.pdf", "b.pdf"]
+    assert [doc["file_name"] for doc in remaining_documents] == ["c.pdf"]
+    assert [chunk.document for chunk in remaining_chunks] == ["c.pdf"]
+    assert "2 份文件" in status
+
+
 def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None:
     def fake_extract_pdf(path, start, end):
         name = Path(path).stem
@@ -467,7 +540,7 @@ def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None
     )
     (
         status, rows, documents, chunks, active_preview, active_chunks,
-        slider_update, page_status, documents_rows, pdf_reset,
+        slider_update, page_status, documents_rows, pdf_reset, remove_choices,
     ) = result
 
     assert [doc["file_name"] for doc in documents] == ["a.pdf", "b.pdf"]

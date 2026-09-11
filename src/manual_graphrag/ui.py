@@ -38,6 +38,7 @@ from .project_store import (
     delete_project,
     list_projects,
     load_project,
+    remove_document,
     save_project,
 )
 from .qa_service import answer_graph_question, check_embedding_connection, embedding_vectors
@@ -225,6 +226,12 @@ def _document_rows(documents: list[dict[str, Any]]) -> list[list[object]]:
     ]
 
 
+def _document_choices(documents: list[dict[str, Any]]) -> dict[str, Any]:
+    return gr.update(
+        choices=[doc.get("file_name", "") for doc in documents], value=[]
+    )
+
+
 def _history_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
     return [[i.get("asked_at", ""), i.get("question", ""), i.get("answer", ""),
              i.get("retrieval_mode", ""), i.get("document", "")] for i in reversed(questions)]
@@ -349,7 +356,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         get("extraction_max_concurrent_requests", 3),
         _display_retrieval_mode(get("retrieval_mode")), get("top_k", 8), get("schema_text", ""),
         documents, chunks, graph, active_preview, active_chunks,
-        _document_rows(documents),
+        _document_rows(documents), _document_choices(documents),
         gr.update(
             minimum=page_start, maximum=page_end, value=page_start,
             interactive=bool(active_chunks),
@@ -684,7 +691,7 @@ def add_document_for_ui(
 ) -> tuple[
     str, list[list[object]], list[dict[str, Any]], list[TextChunk],
     dict[str, Any], list[TextChunk], dict[str, Any], str,
-    list[list[object]], dict[str, Any],
+    list[list[object]], dict[str, Any], dict[str, Any],
 ]:
     documents = list(documents or [])
     chunks = list(chunks or [])
@@ -692,6 +699,7 @@ def add_document_for_ui(
         return (
             "請先上傳 PDF。", [], documents, chunks, {}, [],
             gr.update(), "尚未解析 PDF。", _document_rows(documents), gr.update(),
+            _document_choices(documents),
         )
     try:
         parsed_chunk_size = int(chunk_size)
@@ -704,6 +712,7 @@ def add_document_for_ui(
         return (
             f"❌ {exc}", [], documents, chunks, {}, [],
             gr.update(), "無法解析頁面。", _document_rows(documents), gr.update(),
+            _document_choices(documents),
         )
     requested_start = int(start_page)
     requested_end = None if end_page is None else int(end_page)
@@ -729,6 +738,7 @@ def add_document_for_ui(
         return (
             status, [], documents, chunks, {}, [],
             gr.update(), "無法解析頁面。", _document_rows(documents), gr.update(),
+            _document_choices(documents),
         )
     return (
         status,
@@ -746,6 +756,69 @@ def add_document_for_ui(
         _page_status(last_doc_state["page_start"], last_doc_state["page_end"], len(last_rows)),
         _document_rows(documents),
         gr.update(value=None),
+        _document_choices(documents),
+    )
+
+
+def remove_document_for_ui(
+    project_id: str,
+    file_names: list[str] | str | None,
+    documents: list[dict[str, Any]],
+    chunks: list[TextChunk],
+) -> tuple[
+    str, list[dict[str, Any]], list[TextChunk], dict[str, Any], list[TextChunk],
+    dict[str, Any], str, list[list[object]], dict[str, Any], list[list[object]],
+]:
+    documents = list(documents or [])
+    chunks = list(chunks or [])
+    names = [
+        name for name in (file_names if isinstance(file_names, list) else [file_names])
+        if name
+    ]
+    if not names:
+        return (
+            "請先選擇要移除的 PDF。", documents, chunks, {}, [],
+            gr.update(), "請先解析 PDF。", _document_rows(documents),
+            _document_choices(documents), [],
+        )
+    if project_id:
+        for file_name in names:
+            try:
+                remove_document(project_id, file_name)
+            except (OSError, ValueError) as exc:
+                return (
+                    f"❌ {exc}", documents, chunks, {}, [],
+                    gr.update(), "請先解析 PDF。", _document_rows(documents),
+                    _document_choices(documents), [],
+                )
+    name_set = set(names)
+    documents = [doc for doc in documents if doc.get("file_name") not in name_set]
+    chunks = [chunk for chunk in chunks if chunk.document not in name_set]
+    active_preview = documents[-1] if documents else {}
+    active_chunks = [
+        chunk for chunk in chunks if chunk.document == active_preview.get("file_name")
+    ] if active_preview else []
+    page_start = int(active_preview.get("page_start", 1))
+    page_end = int(active_preview.get("page_end", page_start))
+    rows = preview_rows_for_page(active_chunks, page_start) if active_chunks else []
+    status = (
+        f"✅ 已移除 {len(names)} 份文件「{'、'.join(names)}」"
+        f"（專案剩餘 {len(chunks)} 個 chunk、{len(documents)} 份文件）。"
+    )
+    return (
+        status,
+        documents,
+        chunks,
+        active_preview,
+        active_chunks,
+        gr.update(
+            minimum=page_start, maximum=page_end, value=page_start,
+            interactive=bool(active_chunks),
+        ),
+        _page_status(page_start, page_end, len(rows)) if active_chunks else "請先解析 PDF。",
+        _document_rows(documents),
+        _document_choices(documents),
+        rows,
     )
 
 
@@ -1215,6 +1288,11 @@ def build_app() -> gr.Blocks:
                         interactive=False,
                         wrap=True,
                     )
+                    remove_document_selector = gr.Dropdown(
+                        label="選擇要移除的 PDF（可多選）", choices=[],
+                        multiselect=True, interactive=True,
+                    )
+                    remove_document_button = gr.Button("移除選定的 PDF", variant="stop")
                 with gr.Column(scale=3):
                     preview_status = gr.Markdown("尚未解析 PDF。可重複上傳多份 PDF，逐一加入同一個專案。")
                     with gr.Row():
@@ -1567,7 +1645,8 @@ def build_app() -> gr.Blocks:
             extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
             documents_state, chunk_state, graph_state,
-            active_preview_state, active_chunks_state, documents_table,
+            active_preview_state, active_chunks_state,
+            documents_table, remove_document_selector,
             page_selector, chunk_table, page_status, history_table,
             entity_table, relationship_table, build_status, import_status,
         ]
@@ -1679,9 +1758,30 @@ def build_app() -> gr.Blocks:
                 page_status,
                 documents_table,
                 pdf_file,
+                remove_document_selector,
             ],
         )
         preview_event.then(
+            save_project_for_ui, inputs=project_setting_inputs,
+            outputs=[project_state, project_status], show_progress="hidden",
+        )
+        remove_document_event = remove_document_button.click(
+            remove_document_for_ui,
+            inputs=[project_selector, remove_document_selector, documents_state, chunk_state],
+            outputs=[
+                preview_status,
+                documents_state,
+                chunk_state,
+                active_preview_state,
+                active_chunks_state,
+                page_selector,
+                page_status,
+                documents_table,
+                remove_document_selector,
+                chunk_table,
+            ],
+        )
+        remove_document_event.then(
             save_project_for_ui, inputs=project_setting_inputs,
             outputs=[project_state, project_status], show_progress="hidden",
         )
