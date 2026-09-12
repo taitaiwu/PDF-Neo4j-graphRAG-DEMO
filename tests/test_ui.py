@@ -33,7 +33,7 @@ def test_build_app_wires_project_state_change_to_banner() -> None:
     )
 
 
-def test_model_fields_offer_openai_models_and_allow_custom_values() -> None:
+def test_model_fields_only_offer_initially_checked_models() -> None:
     app = build_app()
     labels = {
         "Schema 規劃 LLM",
@@ -51,12 +51,15 @@ def test_model_fields_offer_openai_models_and_allow_custom_values() -> None:
 
     assert set(fields) == labels
     assert all(field["type"] == "dropdown" for field in fields.values())
-    assert all(field["props"]["allow_custom_value"] for field in fields.values())
-    llm_choices = fields["問答 LLM"]["props"]["choices"]
-    embedding_choices = fields["Embedding 模型"]["props"]["choices"]
-    assert ("gpt-4.1", "gpt-4.1") in llm_choices
-    assert ("gpt-4o-mini", "gpt-4o-mini") in llm_choices
-    assert ("text-embedding-3-large", "text-embedding-3-large") in embedding_choices
+    assert all(not field["props"]["allow_custom_value"] for field in fields.values())
+    tables = {
+        component["props"]["label"]: component["props"]["value"]["data"]
+        for component in app.config["components"]
+        if component.get("props", {}).get("label") in {"LLM 模型清單", "Embedding 模型清單"}
+    }
+    for label, field in fields.items():
+        table = tables["Embedding 模型清單" if label == "Embedding 模型" else "LLM 模型清單"]
+        assert field["props"]["choices"] == [(row[1], row[1]) for row in table if row[0]]
 
 
 def test_pause_and_stop_buttons_bypass_the_queue() -> None:
@@ -289,54 +292,76 @@ def test_apply_ollama_preset_for_ui_fills_local_endpoint_and_clears_keys(tmp_pat
     assert 'BUILD_MODEL="build-model"' in content
 
 
-def test_refresh_llm_models_for_ui_updates_dropdown_choices(monkeypatch) -> None:
-    monkeypatch.setattr(ui, "list_models", lambda base_url, api_key: ["llama3.1:8b", "qwen2.5:7b"])
-
-    *updates, status = ui.refresh_llm_models_for_ui(
-        "http://localhost:11434/v1", "", "current", "current", "current", "current", "current",
+@pytest.mark.parametrize("models,current", [
+    (["llama3.1:8b", "qwen2.5:7b"], ["llama3.1:8b"] * 5),
+    (["nomic-embed-text", "other-embedding"], ["nomic-embed-text"]),
+])
+def test_obtain_models_preserves_checks_without_selecting_new_models(monkeypatch, models, current) -> None:
+    calls = []
+    monkeypatch.setattr(ui, "list_models", lambda base, key: calls.append((base, key)) or models)
+    rows, *updates, status = ui.obtain_models_for_ui(
+        "http://localhost:11434/v1", "key", [[True, models[0]], [True, "removed"]], *current,
     )
-
+    assert calls == [("http://localhost:11434/v1", "key")]
+    assert rows == [[True, models[0]], [False, models[1]]]
     assert status.startswith("✅ 已取得 2 個模型")
-    for update in updates:
-        assert "llama3.1:8b" in update["choices"]
-        assert "qwen2.5:7b" in update["choices"]
-        assert "current" in update["choices"]
+    assert len(updates) == len(current)
+    assert all(update["choices"] == [models[0]] and update["value"] == models[0] for update in updates)
 
 
-def test_refresh_llm_models_for_ui_reports_failure_without_clearing_choices(monkeypatch) -> None:
-    def boom(base_url, api_key):
+@pytest.mark.parametrize("count", [1, 5])
+def test_obtain_models_failure_preserves_table_and_dropdowns(monkeypatch, count) -> None:
+    def boom(base, key):
         raise ValueError("連線失敗")
-
     monkeypatch.setattr(ui, "list_models", boom)
-
-    *updates, status = ui.refresh_llm_models_for_ui(
-        "http://bad", "", "current", "current", "current", "current", "current",
-    )
-
+    *updates, status = ui.obtain_models_for_ui("http://bad", "", [[True, "current"]], *(["current"] * count))
     assert status == "❌ 連線失敗"
-    assert all("choices" not in update for update in updates)
+    assert updates == [gr.update()] * (count + 1)
 
 
-def test_refresh_embedding_models_for_ui_updates_dropdown_choices(monkeypatch) -> None:
-    monkeypatch.setattr(ui, "list_models", lambda base_url, api_key: ["nomic-embed-text"])
-
-    update, status = ui.refresh_embedding_models_for_ui("http://localhost:11434/v1", "", "current")
-
-    assert status.startswith("✅ 已取得 1 個模型")
-    assert "nomic-embed-text" in update["choices"]
-    assert "current" in update["choices"]
+def test_obtain_empty_models_clears_unavailable_selection(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "list_models", lambda *args: [])
+    rows, update, status = ui.obtain_models_for_ui("http://models", "", [[True, "old"]], "old")
+    assert rows == []
+    assert update == gr.update(choices=[], value=None)
+    assert "0 個模型" in status
 
 
-def test_build_app_has_ollama_preset_and_model_refresh_buttons() -> None:
+def test_checked_models_control_all_dropdowns_and_clear_deselected_values() -> None:
+    rows = [[True, "model-a"], [False, "model-b"], [True, "model-c"]]
+    updates = ui.apply_model_selection_for_ui(rows, "model-a", "model-b", None, "model-c", "model-b")
+    assert all(update["choices"] == ["model-a", "model-c"] for update in updates)
+    assert [update["value"] for update in updates] == ["model-a", None, None, "model-c", None]
+    assert ui.apply_model_selection_for_ui([[False, "model-a"]], "model-a") == (gr.update(choices=[], value=None),)
+
+
+def test_restoring_saved_models_checks_them_and_keeps_other_rows() -> None:
+    table, *updates = ui.restore_model_selection_for_ui([[False, "old"], [True, "kept"]], "legacy", "kept")
+    assert table == [[False, "old"], [True, "kept"], [True, "legacy"]]
+    assert [u["value"] for u in updates] == ["legacy", "kept"]
+    assert all(u["choices"] == ["kept", "legacy"] for u in updates)
+
+
+def test_build_app_has_model_tables_and_obtain_buttons() -> None:
     app = build_app()
-    labels = {
-        component.get("props", {}).get("value")
-        for component in app.config["components"]
-        if component.get("type") == "button"
-    }
-    assert "⚡ 套用 Ollama 本機預設（省 token）" in labels
-    assert "重新整理模型清單" in labels
-    assert "重新整理 Embedding 模型清單" in labels
+    components = app.config["components"]
+    buttons = {c["props"]["value"]: c["id"] for c in components if c["type"] == "button"}
+    assert "⚡ 套用 Ollama 本機預設（省 token）" in buttons
+    assert {"獲得模型清單", "獲得 Embedding 模型清單"} <= buttons.keys()
+    assert not {"測試模型服務連線", "測試 Embedding 服務連線", "重新整理模型清單", "重新整理 Embedding 模型清單"} & buttons.keys()
+    for label, button, field_count in [
+        ("LLM 模型清單", "獲得模型清單", 5),
+        ("Embedding 模型清單", "獲得 Embedding 模型清單", 1),
+    ]:
+        table = next(c for c in components if c.get("props", {}).get("label") == label)
+        assert table["type"] == "dataframe"
+        assert table["props"]["datatype"] == ["bool", "str"]
+        assert table["props"]["static_columns"] == [1]
+        fetch = next(d for d in app.config["dependencies"] if (buttons[button], "click") in d["targets"])
+        assert fetch["outputs"][0] == table["id"]
+        selection = next(d for d in app.config["dependencies"] if (table["id"], "change") in d["targets"])
+        assert selection["outputs"] == fetch["outputs"][1:-1]
+        assert len(selection["outputs"]) == field_count
 
 
 def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
@@ -1031,3 +1056,62 @@ def test_project_list_refreshes_on_page_load_focus_and_tab_select(tmp_path, monk
 
     ui.delete_project(project["project_id"])
     assert ui.refresh_projects_for_ui()["choices"] == []
+
+
+def test_unselected_models_report_actionable_errors_without_network() -> None:
+    plan = ui.plan_schema_for_ui(
+        "", "", None, 0, "平衡", 10, 10, 1, "全部頁面", 1, [], ui.RunControl(),
+    )
+    extraction = ui.extract_graph_for_ui("", "", None, 0, 1, [], "{}", [], ui.RunControl())
+    generation = ui.generate_evaluation_for_ui("project", "", "", None, None, 1, "基本檢索", 1, [])
+    evaluation = ui.run_evaluation_for_ui(
+        "project", "", "", "", "", "", "", "", "", None, "基本檢索", 1,
+        {"questions": [{"question": "Q"}]},
+    )
+    answer = ui.answer_question_for_ui("", "", "", "", "", "", "", "", None, "Q", "基本檢索", 1)
+    embedding = ui.import_graph_for_ui("", "", "", "", "", "", None, {"run_id": "run"})
+    for result in [plan, extraction, generation, evaluation, answer, embedding]:
+        assert result[0].startswith("❌")
+        assert "選擇" in result[0]
+
+
+def test_empty_model_selections_are_saved_as_empty_env_values(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    ui.persist_env_settings("", "", "", "", "", "", "", "", None, None, None)
+    env = ui.load_env()
+    assert env["BUILD_MODEL"] == env["EMBEDDING_MODEL"] == env["ANSWER_MODEL"] == ""
+
+
+def test_saved_project_models_restore_valid_dropdown_choices(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("saved")
+    ui.save_project(project["project_id"], {"settings": {
+        "graph_llm_model": "saved-build", "extraction_llm_model": "saved-extract",
+        "answer_model": "saved-answer", "graph_embedding_model": "saved-embed",
+    }})
+    loaded = ui.load_project_with_model_choices_for_ui(project["project_id"], [], [])
+    for index, expected in [(8, "saved-build"), (10, "saved-answer"), (20, "saved-extract"), (9, "saved-embed")]:
+        update = loaded[index]
+        assert update["value"] == expected
+        assert expected in update["choices"]
+        dropdown = gr.Dropdown(choices=update["choices"], allow_custom_value=False)
+        assert dropdown.preprocess(update["value"]) == expected
+    assert loaded[-1] == [[True, "saved-embed"]]
+
+
+def test_evaluation_and_env_restore_saved_model_choices(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("saved")
+    ui.save_project(project["project_id"], {"evaluation": {"preferences": {
+        "generation_model": "saved-generation", "test_model": "saved-test",
+    }}})
+    loaded = ui.load_evaluation_with_model_choices_for_ui(project["project_id"], [])
+    assert loaded[3]["value"] == "saved-generation"
+    assert loaded[4]["value"] == "saved-test"
+    assert loaded[-1] == [[True, "saved-generation"], [True, "saved-test"]]
+    ui.save_env({"BUILD_MODEL": "env-build", "ANSWER_MODEL": "env-answer", "EMBEDDING_MODEL": "env-embed"})
+    env = ui.reload_env_with_model_choices_for_ui([], [])
+    assert env[8]["value"] == "env-build"
+    assert env[9]["value"] == "env-embed"
+    assert env[10]["value"] == "env-answer"
+    assert env[-1] == [[True, "env-embed"]]

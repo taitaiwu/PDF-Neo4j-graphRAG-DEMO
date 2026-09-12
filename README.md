@@ -28,7 +28,7 @@
 - 每次匯入前自動清空本工具建立的既有圖譜，再寫入本次抽取結果。
 - 從 PDF 自動建立指定數量的問題、標準答案與來源頁碼，支援手動編輯、保存及 JSON／CSV 匯入與 JSON 匯出，再一鍵執行 RAG 回答及模型判分。
 - 使用 Neo4j 官方 HybridCypherRetriever 執行向量與全文混合搜尋，並結合圖譜擴展及原文片段組成 GraphRAG 問答內容。
-- 在介面中測試 Neo4j 與模型服務連線。
+- 在介面中測試 Neo4j 連線，並取得 LLM／Embedding 模型清單；在表格勾選的模型才會出現在後續頁面的模型選單。
 
 ## 實作原理
 
@@ -163,7 +163,7 @@ docker ps --filter name=pdf-graphrag
 docker logs -f pdf-graphrag
 ~~~
 
-看到 Gradio 啟動訊息後，開啟 http://localhost:7860，並先在「連線設定」測試 Neo4j 與模型服務。
+看到 Gradio 啟動訊息後，開啟 http://localhost:7860，並先在「連線設定」測試 Neo4j，再按「獲得模型清單」與「獲得 Embedding 模型清單」，勾選要使用的模型。模型名稱欄為唯讀；取消勾選目前使用的模型後，請在後續頁面重新選擇。既有設定中的模型會先顯示為已勾選，其他勾選結果在本次頁面工作階段內生效。
 
 ## 部署後如何啟動
 

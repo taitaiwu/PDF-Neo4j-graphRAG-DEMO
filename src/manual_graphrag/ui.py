@@ -12,8 +12,6 @@ import gradio as gr
 from .chunking import TextChunk, chunk_pages, preview_rows
 from .config import (
     OLLAMA_DEFAULT_BASE_URL,
-    OPENAI_EMBEDDING_MODELS,
-    OPENAI_LLM_MODELS,
     model_choices,
     public_settings,
 )
@@ -144,55 +142,90 @@ def apply_ollama_preset_for_ui(
         embedding_api_key,
         "✅ 已套用 Ollama 本機端點（{}），API Key 已清空。"
         "請確認 Ollama 已啟動並以 `ollama pull` 下載對應模型，"
-        "再按「重新整理模型清單」選擇模型。".format(OLLAMA_DEFAULT_BASE_URL),
+        "再按「獲得模型清單」並勾選要使用的模型。".format(OLLAMA_DEFAULT_BASE_URL),
     )
 
 
-def refresh_llm_models_for_ui(
-    base_url: str,
-    api_key: str,
-    graph_llm_model_value: str,
-    extraction_llm_model_value: str,
-    evaluation_generation_model_value: str,
-    evaluation_test_model_value: str,
-    answer_model_value: str,
-) -> tuple[Any, Any, Any, Any, Any, str]:
-    """Populate LLM dropdowns from an OpenAI-compatible /models endpoint.
+def selected_models_for_ui(rows: list[list[Any]] | None) -> list[str]:
+    return list(dict.fromkeys(
+        str(row[1]) for row in (rows or []) if len(row) == 2 and row[0] is True
+    ))
 
-    Works for OpenAI and for Ollama (which lists locally pulled models here),
-    so users don't have to type exact local model tags from memory.
-    """
-    try:
-        models = list_models(base_url, api_key)
-    except ValueError as exc:
-        no_change = gr.update()
-        return no_change, no_change, no_change, no_change, no_change, f"❌ {exc}"
-    updates = tuple(
-        gr.update(choices=model_choices(value, defaults=tuple(models)))
-        for value in (
-            graph_llm_model_value,
-            extraction_llm_model_value,
-            evaluation_generation_model_value,
-            evaluation_test_model_value,
-            answer_model_value,
-        )
+
+def apply_model_selection_for_ui(
+    rows: list[list[Any]] | None, *current_models: str | None,
+) -> tuple[dict[str, Any], ...]:
+    selected = selected_models_for_ui(rows)
+    return tuple(
+        gr.update(choices=selected, value=current if current in selected else None)
+        for current in current_models
     )
-    preview = "、".join(models[:20]) + ("…" if len(models) > 20 else "")
-    return (*updates, f"✅ 已取得 {len(models)} 個模型：{preview}")
 
 
-def refresh_embedding_models_for_ui(
-    base_url: str, api_key: str, graph_embedding_model_value: str
-) -> tuple[Any, str]:
+def obtain_models_for_ui(
+    base_url: str, api_key: str, rows: list[list[Any]] | None,
+    *current_models: str | None,
+) -> tuple[Any, ...]:
     try:
         models = list_models(base_url, api_key)
     except ValueError as exc:
-        return gr.update(), f"❌ {exc}"
-    preview = "、".join(models[:20]) + ("…" if len(models) > 20 else "")
+        return (*(gr.update() for _ in range(len(current_models) + 1)), f"❌ {exc}")
+    selected = selected_models_for_ui(rows)
+    table = [[model in selected, model] for model in models]
     return (
-        gr.update(choices=model_choices(graph_embedding_model_value, defaults=tuple(models))),
-        f"✅ 已取得 {len(models)} 個模型：{preview}",
+        table, *apply_model_selection_for_ui(table, *current_models),
+        f"✅ 已取得 {len(models)} 個模型；請勾選要在後續頁面使用的模型。",
     )
+
+
+def restore_model_selection_for_ui(
+    rows: list[list[Any]] | None, *current_models: str | None,
+) -> tuple[Any, ...]:
+    """Keep saved project/.env models available when restoring their settings."""
+    current = model_choices(*current_models, defaults=())
+    existing = {str(row[1]): bool(row[0]) for row in (rows or [])}
+    for model in current:
+        existing[model] = True
+    table = [[selected, model] for model, selected in existing.items()]
+    return table, *apply_model_selection_for_ui(table, *current_models)
+
+
+def _restore_model_fields(
+    values: list[Any], rows: list[list[Any]], indices: tuple[int, ...],
+) -> list[list[Any]]:
+    models = [values[index] for index in indices]
+    table, *updates = restore_model_selection_for_ui(rows, *models)
+    for index, update in zip(indices, updates):
+        values[index] = update
+    return table
+
+
+def load_project_with_model_choices_for_ui(
+    project_id: str, llm_rows: list[list[Any]], embedding_rows: list[list[Any]],
+) -> tuple[Any, ...]:
+    values = list(load_project_for_ui(project_id))
+    llm_table = _restore_model_fields(values, llm_rows, (8, 10, 20))
+    embedding_table = _restore_model_fields(values, embedding_rows, (9,))
+    return *values, llm_table, embedding_table
+
+
+def load_evaluation_with_model_choices_for_ui(
+    project_id: str, llm_rows: list[list[Any]],
+) -> tuple[Any, ...]:
+    values = list(load_evaluation_for_ui(project_id))
+    if isinstance(values[3], dict):
+        return *values, gr.update()
+    table = _restore_model_fields(values, llm_rows, (3, 4))
+    return *values, table
+
+
+def reload_env_with_model_choices_for_ui(
+    llm_rows: list[list[Any]], embedding_rows: list[list[Any]],
+) -> tuple[Any, ...]:
+    values = list(reload_env_settings())
+    llm_table = _restore_model_fields(values, llm_rows, (8, 10))
+    embedding_table = _restore_model_fields(values, embedding_rows, (9,))
+    return *values, llm_table, embedding_table
 
 
 def persist_env_settings(
@@ -216,11 +249,11 @@ def persist_env_settings(
             "NEO4J_PASSWORD": neo4j_password,
             "MODEL_API_BASE": model_endpoint,
             "MODEL_API_KEY": api_key,
-            "BUILD_MODEL": build_model,
+            "BUILD_MODEL": build_model or "",
             "EMBEDDING_API_BASE": embedding_api_base,
             "EMBEDDING_API_KEY": embedding_api_key,
-            "EMBEDDING_MODEL": embedding_model,
-            "ANSWER_MODEL": answer_model,
+            "EMBEDDING_MODEL": embedding_model or "",
+            "ANSWER_MODEL": answer_model or "",
         }
     )
     return "✅ 已自動儲存至 .env"
@@ -652,6 +685,8 @@ def generate_evaluation_for_ui(
 ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
     if not project_id:
         return "❌ 請先建立或載入專案。", [], {}, []
+    if not generation_model:
+        return "❌ 請先勾選並選擇生題模型。", [], {}, []
     try:
         questions = generate_evaluation_questions(
             model_endpoint, api_key, generation_model, chunks, int(question_count)
@@ -682,6 +717,8 @@ def run_evaluation_for_ui(
         return "❌ 請先建立測試題目。", [], evaluation or {}
     if evaluation.get("dirty"):
         return "❌ 題目或答案尚未完成自動儲存，請稍後再試。", [], evaluation
+    if not model:
+        return "❌ 請先勾選並選擇回答與評判模型。", [], evaluation
     results = []
     for index, item in enumerate(questions, start=1):
         progress((index - 1) / len(questions), desc=f"測試第 {index} / {len(questions)} 題")
@@ -966,6 +1003,8 @@ def plan_schema_for_ui(
     run_control: RunControl,
     progress=gr.Progress(),
 ) -> tuple[str, str]:
+    if not llm_model:
+        return "❌ 請先勾選並選擇 Schema 規劃 LLM。", ""
     run_control.reset()
     try:
         planning_chunks, selected_pages = _select_schema_planning_chunks(
@@ -1020,6 +1059,8 @@ def extract_graph_for_ui(
     run_control: RunControl,
     progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], list[list[object]], dict[str, Any]]:
+    if not llm_model:
+        return "❌ 請先勾選並選擇知識圖譜抽取 LLM。", [], [], {}
     run_control.reset()
     try:
         raw_schema = json.loads(schema_text)
@@ -1167,7 +1208,7 @@ def import_graph_for_ui(
 ) -> tuple[str, dict[str, Any]]:
     if not graph_state or not graph_state.get("run_id"):
         return "❌ 請先完成知識圖譜抽取。", graph_state or {}
-    if not embedding_model.strip():
+    if not (embedding_model or "").strip():
         return "❌ 請選擇 Embedding 模型。", graph_state
     updated_state = dict(graph_state)
     updated_state["embedding_model"] = embedding_model.strip()
@@ -1229,6 +1270,8 @@ def answer_question_for_ui(
     retrieval_mode: str,
     top_k: int,
 ) -> tuple[str, str, list[list[object]]]:
+    if not answer_model:
+        return "❌ 請先勾選並選擇問答 LLM。", "", []
     if not question.strip():
         return "請輸入問題。", "", []
     try:
@@ -1287,6 +1330,8 @@ def _current_project_banner(project: dict[str, Any]) -> str:
 
 def build_app() -> gr.Blocks:
     env = load_env()
+    llm_choices = model_choices(env["BUILD_MODEL"], env["ANSWER_MODEL"], defaults=())
+    embedding_choices = model_choices(env["EMBEDDING_MODEL"], defaults=())
     with gr.Blocks(title="PDF GraphRAG 測試工具", fill_width=True) as app:
         gr.Markdown(
             "# PDF GraphRAG 測試工具\n"
@@ -1340,9 +1385,14 @@ def build_app() -> gr.Blocks:
                     api_key = gr.Textbox(
                         label="API Key（Ollama 免填）", value=env["MODEL_API_KEY"], type="password"
                     )
-                    with gr.Row():
-                        model_test_button = gr.Button("測試模型服務連線", variant="primary")
-                        refresh_llm_models_button = gr.Button("重新整理模型清單")
+                    model_list_button = gr.Button("獲得模型清單", variant="primary")
+                    llm_models_table = gr.Dataframe(
+                        value=[[True, model] for model in llm_choices],
+                        headers=["使用", "模型名稱"], datatype=["bool", "str"],
+                        type="array", interactive=True, static_columns=[1],
+                        row_count=(0, "fixed"), col_count=(2, "fixed"),
+                        label="LLM 模型清單", column_widths=[80, "80%"],
+                    )
                     model_connection_status = gr.Markdown()
                     gr.Markdown("### Embedding 服務（預設使用 OpenAI，也可用支援 Embedding 的 Ollama 模型）")
                     embedding_api_base = gr.Textbox(
@@ -1352,12 +1402,14 @@ def build_app() -> gr.Blocks:
                         label="Embedding API Key（Ollama 免填）",
                         value=env["EMBEDDING_API_KEY"], type="password",
                     )
-                    embedding_test_model = gr.Textbox(
-                        label="測試用 Embedding 模型名稱", value=env["EMBEDDING_MODEL"]
+                    embedding_list_button = gr.Button("獲得 Embedding 模型清單", variant="primary")
+                    embedding_models_table = gr.Dataframe(
+                        value=[[True, model] for model in embedding_choices],
+                        headers=["使用", "模型名稱"], datatype=["bool", "str"],
+                        type="array", interactive=True, static_columns=[1],
+                        row_count=(0, "fixed"), col_count=(2, "fixed"),
+                        label="Embedding 模型清單", column_widths=[80, "80%"],
                     )
-                    with gr.Row():
-                        embedding_test_button = gr.Button("測試 Embedding 服務連線", variant="primary")
-                        refresh_embedding_models_button = gr.Button("重新整理 Embedding 模型清單")
                     embedding_connection_status = gr.Markdown()
                     reload_button = gr.Button("重新讀取 .env")
             gr.Markdown("⚠️ Password 與 API Key 會以明文寫入本機 `.env`；請勿提交此檔案。")
@@ -1411,12 +1463,9 @@ def build_app() -> gr.Blocks:
                 )
                 with gr.Row():
                     graph_llm_model = gr.Dropdown(
-                        choices=model_choices(
-                            env["BUILD_MODEL"], env["ANSWER_MODEL"],
-                            defaults=OPENAI_LLM_MODELS,
-                        ),
-                        value=env["BUILD_MODEL"],
-                        allow_custom_value=True,
+                        choices=llm_choices,
+                        value=env["BUILD_MODEL"] or None,
+                        allow_custom_value=False,
                         label="Schema 規劃 LLM",
                     )
                     graph_temperature = gr.Slider(
@@ -1487,12 +1536,9 @@ def build_app() -> gr.Blocks:
                     "確認上方 JSON 後執行全部 chunks；檢查抽取結果後，再手動匯入 Neo4j。"
                 )
                 extraction_llm_model = gr.Dropdown(
-                    choices=model_choices(
-                        env["BUILD_MODEL"], env["ANSWER_MODEL"],
-                        defaults=OPENAI_LLM_MODELS,
-                    ),
-                    value=env["BUILD_MODEL"],
-                    allow_custom_value=True,
+                    choices=llm_choices,
+                    value=env["BUILD_MODEL"] or None,
+                    allow_custom_value=False,
                     label="知識圖譜抽取 LLM",
                 )
                 extraction_max_concurrent_requests = gr.Number(
@@ -1523,11 +1569,9 @@ def build_app() -> gr.Blocks:
                     "確認上方抽取結果後，選擇 Embedding 模型並匯入 Neo4j。"
                 )
                 graph_embedding_model = gr.Dropdown(
-                    choices=model_choices(
-                        env["EMBEDDING_MODEL"], defaults=OPENAI_EMBEDDING_MODELS
-                    ),
-                    value=env["EMBEDDING_MODEL"],
-                    allow_custom_value=True,
+                    choices=embedding_choices,
+                    value=env["EMBEDDING_MODEL"] or None,
+                    allow_custom_value=False,
                     label="Embedding 模型",
                 )
                 gr.Markdown(
@@ -1547,12 +1591,9 @@ def build_app() -> gr.Blocks:
                 gr.Markdown("#### 生題設定")
                 with gr.Row():
                     evaluation_generation_model = gr.Dropdown(
-                        choices=model_choices(
-                            env["ANSWER_MODEL"], env["BUILD_MODEL"],
-                            defaults=OPENAI_LLM_MODELS,
-                        ),
-                        value=env["ANSWER_MODEL"],
-                        allow_custom_value=True,
+                        choices=llm_choices,
+                        value=env["ANSWER_MODEL"] or None,
+                        allow_custom_value=False,
                         label="生題模型",
                     )
                     evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="題目數量 N")
@@ -1561,12 +1602,9 @@ def build_app() -> gr.Blocks:
                 gr.Markdown("#### 測試模型設定")
                 with gr.Row():
                     evaluation_test_model = gr.Dropdown(
-                        choices=model_choices(
-                            env["ANSWER_MODEL"], env["BUILD_MODEL"],
-                            defaults=OPENAI_LLM_MODELS,
-                        ),
-                        value=env["ANSWER_MODEL"],
-                        allow_custom_value=True,
+                        choices=llm_choices,
+                        value=env["ANSWER_MODEL"] or None,
+                        allow_custom_value=False,
                         label="回答與評判模型",
                     )
                     evaluation_retrieval_mode = gr.Radio(["基本檢索", "關聯擴展檢索"], value="關聯擴展檢索", label="檢索模式")
@@ -1616,12 +1654,9 @@ def build_app() -> gr.Blocks:
                 "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
             )
             answer_model = gr.Dropdown(
-                choices=model_choices(
-                    env["ANSWER_MODEL"], env["BUILD_MODEL"],
-                    defaults=OPENAI_LLM_MODELS,
-                ),
-                value=env["ANSWER_MODEL"],
-                allow_custom_value=True,
+                choices=llm_choices,
+                value=env["ANSWER_MODEL"] or None,
+                allow_custom_value=False,
                 label="問答 LLM",
             )
             question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
@@ -1671,10 +1706,10 @@ def build_app() -> gr.Blocks:
             )
 
         evaluation_tab.select(
-            load_evaluation_for_ui, inputs=project_selector,
+            load_evaluation_with_model_choices_for_ui, inputs=[project_selector, llm_models_table],
             outputs=[evaluation_state, evaluation_questions_table, evaluation_results_table,
                      evaluation_generation_model, evaluation_test_model, evaluation_question_count,
-                     evaluation_retrieval_mode, evaluation_top_k, evaluation_status],
+                     evaluation_retrieval_mode, evaluation_top_k, evaluation_status, llm_models_table],
         )
         evaluation_preference_inputs = [
             project_selector, evaluation_generation_model, evaluation_test_model, evaluation_question_count,
@@ -1759,7 +1794,9 @@ def build_app() -> gr.Blocks:
             outputs=[project_selector, project_state, project_status],
         )
         load_project_event = load_project_button.click(
-            load_project_for_ui, inputs=project_selector, outputs=project_load_outputs,
+            load_project_with_model_choices_for_ui,
+            inputs=[project_selector, llm_models_table, embedding_models_table],
+            outputs=[*project_load_outputs, llm_models_table, embedding_models_table],
         )
         protected_tabs = [pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
         delete_project_event = delete_project_button.click(
@@ -1813,40 +1850,29 @@ def build_app() -> gr.Blocks:
             inputs=[neo4j_uri, neo4j_database, neo4j_username, neo4j_password],
             outputs=neo4j_connection_status,
         )
-        model_test_button.click(
-            check_model_service_for_ui,
-            inputs=[model_endpoint, api_key],
-            outputs=model_connection_status,
+        llm_model_fields = [
+            graph_llm_model, extraction_llm_model, evaluation_generation_model,
+            evaluation_test_model, answer_model,
+        ]
+        model_list_button.click(
+            obtain_models_for_ui,
+            inputs=[model_endpoint, api_key, llm_models_table, *llm_model_fields],
+            outputs=[llm_models_table, *llm_model_fields, model_connection_status],
         )
-        refresh_llm_models_button.click(
-            refresh_llm_models_for_ui,
-            inputs=[
-                model_endpoint,
-                api_key,
-                graph_llm_model,
-                extraction_llm_model,
-                evaluation_generation_model,
-                evaluation_test_model,
-                answer_model,
-            ],
-            outputs=[
-                graph_llm_model,
-                extraction_llm_model,
-                evaluation_generation_model,
-                evaluation_test_model,
-                answer_model,
-                model_connection_status,
-            ],
+        embedding_list_button.click(
+            obtain_models_for_ui,
+            inputs=[embedding_api_base, embedding_api_key, embedding_models_table, graph_embedding_model],
+            outputs=[embedding_models_table, graph_embedding_model, embedding_connection_status],
         )
-        embedding_test_button.click(
-            check_embedding_service_for_ui,
-            inputs=[embedding_api_base, embedding_api_key, embedding_test_model],
-            outputs=embedding_connection_status,
+        llm_models_table.change(
+            apply_model_selection_for_ui,
+            inputs=[llm_models_table, *llm_model_fields], outputs=llm_model_fields,
+            show_progress="hidden",
         )
-        refresh_embedding_models_button.click(
-            refresh_embedding_models_for_ui,
-            inputs=[embedding_api_base, embedding_api_key, graph_embedding_model],
-            outputs=[graph_embedding_model, embedding_connection_status],
+        embedding_models_table.change(
+            apply_model_selection_for_ui,
+            inputs=[embedding_models_table, graph_embedding_model], outputs=graph_embedding_model,
+            show_progress="hidden",
         )
         ollama_preset_button.click(
             apply_ollama_preset_for_ui,
@@ -1871,7 +1897,11 @@ def build_app() -> gr.Blocks:
         ]
         for component in env_inputs:
             component.change(persist_env_settings, inputs=env_inputs, outputs=env_status)
-        reload_button.click(reload_env_settings, outputs=[*env_inputs, env_status])
+        reload_button.click(
+            reload_env_with_model_choices_for_ui,
+            inputs=[llm_models_table, embedding_models_table],
+            outputs=[*env_inputs, env_status, llm_models_table, embedding_models_table],
+        )
         preview_event = preview_button.click(
             add_document_for_ui,
             inputs=[
