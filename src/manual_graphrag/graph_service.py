@@ -423,8 +423,6 @@ def plan_graph_schema(
     max_output_tokens: int = 2048,
     progress_callback: Callable[[float | None, str], None] | None = None,
     schema_granularity: str = "平衡",
-    max_entity_types: int = 15,
-    max_relationship_types: int = 20,
     max_concurrent_requests: int = 3,
     control: RunControl | None = None,
 ) -> SchemaPlan:
@@ -437,31 +435,15 @@ def plan_graph_schema(
     }
     if schema_granularity not in granularity_guidance:
         raise ValueError("Schema 粒度必須是粗略、平衡或詳細")
-    if int(max_entity_types) < 1:
-        raise ValueError("最大實體類型數必須大於 0")
-    if int(max_relationship_types) < 1:
-        raise ValueError("最大關係類型數必須大於 0")
     if int(max_concurrent_requests) < 1:
         raise ValueError("最大並行請求數必須大於 0")
-    max_entity_types = int(max_entity_types)
-    max_relationship_types = int(max_relationship_types)
     max_concurrent_requests = int(max_concurrent_requests)
-
-    def validate_planned_schema(schema: dict[str, Any]) -> dict[str, Any]:
-        schema = validate_schema(schema)
-        if len(schema["entity_types"]) > max_entity_types:
-            raise ValueError(f"entity_types 不得超過 {max_entity_types} 個")
-        if len(schema["relationship_types"]) > max_relationship_types:
-            raise ValueError(f"relationship_types 不得超過 {max_relationship_types} 個")
-        return schema
 
     planning_rules = (
         f"Schema 粒度：{schema_granularity}。{granularity_guidance[schema_granularity]}"
         "只建立可重複使用、可泛化的類型；具體名稱、型號、編號、人物、組織或章節"
         "應在抽取階段成為實體，不得直接成為類型。只有重複出現且具有獨立查詢或關係"
         "價值的概念才建立類型；相近概念應合併到較高階類型。"
-        f"實體類型最多 {max_entity_types} 個，關係類型最多 {max_relationship_types} 個；"
-        "若超過上限，應依重要性合併較細類型，不可任意截斷。"
     )
     batches = _chunk_batches(chunks, SCHEMA_CONTEXT_LIMIT)
     candidates: list[dict[str, Any] | None] = [None] * len(batches)
@@ -494,7 +476,7 @@ def plan_graph_schema(
             f"文件 chunks：\n{context}",
             temperature,
             max_output_tokens,
-            validate_planned_schema,
+            validate_schema,
             on_retry=report_retry,
             control=control,
         )
@@ -561,7 +543,7 @@ def plan_graph_schema(
                 f"候選 Schema：\n{json.dumps(group, ensure_ascii=False)}",
                 temperature,
                 max_output_tokens,
-                validate_planned_schema,
+                validate_schema,
                 on_retry=report_retry,
                 control=control,
             )

@@ -57,6 +57,22 @@ def test_model_fields_only_offer_initially_checked_models() -> None:
             assert display in {f"OpenAI｜{value}", f"Ollama｜{value}"}
 
 
+def test_graph_controls_are_above_schema_and_type_limit_fields_are_removed() -> None:
+    app = build_app()
+    components = app.config["components"]
+    ids_by_value = {
+        value: component["id"]
+        for component in components
+        if isinstance((value := component.get("props", {}).get("value")), str)
+    }
+    schema_heading = ids_by_value["#### ① 規劃 Schema"]
+    assert ids_by_value["⏸ 暫停"] < schema_heading
+    assert ids_by_value["⏹ 停止"] < schema_heading
+    labels = {component.get("props", {}).get("label") for component in components}
+    assert "最大實體類型數" not in labels
+    assert "最大關係類型數" not in labels
+
+
 def test_pause_and_stop_buttons_bypass_the_queue() -> None:
     app = build_app()
     pause_button = next(
@@ -316,7 +332,7 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
         },
         "bolt://db", "neo4j", "user", "pass", "http://models", "key",
         "build", "embed", "answer", 1200, 100, 0.2,
-        "詳細", 10, 12, 2, "全部頁面", 4, "extract", 2,
+        "詳細", 2, "全部頁面", 4, "extract", 2,
         "關聯擴展檢索", 6, '{"entity_types": []}',
     ]
     saved, save_status = ui.save_project_for_ui(*values)
@@ -325,15 +341,14 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     assert Path(saved["documents"][0]["path"]).read_bytes() == b"pdf"
     assert loaded[0]["project_id"] == created["project_id"]
     assert loaded[11:13] == (1200, 100)
-    assert loaded[15:17] == (10, 12)
-    assert loaded[26][0].text == "內容"
+    assert loaded[24][0].text == "內容"
     stored_project = ui.load_project(created["project_id"])
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
-    assert loaded[35][0][:2] == ["設備", "DEVICE"]
-    assert loaded[36][0][:3] == ["設備", "USES", "零件"]
-    assert "1 個實體、1 筆關係" in loaded[37]
-    assert "已匯入 Neo4j" in loaded[38]
+    assert loaded[33][0][:2] == ["設備", "DEVICE"]
+    assert loaded[34][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[35]
+    assert "已匯入 Neo4j" in loaded[36]
 
 
 def test_project_answer_appends_history(monkeypatch) -> None:
@@ -688,7 +703,7 @@ def test_plan_schema_for_ui_reports_stopped_status(monkeypatch) -> None:
     )
 
     status, schema_text = ui.plan_schema_for_ui(
-        "http://models/v1", "key", "llm", 0.3, "平衡", 15, 20, 3,
+        "http://models/v1", "key", "llm", 0.3, "平衡", 3,
         "全部頁面", 10, [TextChunk(1, "text", (1,))], ui.RunControl(),
     )
 
@@ -732,8 +747,6 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
         "llm",
         0.3,
         "平衡",
-        15,
-        20,
         3,
         "全部頁面",
         10,
@@ -744,7 +757,8 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
     assert status.startswith("✅")
     assert "全部 1 頁、5 個 chunk" in status
     assert "共 2 批、1 輪整合" in status
-    assert "粒度：平衡；實體／關係類型上限：15／20" in status
+    assert "粒度：平衡。" in status
+    assert "類型上限" not in status
     assert json.loads(schema_text)["entity_types"][0]["name"] == "DEVICE"
 
 
@@ -993,7 +1007,7 @@ def test_project_list_refreshes_on_page_load_focus_and_tab_select(tmp_path, monk
 
 def test_unselected_models_report_actionable_errors_without_network() -> None:
     plan = ui.plan_schema_for_ui(
-        "", "", None, 0, "平衡", 10, 10, 1, "全部頁面", 1, [], ui.RunControl(),
+        "", "", None, 0, "平衡", 1, "全部頁面", 1, [], ui.RunControl(),
     )
     extraction = ui.extract_graph_for_ui("", "", None, 0, 1, [], "{}", [], ui.RunControl())
     generation = ui.generate_evaluation_for_ui("project", "", "", None, None, 1, "基本檢索", 1, [])

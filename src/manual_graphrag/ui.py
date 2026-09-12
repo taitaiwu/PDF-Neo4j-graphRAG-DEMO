@@ -52,8 +52,6 @@ from .storage import write_json
 
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
-DEFAULT_MAX_ENTITY_TYPES = 15
-DEFAULT_MAX_RELATIONSHIP_TYPES = 20
 
 
 def connection_summary(
@@ -188,7 +186,7 @@ def load_project_with_services_for_ui(
 ) -> tuple[Any, ...]:
     values = list(load_project_for_ui(project_id))
     llm_state = restore_service_settings(
-        llm_state, values[6], values[7], {0: values[8], 1: values[20], 4: values[10]},
+        llm_state, values[6], values[7], {0: values[8], 1: values[18], 4: values[10]},
     )
     embedding_profile = embedding_state["profiles"][embedding_state["active"]]
     embedding_state = restore_service_settings(
@@ -197,7 +195,7 @@ def load_project_with_services_for_ui(
     llm = render_service_for_ui(llm_state)
     embedding = render_service_for_ui(embedding_state)
     values[6:8] = llm[1:3]
-    values[8], values[20], values[10], values[9] = llm[7], llm[8], llm[11], embedding[7]
+    values[8], values[18], values[10], values[9] = llm[7], llm[8], llm[11], embedding[7]
     save_service_settings(llm_state)
     save_service_settings(embedding_state)
     return (*values, llm_state["active"], llm[0], *llm[3:7], llm[9], llm[10],
@@ -404,7 +402,7 @@ def save_project_for_ui(
     graph_embedding_model: str, answer_model: str,
     chunk_size: int, chunk_overlap: int,
     graph_temperature: float,
-    schema_granularity: str, max_entity_types: int, max_relationship_types: int,
+    schema_granularity: str,
     max_concurrent_requests: int, schema_sampling_mode: str,
     schema_sample_page_count: int, extraction_llm_model: str,
     extraction_max_concurrent_requests: int,
@@ -421,7 +419,6 @@ def save_project_for_ui(
         "chunk_size": int(chunk_size), "chunk_overlap": int(chunk_overlap),
         "graph_temperature": float(graph_temperature),
         "schema_granularity": schema_granularity,
-        "max_entity_types": int(max_entity_types), "max_relationship_types": int(max_relationship_types),
         "max_concurrent_requests": int(max_concurrent_requests),
         "schema_sampling_mode": schema_sampling_mode,
         "schema_sample_page_count": int(schema_sample_page_count),
@@ -480,8 +477,6 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         get("answer_model", env["ANSWER_MODEL"]),
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
         get("schema_granularity", "平衡"),
-        get("max_entity_types", DEFAULT_MAX_ENTITY_TYPES),
-        get("max_relationship_types", DEFAULT_MAX_RELATIONSHIP_TYPES),
         get("max_concurrent_requests", 3),
         gr.update(
             value=get("schema_sampling_mode", "全部頁面"),
@@ -994,8 +989,6 @@ def plan_schema_for_ui(
     llm_model: str,
     temperature: float,
     schema_granularity: str,
-    max_entity_types: int,
-    max_relationship_types: int,
     max_concurrent_requests: int,
     sampling_mode: str,
     sample_page_count: int,
@@ -1019,8 +1012,6 @@ def plan_schema_for_ui(
             DEFAULT_MAX_OUTPUT_TOKENS,
             lambda value, description: progress(value, desc=description),
             schema_granularity,
-            int(max_entity_types),
-            int(max_relationship_types),
             int(max_concurrent_requests),
             control=run_control,
         )
@@ -1039,8 +1030,7 @@ def plan_schema_for_ui(
         f"✅ 已使用 {llm_model} 規劃 schema；參考 {scope_note}、"
         f"{plan.analyzed_chunks} 個 chunk，"
         f"共 {plan.batch_count} 批、{plan.merge_rounds} 輪整合。"
-        f"粒度：{schema_granularity}；實體／關係類型上限："
-        f"{int(max_entity_types)}／{int(max_relationship_types)}。"
+        f"粒度：{schema_granularity}。"
         f"最大並行請求數：{int(max_concurrent_requests)}。"
         "請確認或編輯後再進行抽取。"
     )
@@ -1468,6 +1458,14 @@ def build_app() -> gr.Blocks:
 
         with gr.Tab("3. 建圖", interactive=False) as graph_tab:
             gr.Markdown("### 規劃並抽取知識圖譜")
+            with gr.Row():
+                pause_button = gr.Button("⏸ 暫停")
+                stop_button = gr.Button("⏹ 停止", variant="stop")
+            run_control_status = gr.Markdown(
+                "「暫停」「停止」在下方「規劃 Schema」或「確認 Schema 並抽取」"
+                "執行中都可使用：暫停只會停止送出新批次（已送出的批次仍會跑完）；"
+                "停止會盡快中止整個流程。"
+            )
             with gr.Group():
                 gr.Markdown("#### ① 規劃 Schema")
                 gr.Markdown(
@@ -1489,14 +1487,6 @@ def build_app() -> gr.Blocks:
                         value="平衡",
                         label="Schema 粒度",
                     )
-                    max_entity_types = gr.Number(
-                        value=DEFAULT_MAX_ENTITY_TYPES, minimum=1, precision=0,
-                        label="最大實體類型數",
-                    )
-                    max_relationship_types = gr.Number(
-                        value=DEFAULT_MAX_RELATIONSHIP_TYPES, minimum=1, precision=0,
-                        label="最大關係類型數",
-                    )
                     max_concurrent_requests = gr.Number(
                         value=3, minimum=1, precision=0, label="最大並行請求數"
                     )
@@ -1511,14 +1501,6 @@ def build_app() -> gr.Blocks:
                     )
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema", variant="primary"
-                )
-                with gr.Row():
-                    pause_button = gr.Button("⏸ 暫停")
-                    stop_button = gr.Button("⏹ 停止", variant="stop")
-                run_control_status = gr.Markdown(
-                    "「暫停」「停止」在下方「規劃 Schema」或「確認 Schema 並抽取」"
-                    "執行中都可使用：暫停只會停止送出新批次（已送出的批次仍會跑完）；"
-                    "停止會盡快中止整個流程。"
                 )
                 plan_status = gr.Markdown("請先在 PDF 頁面解析並產生 chunks。")
                 gr.HTML(
@@ -1788,7 +1770,6 @@ def build_app() -> gr.Blocks:
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
-            max_entity_types, max_relationship_types,
             max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
@@ -1800,7 +1781,6 @@ def build_app() -> gr.Blocks:
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
-            max_entity_types, max_relationship_types,
             max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
@@ -1862,7 +1842,6 @@ def build_app() -> gr.Blocks:
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
-            max_entity_types, max_relationship_types,
             max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
@@ -2014,8 +1993,6 @@ def build_app() -> gr.Blocks:
                 graph_llm_model,
                 graph_temperature,
                 schema_granularity,
-                max_entity_types,
-                max_relationship_types,
                 max_concurrent_requests,
                 schema_sampling_mode,
                 schema_sample_page_count,
