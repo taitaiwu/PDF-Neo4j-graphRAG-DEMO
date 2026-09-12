@@ -24,3 +24,25 @@ def test_save_env_preserves_unmanaged_values(tmp_path) -> None:
     content = path.read_text(encoding="utf-8")
     assert "CUSTOM_VALUE=keep" in content
     assert load_env(path)["NEO4J_URI"] == "bolt://new"
+
+
+def test_concurrent_setting_updates_preserve_both_service_profiles(tmp_path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    path = tmp_path / ".env"
+    updates = {
+        "MODEL_SERVICE_PROFILES": '{"llm":"saved"}',
+        "EMBEDDING_SERVICE_PROFILES": '{"embedding":"saved"}',
+        "MODEL_API_KEY": "llm-key",
+        "EMBEDDING_API_KEY": "embedding-key",
+    }
+    barrier = Barrier(len(updates))
+    def write(item):
+        key, value = item
+        barrier.wait()
+        save_env({key: value}, path)
+    with ThreadPoolExecutor(max_workers=len(updates)) as executor:
+        list(executor.map(write, updates.items()))
+    loaded = load_env(path)
+    assert all(loaded[key] == value for key, value in updates.items())

@@ -4,7 +4,10 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from threading import RLock
 
+
+_ENV_LOCK = RLock()
 
 ENV_KEYS = (
     "NEO4J_URI",
@@ -18,6 +21,8 @@ ENV_KEYS = (
     "EMBEDDING_API_KEY",
     "EMBEDDING_MODEL",
     "ANSWER_MODEL",
+    "MODEL_SERVICE_PROFILES",
+    "EMBEDDING_SERVICE_PROFILES",
 )
 
 DEFAULTS = {
@@ -25,13 +30,15 @@ DEFAULTS = {
     "NEO4J_DATABASE": "neo4j",
     "NEO4J_USERNAME": "neo4j",
     "NEO4J_PASSWORD": "",
-    "MODEL_API_BASE": "",
+    "MODEL_API_BASE": "https://api.openai.com/v1",
     "MODEL_API_KEY": "",
     "BUILD_MODEL": "gpt-4.1-mini",
-    "EMBEDDING_API_BASE": "https://api.voyageai.com/v1",
+    "EMBEDDING_API_BASE": "https://api.openai.com/v1",
     "EMBEDDING_API_KEY": "",
-    "EMBEDDING_MODEL": "voyage-3",
+    "EMBEDDING_MODEL": "text-embedding-3-small",
     "ANSWER_MODEL": "gpt-4.1-mini",
+    "MODEL_SERVICE_PROFILES": "",
+    "EMBEDDING_SERVICE_PROFILES": "",
 }
 
 
@@ -63,6 +70,11 @@ def load_env(path: str | Path = ".env") -> dict[str, str]:
 
 
 def save_env(values: dict[str, object], path: str | Path = ".env") -> Path:
+    with _ENV_LOCK:
+        return _save_env(values, path)
+
+
+def _save_env(values: dict[str, object], path: str | Path) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     current_lines = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
