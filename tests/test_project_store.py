@@ -8,6 +8,7 @@ from manual_graphrag.project_store import (
     delete_project,
     list_projects,
     load_project,
+    remove_document,
     save_project,
 )
 
@@ -25,17 +26,67 @@ def test_project_round_trip_and_listing(tmp_path) -> None:
     assert list_projects(tmp_path) == [("設備手冊", project["project_id"])]
 
 
-def test_save_project_copies_document(tmp_path) -> None:
+def test_save_project_copies_documents(tmp_path) -> None:
     source = tmp_path / "manual.pdf"
     source.write_bytes(b"pdf")
     root = tmp_path / "projects"
     project = create_project("Manual", root)
 
-    saved = save_project(project["project_id"], {}, str(source), root)
+    saved = save_project(project["project_id"], {}, [str(source)], root)
 
-    stored = Path(saved["document"]["path"])
+    stored = Path(saved["documents"][0]["path"])
     assert stored.read_bytes() == b"pdf"
     assert stored.parent.name == "documents"
+
+
+def test_save_project_accumulates_multiple_documents(tmp_path) -> None:
+    first = tmp_path / "a.pdf"
+    first.write_bytes(b"a")
+    second = tmp_path / "b.pdf"
+    second.write_bytes(b"b")
+    root = tmp_path / "projects"
+    project = create_project("Multi", root)
+
+    save_project(project["project_id"], {}, [str(first)], root)
+    saved = save_project(project["project_id"], {}, [str(second)], root)
+
+    assert [doc["name"] for doc in saved["documents"]] == ["a.pdf", "b.pdf"]
+
+
+def test_remove_document_deletes_file_and_entry(tmp_path) -> None:
+    first = tmp_path / "a.pdf"
+    first.write_bytes(b"a")
+    second = tmp_path / "b.pdf"
+    second.write_bytes(b"b")
+    root = tmp_path / "projects"
+    project = create_project("Multi", root)
+    save_project(project["project_id"], {}, [str(first), str(second)], root)
+
+    updated = remove_document(project["project_id"], "a.pdf", root)
+
+    assert [doc["name"] for doc in updated["documents"]] == ["b.pdf"]
+    assert not (root / project["project_id"] / "documents" / "a.pdf").exists()
+
+
+def test_load_project_migrates_legacy_single_document(tmp_path) -> None:
+    root = tmp_path / "projects"
+    project = create_project("Legacy", root)
+    from manual_graphrag.storage import write_json
+
+    project_path = root / project["project_id"] / "project.json"
+    legacy = {
+        **project,
+        "document": {"name": "old.pdf", "path": "old.pdf"},
+        "preview_state": {"file_name": "old.pdf"},
+    }
+    legacy.pop("documents", None)
+    legacy.pop("documents_meta", None)
+    write_json(project_path, legacy)
+
+    loaded = load_project(project["project_id"], root)
+
+    assert loaded["documents"] == [{"name": "old.pdf", "path": "old.pdf"}]
+    assert loaded["documents_meta"] == [{"file_name": "old.pdf"}]
 
 
 def test_append_question_preserves_history(tmp_path) -> None:

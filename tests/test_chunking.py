@@ -31,3 +31,11 @@ def test_preview_rows_for_page_returns_all_related_chunks() -> None:
     ]
 
     assert [row[0] for row in preview_rows_for_page(chunks, 2)] == [2, 3]
+
+
+def test_chunk_pages_tags_document_and_continues_numbering() -> None:
+    chunks = chunk_pages(
+        [PageText(1, "abcd")], 6, 2, document="manual.pdf", start_number=5
+    )
+    assert [chunk.number for chunk in chunks] == [5]
+    assert chunks[0].document == "manual.pdf"

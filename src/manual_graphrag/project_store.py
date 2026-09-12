@@ -48,8 +48,8 @@ def create_project(name: str, root: str | Path = PROJECTS_DIR) -> dict[str, Any]
         "created_at": now,
         "updated_at": now,
         "settings": {},
-        "document": {},
-        "preview_state": {},
+        "documents": [],
+        "documents_meta": [],
         "chunks": [],
         "graph_state": {},
         "questions": [],
@@ -64,7 +64,14 @@ def load_project(project_id: str, root: str | Path = PROJECTS_DIR) -> dict[str, 
     target = Path(root) / project_id / "project.json"
     if not target.is_file():
         raise ValueError("找不到指定專案")
-    return read_json(target)
+    project = read_json(target)
+    if "documents" not in project:
+        legacy_document = project.pop("document", None)
+        project["documents"] = [legacy_document] if legacy_document else []
+    if "documents_meta" not in project:
+        legacy_preview = project.pop("preview_state", None)
+        project["documents_meta"] = [legacy_preview] if legacy_preview else []
+    return project
 
 
 def delete_project(project_id: str, root: str | Path = PROJECTS_DIR) -> str:
@@ -77,22 +84,29 @@ def delete_project(project_id: str, root: str | Path = PROJECTS_DIR) -> str:
 def save_project(
     project_id: str,
     payload: dict[str, Any],
-    document_path: str | None = None,
+    document_paths: list[str] | None = None,
     root: str | Path = PROJECTS_DIR,
 ) -> dict[str, Any]:
     current = load_project(project_id, root)
     project_dir = Path(root) / project_id
-    document = dict(payload.get("document") or current.get("document") or {})
-    if document_path:
-        source = Path(document_path)
-        if not source.is_file():
-            raise ValueError("找不到要保存的 PDF 文件")
+    documents = list(payload.get("documents", current.get("documents") or []))
+    if document_paths:
         documents_dir = project_dir / "documents"
         documents_dir.mkdir(parents=True, exist_ok=True)
-        destination = documents_dir / source.name
-        if source.resolve() != destination.resolve():
-            shutil.copy2(source, destination)
-        document = {"name": source.name, "path": str(destination)}
+        by_name = {doc.get("name"): index for index, doc in enumerate(documents)}
+        for document_path in document_paths:
+            source = Path(document_path)
+            if not source.is_file():
+                raise ValueError("找不到要保存的 PDF 文件")
+            destination = documents_dir / source.name
+            if source.resolve() != destination.resolve():
+                shutil.copy2(source, destination)
+            record = {"name": source.name, "path": str(destination)}
+            if source.name in by_name:
+                documents[by_name[source.name]] = record
+            else:
+                by_name[source.name] = len(documents)
+                documents.append(record)
     updated = {
         **current,
         **payload,
@@ -100,10 +114,24 @@ def save_project(
         "name": current["name"],
         "created_at": current["created_at"],
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "document": document,
+        "documents": documents,
     }
     write_json(project_dir / "project.json", updated)
     return updated
+
+
+def remove_document(
+    project_id: str, file_name: str, root: str | Path = PROJECTS_DIR
+) -> dict[str, Any]:
+    current = load_project(project_id, root)
+    documents = current.get("documents") or []
+    remaining = [doc for doc in documents if doc.get("name") != file_name]
+    for doc in documents:
+        if doc.get("name") == file_name:
+            path = Path(doc.get("path", ""))
+            if path.is_file():
+                path.unlink()
+    return save_project(project_id, {"documents": remaining}, root=root)
 
 
 def append_question(

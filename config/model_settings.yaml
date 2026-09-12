@@ -1,0 +1,53 @@
+openai_models:
+  llm:
+  - gpt-4.1-mini
+  - gpt-4o-mini
+  embedding:
+  - text-embedding-3-small
+  - text-embedding-3-large
+services:
+  llm:
+    active: Ollama
+    profiles:
+      OpenAI:
+        rows: []
+        models:
+        - gpt-4.1-mini
+        - gpt-4.1-mini
+        - gpt-4.1-mini
+        - gpt-4.1-mini
+        - gpt-4.1-mini
+      Ollama:
+        rows:
+        - - true
+          - gemma4:12b
+        models:
+        - null
+        - null
+        - null
+        - null
+        - null
+  embedding:
+    active: OpenAI
+    profiles:
+      OpenAI:
+        rows: []
+        models:
+        - text-embedding-3-small
+      Ollama:
+        rows:
+        - - false
+          - gemma4:12b
+        models:
+        - null
+      Voyage:
+        rows: []
+        models:
+        - voyage-4
+voyage_models:
+- voyage-4-large
+- voyage-4
+- voyage-4-lite
+- voyage-code-3
+- voyage-finance-2
+- voyage-law-2

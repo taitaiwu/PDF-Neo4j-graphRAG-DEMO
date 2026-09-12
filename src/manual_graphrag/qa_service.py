@@ -29,6 +29,12 @@ def embedding_vectors(base_url: str, api_key: str, model: str, texts: list[str])
     return vectors
 
 
+def check_embedding_connection(base_url: str, api_key: str, model: str) -> None:
+    if not model.strip():
+        raise ValueError("請先填寫 Embedding 模型名稱")
+    embedding_vectors(base_url, api_key, model, ["ping"])
+
+
 def answer_graph_question(
     base_url: str,
     api_key: str,

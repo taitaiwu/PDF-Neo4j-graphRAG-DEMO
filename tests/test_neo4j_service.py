@@ -159,6 +159,9 @@ def test_import_extraction_writes_document_entities_and_relationships(monkeypatc
     assert transaction.calls[3][1]["relationships"] is relationships
     assert "EXTRACTED_RELATION" in transaction.calls[3][0]
     assert "GraphEvidence" in transaction.calls[4][0]
+    assert "entity.source_documents" in transaction.calls[2][0]
+    assert "relation.source_documents" in transaction.calls[3][0]
+    assert "evidence.source_documents" in transaction.calls[4][0]
 
 
 @pytest.mark.parametrize(

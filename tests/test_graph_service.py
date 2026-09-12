@@ -1,4 +1,6 @@
+import io
 import json
+import urllib.error
 
 import pytest
 
@@ -34,7 +36,7 @@ def chat_response(payload: dict[str, object]) -> dict[str, object]:
 def test_plan_graph_schema_parses_fenced_json_and_uses_chunks(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_post(url, payload, api_key, timeout=120):
+    def fake_post(url, payload, api_key, timeout=120, **kwargs):
         captured.update({"url": url, "payload": payload, "api_key": api_key})
         return chat_response(SCHEMA)
 
@@ -156,7 +158,7 @@ def test_compact_schema_keeps_only_required_merge_fields(monkeypatch) -> None:
 
 
 
-def test_schema_planning_prompt_applies_granularity_and_type_limits(monkeypatch) -> None:
+def test_schema_planning_prompt_applies_granularity_without_type_limits(monkeypatch) -> None:
     prompts = []
 
     def fake_chat(*args, **kwargs):
@@ -164,83 +166,164 @@ def test_schema_planning_prompt_applies_granularity_and_type_limits(monkeypatch)
         return SCHEMA
 
     monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
-
     graph_service.plan_graph_schema(
-        "http://models/v1",
-        "",
-        "llm",
+        "http://models/v1", "", "llm",
         [TextChunk(1, "設備 A 使用設備 B", (1,))],
         schema_granularity="粗略",
-        max_entity_types=8,
-        max_relationship_types=12,
     )
-
     assert "Schema 粒度：粗略" in prompts[0]
     assert "具體名稱、型號、編號、人物、組織或章節" in prompts[0]
-    assert "實體類型最多 8 個" in prompts[0]
-    assert "關係類型最多 12 個" in prompts[0]
+    assert "類型最多" not in prompts[0]
+    assert "上限" not in prompts[0]
 
 
-@pytest.mark.parametrize(
-    "granularity,max_entities,max_relationships,error",
-    [
-        ("未知", 15, 20, "Schema 粒度"),
-        ("平衡", 0, 20, "最大實體類型數"),
-        ("平衡", 15, 0, "最大關係類型數"),
-    ],
-)
-def test_schema_planning_rejects_invalid_granularity_options(
-    granularity, max_entities, max_relationships, error
-) -> None:
-    with pytest.raises(ValueError, match=error):
+def test_schema_planning_rejects_invalid_granularity() -> None:
+    with pytest.raises(ValueError, match="Schema 粒度"):
         graph_service.plan_graph_schema(
-            "http://models/v1",
-            "",
-            "llm",
-            [TextChunk(1, "text", (1,))],
-            schema_granularity=granularity,
-            max_entity_types=max_entities,
-            max_relationship_types=max_relationships,
+            "http://models/v1", "", "llm",
+            [TextChunk(1, "text", (1,))], schema_granularity="未知",
         )
 
 
-def test_schema_planning_retries_when_type_limit_is_exceeded(monkeypatch) -> None:
-    oversized = {
-        "entity_types": [
-            {"name": "DEVICE"},
-            {"name": "COMPONENT"},
-        ],
-        "relationship_types": [{"name": "USES"}],
+def test_schema_planning_accepts_unlimited_type_counts(monkeypatch) -> None:
+    large_schema = {
+        "entity_types": [{"name": f"ENTITY_{index}"} for index in range(40)],
+        "relationship_types": [{"name": f"REL_{index}"} for index in range(50)],
     }
-    responses = iter([chat_response(oversized), chat_response(SCHEMA)])
-    payloads = []
+    calls = []
+    monkeypatch.setattr(
+        graph_service, "_post_json",
+        lambda *args, **kwargs: calls.append(args[1]) or chat_response(large_schema),
+    )
+    plan = graph_service.plan_graph_schema(
+        "http://models/v1", "", "llm", [TextChunk(1, "text", (1,))],
+    )
+    assert len(plan.schema["entity_types"]) == 40
+    assert len(plan.schema["relationship_types"]) == 50
+    assert len(calls) == 1
 
-    def fake_post(url, payload, api_key, timeout=120):
-        payloads.append(payload)
-        return next(responses)
+
+def test_schema_planning_reports_rate_limit_wait_via_progress(monkeypatch) -> None:
+    def fake_post(url, payload, api_key, timeout=120, on_retry=None, **kwargs):
+        if on_retry:
+            on_retry(1, 2.5)
+        return chat_response(SCHEMA)
 
     monkeypatch.setattr(graph_service, "_post_json", fake_post)
+    progress_updates: list[tuple[float | None, str]] = []
 
-    plan = graph_service.plan_graph_schema(
-        "http://models/v1",
-        "",
-        "llm",
-        [TextChunk(1, "text", (1,))],
-        max_entity_types=1,
-        max_relationship_types=1,
+    graph_service.plan_graph_schema(
+        "http://models/v1", "", "llm", [TextChunk(1, "text", (1,))],
+        progress_callback=lambda value, description: progress_updates.append(
+            (value, description)
+        ),
     )
 
-    assert plan.schema == SCHEMA
-    assert len(payloads) == 2
-    assert "entity_types 不得超過 1 個" in payloads[1]["messages"][-1]["content"]
+    wait_messages = [desc for value, desc in progress_updates if value is None]
+    assert wait_messages
+    assert "速率限制" in wait_messages[0]
+    assert "2.5" in wait_messages[0]
 
+
+def test_extract_graph_reports_rate_limit_wait_via_progress(monkeypatch) -> None:
+    def fake_chat_json(*args, **kwargs):
+        on_retry = kwargs.get("on_retry")
+        if on_retry:
+            on_retry(1, 3.0)
+        return {"entities": [], "relationships": []}
+
+    monkeypatch.setattr(graph_service, "_chat_json", fake_chat_json)
+    progress_updates: list[tuple[float | None, str]] = []
+
+    graph_service.extract_graph(
+        "http://models/v1", "", "llm", [TextChunk(1, "text", (1,))], SCHEMA,
+        progress_callback=lambda value, description: progress_updates.append(
+            (value, description)
+        ),
+    )
+
+    wait_messages = [desc for value, desc in progress_updates if value is None]
+    assert wait_messages
+    assert "速率限制" in wait_messages[0]
+    assert "3.0" in wait_messages[0]
+
+
+def test_run_control_toggle_pause_reports_state() -> None:
+    control = graph_service.RunControl()
+    assert control.is_paused is False
+    assert control.toggle_pause() is True
+    assert control.is_paused is True
+    assert control.toggle_pause() is False
+    assert control.is_paused is False
+
+
+def test_run_control_check_raises_when_stopped() -> None:
+    control = graph_service.RunControl()
+    control.request_stop()
+    with pytest.raises(graph_service.RunCancelled):
+        control.check()
+    control.reset()
+    control.check()
+
+
+def test_plan_graph_schema_stops_immediately_when_already_cancelled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        graph_service, "_chat_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("不應呼叫模型")),
+    )
+    control = graph_service.RunControl()
+    control.request_stop()
+
+    with pytest.raises(graph_service.RunCancelled):
+        graph_service.plan_graph_schema(
+            "http://models/v1", "", "llm", [TextChunk(1, "text", (1,))],
+            control=control,
+        )
+
+
+def test_extract_graph_stops_immediately_when_already_cancelled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        graph_service, "_chat_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("不應呼叫模型")),
+    )
+    control = graph_service.RunControl()
+    control.request_stop()
+
+    with pytest.raises(graph_service.RunCancelled):
+        graph_service.extract_graph(
+            "http://models/v1", "", "llm", [TextChunk(1, "text", (1,))], SCHEMA,
+            control=control,
+        )
+
+
+def test_plan_graph_schema_stops_mid_run_without_running_remaining_batches(monkeypatch) -> None:
+    monkeypatch.setattr(graph_service, "SCHEMA_CONTEXT_LIMIT", 10)
+    chunks = [TextChunk(number, "x" * 20, (number,)) for number in range(1, 6)]
+    control = graph_service.RunControl()
+    calls: list[int] = []
+
+    def fake_chat(*args, **kwargs):
+        calls.append(1)
+        control.request_stop()
+        return SCHEMA
+
+    monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
+
+    with pytest.raises(graph_service.RunCancelled):
+        graph_service.plan_graph_schema(
+            "http://models/v1", "", "llm", chunks,
+            max_concurrent_requests=1,
+            control=control,
+        )
+
+    assert len(calls) < 5
 
 
 def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> None:
     monkeypatch.setattr(graph_service, "EXTRACTION_BATCH_LIMIT", 45)
     chunks = [
-        TextChunk(1, "設備 A", (1,)),
-        TextChunk(2, "設備 A 使用設備 B", (2,)),
+        TextChunk(1, "設備 A", (1,), document="manual-a.pdf"),
+        TextChunk(2, "設備 A 使用設備 B", (2,), document="manual-b.pdf"),
     ]
     responses = iter(
         [
@@ -297,6 +380,7 @@ def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> No
     assert len(extraction.entities) == 2
     assert extraction.entities[0]["source_chunk_numbers"] == [1, 2]
     assert extraction.entities[0]["source_pages"] == [1, 2]
+    assert extraction.entities[0]["source_documents"] == ["manual-a.pdf", "manual-b.pdf"]
     assert extraction.relationships == [
         {
             "source": "設備 A",
@@ -305,6 +389,7 @@ def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> No
             "description": "搭配使用",
             "source_chunk_numbers": [2],
             "source_pages": [2],
+            "source_documents": ["manual-b.pdf"],
         }
     ]
 
@@ -324,6 +409,106 @@ def test_chat_json_rejects_invalid_generation_options() -> None:
         graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 2.1, 100)
     with pytest.raises(ValueError, match="最大輸出 tokens"):
         graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 0, 0)
+
+
+def _rate_limit_error(retry_after: str | None = None) -> urllib.error.HTTPError:
+    headers = {"Retry-After": retry_after} if retry_after else {}
+    return urllib.error.HTTPError(
+        "http://models/v1/chat/completions", 429, "Too Many Requests",
+        headers, io.BytesIO(b'{"error": {"message": "rate_limit_exceeded"}}'),
+    )
+
+
+def test_post_json_retries_after_rate_limit_then_succeeds(monkeypatch) -> None:
+    calls = {"count": 0}
+    sleeps: list[float] = []
+    first_error = _rate_limit_error("0")
+
+    def fake_urlopen(request, timeout=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise first_error
+        return io.BytesIO(json.dumps({"ok": True}).encode("utf-8"))
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(graph_service.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = graph_service._post_json("http://models/v1/chat/completions", {"a": 1}, "key")
+
+    assert result == {"ok": True}
+    assert calls["count"] == 2
+    assert sleeps == [0.5]
+    assert first_error.fp.closed, "retried HTTPError response must be closed, not leaked"
+
+
+def test_post_json_raises_after_exhausting_rate_limit_retries(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    def fake_urlopen(request, timeout=None):
+        calls["count"] += 1
+        raise _rate_limit_error()
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(graph_service.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(ValueError, match="429"):
+        graph_service._post_json("http://models/v1/chat/completions", {"a": 1}, "key")
+
+    assert calls["count"] == graph_service.RATE_LIMIT_MAX_RETRIES + 1
+
+
+def test_list_models_returns_sorted_unique_ids(monkeypatch) -> None:
+    payload = {
+        "data": [
+            {"id": "llama3.1:8b"},
+            {"id": "nomic-embed-text"},
+            {"id": "llama3.1:8b"},
+            {"id": ""},
+            "not-a-dict",
+        ]
+    }
+
+    def fake_urlopen(request, timeout=None):
+        assert request.full_url == "http://localhost:11434/v1/models"
+        return io.BytesIO(json.dumps(payload).encode("utf-8"))
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    models = graph_service.list_models("http://localhost:11434/v1", "")
+
+    assert models == ["llama3.1:8b", "nomic-embed-text"]
+
+
+def test_list_models_rejects_missing_data_field(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=None):
+        return io.BytesIO(json.dumps({"object": "list"}).encode("utf-8"))
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(ValueError, match="data 陣列"):
+        graph_service.list_models("http://localhost:11434/v1", "")
+
+
+def test_list_models_rejects_empty_model_list(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=None):
+        return io.BytesIO(json.dumps({"data": []}).encode("utf-8"))
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(ValueError, match="沒有回傳任何可用模型"):
+        graph_service.list_models("http://localhost:11434/v1", "")
+
+
+def test_check_model_connection_reports_http_error(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            "http://models/v1/models", 401, "Unauthorized", {}, io.BytesIO(b"bad key")
+        )
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(ValueError, match="401"):
+        graph_service.check_model_connection("http://models/v1", "wrong-key")
 
 
 def test_schema_planning_stops_when_any_batch_fails(monkeypatch) -> None:
@@ -369,7 +554,7 @@ def test_chat_json_retries_invalid_output_once(monkeypatch) -> None:
     )
     payloads = []
 
-    def fake_post(url, payload, api_key, timeout=120):
+    def fake_post(url, payload, api_key, timeout=120, **kwargs):
         payloads.append(payload)
         return next(responses)
 
@@ -393,7 +578,7 @@ def test_chat_json_retries_schema_that_fails_structure_validation(monkeypatch) -
     responses = iter([chat_response(invalid_schema), chat_response(SCHEMA)])
     payloads = []
 
-    def fake_post(url, payload, api_key, timeout=120):
+    def fake_post(url, payload, api_key, timeout=120, **kwargs):
         payloads.append(payload)
         return next(responses)
 
