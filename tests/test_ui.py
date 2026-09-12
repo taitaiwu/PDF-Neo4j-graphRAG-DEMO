@@ -674,6 +674,24 @@ def test_document_table_selection_removes_checked_pdfs(monkeypatch) -> None:
     assert result[6] == [[False, "b.pdf", "1–2", 0]]
 
 
+
+def test_document_table_dataframe_selection_removes_checked_pdf(monkeypatch) -> None:
+    import pandas as pd
+
+    removed = []
+    monkeypatch.setattr(ui, "remove_document", lambda project_id, name: removed.append(name))
+    documents = [
+        {"file_name": "a.pdf", "page_start": 1, "page_end": 1},
+        {"file_name": "b.pdf", "page_start": 1, "page_end": 2},
+    ]
+    table = pd.DataFrame([
+        [True, "a.pdf", "1–1", 1],
+        [False, "b.pdf", "1–2", 2],
+    ], columns=["選取", "文件", "頁碼範圍", "Chunk 數"])
+    result = ui.remove_document_for_ui("project", table, documents, [])
+    assert removed == ["a.pdf"]
+    assert [doc["file_name"] for doc in result[1]] == ["b.pdf"]
+
 def test_new_project_resets_pdf_status_message() -> None:
     assert ui.reset_new_project_pdf_status_for_ui() == (
         "尚未解析 PDF。可重複上傳多份 PDF，逐一加入同一個專案。"

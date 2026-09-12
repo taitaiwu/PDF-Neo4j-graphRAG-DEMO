@@ -883,7 +883,7 @@ def add_document_for_ui(
 
 def remove_document_for_ui(
     project_id: str,
-    file_names: list[str] | str | None,
+    file_names: Any,
     documents: list[dict[str, Any]],
     chunks: list[TextChunk],
 ) -> tuple[
@@ -892,13 +892,19 @@ def remove_document_for_ui(
 ]:
     documents = list(documents or [])
     chunks = list(chunks or [])
-    if isinstance(file_names, list) and file_names and isinstance(file_names[0], list):
-        names = [str(row[1]) for row in file_names if len(row) >= 2 and row[0] is True and row[1]]
-    else:
+    table_rows: Any = file_names
+    if isinstance(table_rows, dict) and "data" in table_rows:
+        table_rows = table_rows["data"]
+    elif hasattr(table_rows, "values") and hasattr(table_rows.values, "tolist"):
+        table_rows = table_rows.values.tolist()
+    if isinstance(table_rows, list) and table_rows and isinstance(table_rows[0], (list, tuple)):
         names = [
-            str(name) for name in (file_names if isinstance(file_names, list) else [file_names])
-            if name
+            str(row[1]) for row in table_rows
+            if len(row) >= 2 and bool(row[0]) and row[1]
         ]
+    else:
+        values = table_rows if isinstance(table_rows, list) else [table_rows]
+        names = [str(name) for name in values if isinstance(name, str) and name]
     if not names:
         return (
             "請先選擇要移除的 PDF。", documents, chunks, {}, [],
