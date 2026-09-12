@@ -73,6 +73,24 @@ def test_graph_controls_are_above_schema_and_type_limit_fields_are_removed() -> 
     assert "最大關係類型數" not in labels
 
 
+def test_pages_three_through_five_default_all_llm_fields_to_gpt_4_1_mini(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "service_choices", lambda state: ["gpt-4.1-mini", "gpt-4o-mini"])
+    monkeypatch.setattr(
+        ui, "service_choice_items",
+        lambda state: [("OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"), ("OpenAI｜gpt-4o-mini", "gpt-4o-mini")],
+    )
+    app = build_app()
+    labels = {
+        "Schema 規劃 LLM", "知識圖譜抽取 LLM", "生題模型", "回答與評判模型", "問答 LLM",
+    }
+    fields = [
+        component for component in app.config["components"]
+        if component.get("props", {}).get("label") in labels
+    ]
+    assert len(fields) == 5
+    assert all(field["props"]["value"] == "gpt-4.1-mini" for field in fields)
+
+
 def test_pause_and_stop_buttons_bypass_the_queue() -> None:
     app = build_app()
     pause_button = next(

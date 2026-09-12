@@ -209,6 +209,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
         inputs = ["OpenAI", None, "https://api.openai.com/v1", "test-key", {"headers": ["使用", "模型名稱"], "data": []}, *([None] * 5)]
         connected = (await app.process_api(test["id"], inputs, state=session))["data"]
         assert connected[7]["choices"] == [["OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"], ["OpenAI｜gpt-4o-mini", "gpt-4o-mini"]]
+        assert all(field["value"] == "gpt-4.1-mini" for field in connected[7:])
         inputs[4] = connected[3]["value"]
         inputs[5:] = [u["value"] for u in connected[7:]]
         inputs[0] = "Ollama"

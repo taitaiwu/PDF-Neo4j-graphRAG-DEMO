@@ -52,6 +52,7 @@ from .storage import write_json
 
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 
 
 def connection_summary(
@@ -464,8 +465,8 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         get("neo4j_uri", env["NEO4J_URI"]), get("neo4j_database", env["NEO4J_DATABASE"]),
         get("neo4j_username", env["NEO4J_USERNAME"]), get("neo4j_password", env["NEO4J_PASSWORD"]),
         get("model_endpoint", llm_profile["base_url"]), get("api_key", llm_profile["api_key"]),
-        get("graph_llm_model", llm_profile["models"][0]), get("graph_embedding_model", embedding_profile["models"][0]),
-        get("answer_model", llm_profile["models"][4]),
+        get("graph_llm_model", DEFAULT_LLM_MODEL), get("graph_embedding_model", embedding_profile["models"][0]),
+        get("answer_model", DEFAULT_LLM_MODEL),
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
         get("schema_granularity", "平衡"),
         get("max_concurrent_requests", 3),
@@ -473,7 +474,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
             value=get("schema_sampling_mode", "全部頁面"),
             visible=get("schema_sampling_mode", "全部頁面") == "隨機抽取 N 頁",
         ),
-        get("schema_sample_page_count", 10), get("extraction_llm_model", llm_profile["models"][1]),
+        get("schema_sample_page_count", 10), get("extraction_llm_model", DEFAULT_LLM_MODEL),
         get("extraction_max_concurrent_requests", 3),
         _display_retrieval_mode(get("retrieval_mode")), get("top_k", 8), get("schema_text", ""),
         documents, chunks, graph, active_preview, active_chunks,
@@ -633,9 +634,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     preferences = evaluation.get("preferences") or {}
     questions = evaluation.get("questions") or []
     results = evaluation.get("results") or []
-    llm = load_service_settings("llm")
-    profile = llm["profiles"][llm["active"]]
-    legacy_model = preferences.get("model", profile["models"][4])
+    legacy_model = preferences.get("model", DEFAULT_LLM_MODEL)
     return (
         evaluation, _evaluation_question_rows(questions), _evaluation_result_rows(results),
         preferences.get("generation_model", legacy_model),
@@ -1466,7 +1465,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     graph_llm_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=llm_profile["models"][0] if llm_profile["models"][0] in llm_allowed else None,
+                        value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
                         allow_custom_value=False,
                         label="Schema 規劃 LLM",
                     )
@@ -1523,7 +1522,7 @@ def build_app() -> gr.Blocks:
                 )
                 extraction_llm_model = gr.Dropdown(
                     choices=llm_choices,
-                    value=llm_profile["models"][1] if llm_profile["models"][1] in llm_allowed else None,
+                    value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
                     allow_custom_value=False,
                     label="知識圖譜抽取 LLM",
                 )
@@ -1578,7 +1577,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     evaluation_generation_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=llm_profile["models"][2] if llm_profile["models"][2] in llm_allowed else None,
+                        value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
                         allow_custom_value=False,
                         label="生題模型",
                     )
@@ -1589,7 +1588,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     evaluation_test_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=llm_profile["models"][3] if llm_profile["models"][3] in llm_allowed else None,
+                        value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
                         allow_custom_value=False,
                         label="回答與評判模型",
                     )
@@ -1641,7 +1640,7 @@ def build_app() -> gr.Blocks:
             )
             answer_model = gr.Dropdown(
                 choices=llm_choices,
-                value=llm_profile["models"][4] if llm_profile["models"][4] in llm_allowed else None,
+                value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
                 allow_custom_value=False,
                 label="問答 LLM",
             )
