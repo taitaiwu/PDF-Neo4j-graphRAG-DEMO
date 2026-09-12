@@ -273,6 +273,72 @@ def test_persist_env_settings_writes_all_fields(tmp_path, monkeypatch) -> None:
 
 
 
+def test_apply_ollama_preset_for_ui_fills_local_endpoint_and_clears_keys(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    endpoint, api_key, embedding_base, embedding_key, status = ui.apply_ollama_preset_for_ui(
+        "bolt://db", "neo4j", "user", "pass", "build-model", "embed-model", "answer-model",
+    )
+
+    assert endpoint == embedding_base == "http://localhost:11434/v1"
+    assert api_key == embedding_key == ""
+    assert status.startswith("✅")
+    content = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert 'MODEL_API_BASE="http://localhost:11434/v1"' in content
+    assert 'MODEL_API_KEY=""' in content
+    assert 'BUILD_MODEL="build-model"' in content
+
+
+def test_refresh_llm_models_for_ui_updates_dropdown_choices(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "list_models", lambda base_url, api_key: ["llama3.1:8b", "qwen2.5:7b"])
+
+    *updates, status = ui.refresh_llm_models_for_ui(
+        "http://localhost:11434/v1", "", "current", "current", "current", "current", "current",
+    )
+
+    assert status.startswith("✅ 已取得 2 個模型")
+    for update in updates:
+        assert "llama3.1:8b" in update["choices"]
+        assert "qwen2.5:7b" in update["choices"]
+        assert "current" in update["choices"]
+
+
+def test_refresh_llm_models_for_ui_reports_failure_without_clearing_choices(monkeypatch) -> None:
+    def boom(base_url, api_key):
+        raise ValueError("連線失敗")
+
+    monkeypatch.setattr(ui, "list_models", boom)
+
+    *updates, status = ui.refresh_llm_models_for_ui(
+        "http://bad", "", "current", "current", "current", "current", "current",
+    )
+
+    assert status == "❌ 連線失敗"
+    assert all("choices" not in update for update in updates)
+
+
+def test_refresh_embedding_models_for_ui_updates_dropdown_choices(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "list_models", lambda base_url, api_key: ["nomic-embed-text"])
+
+    update, status = ui.refresh_embedding_models_for_ui("http://localhost:11434/v1", "", "current")
+
+    assert status.startswith("✅ 已取得 1 個模型")
+    assert "nomic-embed-text" in update["choices"]
+    assert "current" in update["choices"]
+
+
+def test_build_app_has_ollama_preset_and_model_refresh_buttons() -> None:
+    app = build_app()
+    labels = {
+        component.get("props", {}).get("value")
+        for component in app.config["components"]
+        if component.get("type") == "button"
+    }
+    assert "⚡ 套用 Ollama 本機預設（省 token）" in labels
+    assert "重新整理模型清單" in labels
+    assert "重新整理 Embedding 模型清單" in labels
+
+
 def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _, created, status = ui.create_project_for_ui("手冊專案")

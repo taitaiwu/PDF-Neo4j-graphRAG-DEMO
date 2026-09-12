@@ -11,6 +11,7 @@ import gradio as gr
 
 from .chunking import TextChunk, chunk_pages, preview_rows
 from .config import (
+    OLLAMA_DEFAULT_BASE_URL,
     OPENAI_EMBEDDING_MODELS,
     OPENAI_LLM_MODELS,
     model_choices,
@@ -20,6 +21,7 @@ from .env_store import load_env, save_env
 from .evaluation_service import generate_evaluation_questions, judge_evaluation_answer
 from .graph_service import (
     extract_graph,
+    list_models,
     plan_graph_schema,
     check_model_connection,
     validate_schema,
@@ -110,6 +112,87 @@ def check_embedding_service_for_ui(base_url: str, api_key: str, model: str) -> s
     except ValueError as exc:
         return f"❌ {exc}"
     return "✅ Embedding 服務連線成功。"
+
+
+def apply_ollama_preset_for_ui(
+    neo4j_uri: str,
+    neo4j_database: str,
+    neo4j_username: str,
+    neo4j_password: str,
+    build_model: str,
+    embedding_model: str,
+    answer_model: str,
+) -> tuple[str, str, str, str, str]:
+    """Fill model/embedding endpoints with Ollama's local OpenAI-compatible API.
+
+    Ollama needs no API key; graph building then runs against a local model
+    instead of a paid API, which is the point (建圖太耗 token)。
+    """
+    model_endpoint = OLLAMA_DEFAULT_BASE_URL
+    api_key = ""
+    embedding_api_base = OLLAMA_DEFAULT_BASE_URL
+    embedding_api_key = ""
+    persist_env_settings(
+        neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+        model_endpoint, api_key, embedding_api_base, embedding_api_key,
+        build_model, embedding_model, answer_model,
+    )
+    return (
+        model_endpoint,
+        api_key,
+        embedding_api_base,
+        embedding_api_key,
+        "✅ 已套用 Ollama 本機端點（{}），API Key 已清空。"
+        "請確認 Ollama 已啟動並以 `ollama pull` 下載對應模型，"
+        "再按「重新整理模型清單」選擇模型。".format(OLLAMA_DEFAULT_BASE_URL),
+    )
+
+
+def refresh_llm_models_for_ui(
+    base_url: str,
+    api_key: str,
+    graph_llm_model_value: str,
+    extraction_llm_model_value: str,
+    evaluation_generation_model_value: str,
+    evaluation_test_model_value: str,
+    answer_model_value: str,
+) -> tuple[Any, Any, Any, Any, Any, str]:
+    """Populate LLM dropdowns from an OpenAI-compatible /models endpoint.
+
+    Works for OpenAI and for Ollama (which lists locally pulled models here),
+    so users don't have to type exact local model tags from memory.
+    """
+    try:
+        models = list_models(base_url, api_key)
+    except ValueError as exc:
+        no_change = gr.update()
+        return no_change, no_change, no_change, no_change, no_change, f"❌ {exc}"
+    updates = tuple(
+        gr.update(choices=model_choices(value, defaults=tuple(models)))
+        for value in (
+            graph_llm_model_value,
+            extraction_llm_model_value,
+            evaluation_generation_model_value,
+            evaluation_test_model_value,
+            answer_model_value,
+        )
+    )
+    preview = "、".join(models[:20]) + ("…" if len(models) > 20 else "")
+    return (*updates, f"✅ 已取得 {len(models)} 個模型：{preview}")
+
+
+def refresh_embedding_models_for_ui(
+    base_url: str, api_key: str, graph_embedding_model_value: str
+) -> tuple[Any, str]:
+    try:
+        models = list_models(base_url, api_key)
+    except ValueError as exc:
+        return gr.update(), f"❌ {exc}"
+    preview = "、".join(models[:20]) + ("…" if len(models) > 20 else "")
+    return (
+        gr.update(choices=model_choices(graph_embedding_model_value, defaults=tuple(models))),
+        f"✅ 已取得 {len(models)} 個模型：{preview}",
+    )
 
 
 def persist_env_settings(
@@ -1245,22 +1328,36 @@ def build_app() -> gr.Blocks:
                     neo4j_test_button = gr.Button("測試 Neo4j 連線", variant="primary")
                     neo4j_connection_status = gr.Markdown()
                 with gr.Column():
-                    gr.Markdown("### 模型服務（對話／建圖用，預設使用 OpenAI）")
+                    gr.Markdown(
+                        "### 模型服務（對話／建圖用，預設使用 OpenAI）\n"
+                        "也可填入任何 OpenAI 相容 API，例如本機 Ollama"
+                        f"（`{OLLAMA_DEFAULT_BASE_URL}`，免費、不耗 token，但建圖品質受本機模型能力限制）。"
+                    )
+                    ollama_preset_button = gr.Button(
+                        "⚡ 套用 Ollama 本機預設（省 token）"
+                    )
                     model_endpoint = gr.Textbox(label="API Base URL", value=env["MODEL_API_BASE"])
-                    api_key = gr.Textbox(label="API Key", value=env["MODEL_API_KEY"], type="password")
-                    model_test_button = gr.Button("測試模型服務連線", variant="primary")
+                    api_key = gr.Textbox(
+                        label="API Key（Ollama 免填）", value=env["MODEL_API_KEY"], type="password"
+                    )
+                    with gr.Row():
+                        model_test_button = gr.Button("測試模型服務連線", variant="primary")
+                        refresh_llm_models_button = gr.Button("重新整理模型清單")
                     model_connection_status = gr.Markdown()
-                    gr.Markdown("### Embedding 服務（預設使用 OpenAI）")
+                    gr.Markdown("### Embedding 服務（預設使用 OpenAI，也可用支援 Embedding 的 Ollama 模型）")
                     embedding_api_base = gr.Textbox(
                         label="Embedding API Base URL", value=env["EMBEDDING_API_BASE"]
                     )
                     embedding_api_key = gr.Textbox(
-                        label="Embedding API Key", value=env["EMBEDDING_API_KEY"], type="password"
+                        label="Embedding API Key（Ollama 免填）",
+                        value=env["EMBEDDING_API_KEY"], type="password",
                     )
                     embedding_test_model = gr.Textbox(
                         label="測試用 Embedding 模型名稱", value=env["EMBEDDING_MODEL"]
                     )
-                    embedding_test_button = gr.Button("測試 Embedding 服務連線", variant="primary")
+                    with gr.Row():
+                        embedding_test_button = gr.Button("測試 Embedding 服務連線", variant="primary")
+                        refresh_embedding_models_button = gr.Button("重新整理 Embedding 模型清單")
                     embedding_connection_status = gr.Markdown()
                     reload_button = gr.Button("重新讀取 .env")
             gr.Markdown("⚠️ Password 與 API Key 會以明文寫入本機 `.env`；請勿提交此檔案。")
@@ -1719,10 +1816,43 @@ def build_app() -> gr.Blocks:
             inputs=[model_endpoint, api_key],
             outputs=model_connection_status,
         )
+        refresh_llm_models_button.click(
+            refresh_llm_models_for_ui,
+            inputs=[
+                model_endpoint,
+                api_key,
+                graph_llm_model,
+                extraction_llm_model,
+                evaluation_generation_model,
+                evaluation_test_model,
+                answer_model,
+            ],
+            outputs=[
+                graph_llm_model,
+                extraction_llm_model,
+                evaluation_generation_model,
+                evaluation_test_model,
+                answer_model,
+                model_connection_status,
+            ],
+        )
         embedding_test_button.click(
             check_embedding_service_for_ui,
             inputs=[embedding_api_base, embedding_api_key, embedding_test_model],
             outputs=embedding_connection_status,
+        )
+        refresh_embedding_models_button.click(
+            refresh_embedding_models_for_ui,
+            inputs=[embedding_api_base, embedding_api_key, graph_embedding_model],
+            outputs=[graph_embedding_model, embedding_connection_status],
+        )
+        ollama_preset_button.click(
+            apply_ollama_preset_for_ui,
+            inputs=[
+                neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+                graph_llm_model, graph_embedding_model, answer_model,
+            ],
+            outputs=[model_endpoint, api_key, embedding_api_base, embedding_api_key, env_status],
         )
         env_inputs = [
             neo4j_uri,

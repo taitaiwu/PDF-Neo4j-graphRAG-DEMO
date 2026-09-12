@@ -491,6 +491,60 @@ def test_post_json_raises_after_exhausting_rate_limit_retries(monkeypatch) -> No
     assert calls["count"] == graph_service.RATE_LIMIT_MAX_RETRIES + 1
 
 
+def test_list_models_returns_sorted_unique_ids(monkeypatch) -> None:
+    payload = {
+        "data": [
+            {"id": "llama3.1:8b"},
+            {"id": "nomic-embed-text"},
+            {"id": "llama3.1:8b"},
+            {"id": ""},
+            "not-a-dict",
+        ]
+    }
+
+    def fake_urlopen(request, timeout=None):
+        assert request.full_url == "http://localhost:11434/v1/models"
+        return io.BytesIO(json.dumps(payload).encode("utf-8"))
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    models = graph_service.list_models("http://localhost:11434/v1", "")
+
+    assert models == ["llama3.1:8b", "nomic-embed-text"]
+
+
+def test_list_models_rejects_missing_data_field(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=None):
+        return io.BytesIO(json.dumps({"object": "list"}).encode("utf-8"))
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(ValueError, match="data 陣列"):
+        graph_service.list_models("http://localhost:11434/v1", "")
+
+
+def test_list_models_rejects_empty_model_list(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=None):
+        return io.BytesIO(json.dumps({"data": []}).encode("utf-8"))
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(ValueError, match="沒有回傳任何可用模型"):
+        graph_service.list_models("http://localhost:11434/v1", "")
+
+
+def test_check_model_connection_reports_http_error(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            "http://models/v1/models", 401, "Unauthorized", {}, io.BytesIO(b"bad key")
+        )
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(ValueError, match="401"):
+        graph_service.check_model_connection("http://models/v1", "wrong-key")
+
+
 def test_schema_planning_stops_when_any_batch_fails(monkeypatch) -> None:
     monkeypatch.setattr(graph_service, "SCHEMA_CONTEXT_LIMIT", 45)
     chunks = [TextChunk(number, "x" * 20, (number,)) for number in range(1, 4)]

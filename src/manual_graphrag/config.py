@@ -16,6 +16,11 @@ OPENAI_EMBEDDING_MODELS = (
     "text-embedding-ada-002",
 )
 
+# Ollama exposes an OpenAI-compatible API at this base URL by default; pointing
+# the existing generic chat/embeddings client at it avoids per-token API costs
+# for local models (see 交接紀錄.md).
+OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
+
 
 def model_choices(*current_models: str, defaults: tuple[str, ...]) -> list[str]:
     """Return unique model choices while retaining provider-specific current values."""

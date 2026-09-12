@@ -156,21 +156,48 @@ def _post_json(
     return result
 
 
-def check_model_connection(base_url: str, api_key: str) -> None:
-    url = _api_url(base_url, "models")
+def _get_json(url: str, api_key: str, timeout: int = 30) -> Any:
     headers = {"User-Agent": "Mozilla/5.0"}
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            if not 200 <= response.status < 300:
-                raise ValueError(f"模型服務回傳 HTTP {response.status}")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:500]
         raise ValueError(f"模型服務回傳 HTTP {exc.code}：{detail}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise ValueError(f"模型服務連線失敗：{exc}") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("模型服務回傳的不是有效 JSON") from exc
+
+
+def check_model_connection(base_url: str, api_key: str) -> None:
+    _get_json(_api_url(base_url, "models"), api_key)
+
+
+def list_models(base_url: str, api_key: str) -> list[str]:
+    """List model ids advertised by an OpenAI-compatible /models endpoint.
+
+    Works against OpenAI, Ollama (`http://localhost:11434/v1`), and any other
+    provider implementing the same schema, letting the UI offer local Ollama
+    model names instead of requiring users to type them from memory.
+    """
+    payload = _get_json(_api_url(base_url, "models"), api_key)
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        raise ValueError("模型服務回傳格式不正確，缺少 data 陣列")
+    models = sorted(
+        {
+            str(item["id"]).strip()
+            for item in data
+            if isinstance(item, dict) and str(item.get("id", "")).strip()
+        }
+    )
+    if not models:
+        raise ValueError("模型服務目前沒有回傳任何可用模型")
+    return models
 
 
 def _extract_json_text(text: str) -> dict[str, Any]:
