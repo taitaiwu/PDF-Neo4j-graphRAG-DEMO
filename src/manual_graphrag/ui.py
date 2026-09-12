@@ -23,6 +23,8 @@ from .graph_service import (
     plan_graph_schema,
     check_model_connection,
     validate_schema,
+    RunCancelled,
+    RunControl,
 )
 from .neo4j_service import (
     check_neo4j_connection,
@@ -286,7 +288,7 @@ def save_project_for_ui(
     graph_embedding_model: str, answer_model: str,
     chunk_size: int, chunk_overlap: int,
     graph_temperature: float,
-    schema_granularity: str,
+    schema_granularity: str, max_entity_types: int, max_relationship_types: int,
     max_concurrent_requests: int, schema_sampling_mode: str,
     schema_sample_page_count: int, extraction_llm_model: str,
     extraction_max_concurrent_requests: int,
@@ -303,6 +305,7 @@ def save_project_for_ui(
         "chunk_size": int(chunk_size), "chunk_overlap": int(chunk_overlap),
         "graph_temperature": float(graph_temperature),
         "schema_granularity": schema_granularity,
+        "max_entity_types": int(max_entity_types), "max_relationship_types": int(max_relationship_types),
         "max_concurrent_requests": int(max_concurrent_requests),
         "schema_sampling_mode": schema_sampling_mode,
         "schema_sample_page_count": int(schema_sample_page_count),
@@ -361,6 +364,8 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         get("answer_model", env["ANSWER_MODEL"]),
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
         get("schema_granularity", "平衡"),
+        get("max_entity_types", DEFAULT_MAX_ENTITY_TYPES),
+        get("max_relationship_types", DEFAULT_MAX_RELATIONSHIP_TYPES),
         get("max_concurrent_requests", 3),
         gr.update(
             value=get("schema_sampling_mode", "全部頁面"),
@@ -869,12 +874,16 @@ def plan_schema_for_ui(
     llm_model: str,
     temperature: float,
     schema_granularity: str,
+    max_entity_types: int,
+    max_relationship_types: int,
     max_concurrent_requests: int,
     sampling_mode: str,
     sample_page_count: int,
     chunks: list[TextChunk],
+    run_control: RunControl,
     progress=gr.Progress(),
 ) -> tuple[str, str]:
+    run_control.reset()
     try:
         planning_chunks, selected_pages = _select_schema_planning_chunks(
             chunks, sampling_mode, sample_page_count
@@ -888,10 +897,13 @@ def plan_schema_for_ui(
             DEFAULT_MAX_OUTPUT_TOKENS,
             lambda value, description: progress(value, desc=description),
             schema_granularity,
-            DEFAULT_MAX_ENTITY_TYPES,
-            DEFAULT_MAX_RELATIONSHIP_TYPES,
+            int(max_entity_types),
+            int(max_relationship_types),
             int(max_concurrent_requests),
+            control=run_control,
         )
+    except RunCancelled:
+        return "⏹ 已停止（使用者中止 Schema 規劃）。", ""
     except ValueError as exc:
         return f"❌ {exc}", ""
     if sampling_mode == "全部頁面":
@@ -906,7 +918,7 @@ def plan_schema_for_ui(
         f"{plan.analyzed_chunks} 個 chunk，"
         f"共 {plan.batch_count} 批、{plan.merge_rounds} 輪整合。"
         f"粒度：{schema_granularity}；實體／關係類型上限："
-        f"{DEFAULT_MAX_ENTITY_TYPES}／{DEFAULT_MAX_RELATIONSHIP_TYPES}（固定）。"
+        f"{int(max_entity_types)}／{int(max_relationship_types)}。"
         f"最大並行請求數：{int(max_concurrent_requests)}。"
         "請確認或編輯後再進行抽取。"
     )
@@ -922,8 +934,10 @@ def extract_graph_for_ui(
     chunks: list[TextChunk],
     schema_text: str,
     documents: list[dict[str, Any]],
+    run_control: RunControl,
     progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], list[list[object]], dict[str, Any]]:
+    run_control.reset()
     try:
         raw_schema = json.loads(schema_text)
         if not isinstance(raw_schema, dict):
@@ -939,7 +953,10 @@ def extract_graph_for_ui(
             DEFAULT_MAX_OUTPUT_TOKENS,
             int(max_concurrent_requests),
             lambda value, description: progress(value, desc=description),
+            control=run_control,
         )
+    except RunCancelled:
+        return "⏹ 已停止（使用者中止抽取）。", [], [], {}
     except json.JSONDecodeError:
         return "❌ schema 不是有效 JSON。", [], [], {}
     except (ValueError, RuntimeError) as exc:
@@ -995,6 +1012,21 @@ def extract_graph_for_ui(
         f"{len(extraction.relationships)} 筆關係（最大並行請求數：{int(max_concurrent_requests)}）。請確認結果後進行 Embedding 並匯入 Neo4j。"
     )
     return status, entity_rows, relationship_rows, graph_state
+
+
+def request_stop_for_ui(run_control: RunControl) -> str:
+    run_control.request_stop()
+    return "⏹ 已送出停止要求，正在等待目前批次結束…"
+
+
+def toggle_pause_for_ui(run_control: RunControl) -> tuple[str, dict[str, Any]]:
+    paused = run_control.toggle_pause()
+    if paused:
+        return (
+            "⏸ 已暫停：目前批次會跑完，但不會再送出新的批次。",
+            gr.update(value="▶ 繼續"),
+        )
+    return "▶ 已繼續，將開始送出新的批次。", gr.update(value="⏸ 暫停")
 
 
 def _build_graph_evidence(
@@ -1165,6 +1197,11 @@ def answer_question_for_ui(
     return status, result["answer"], rows
 
 
+def _current_project_banner(project: dict[str, Any]) -> str:
+    name = (project or {}).get("name")
+    return f"### 📁 目前專案：{name}" if name else "### 📁 目前專案：尚未選擇"
+
+
 def build_app() -> gr.Blocks:
     env = load_env()
     with gr.Blocks(title="PDF GraphRAG 測試工具", fill_width=True) as app:
@@ -1172,6 +1209,7 @@ def build_app() -> gr.Blocks:
             "# PDF GraphRAG 測試工具\n"
             "上傳使用手冊、調整建圖參數，並測試 Neo4j GraphRAG。"
         )
+        current_project_banner = gr.Markdown(_current_project_banner({}))
         project_state = gr.State({})
         documents_state = gr.State([])
         active_preview_state = gr.State({})
@@ -1179,6 +1217,7 @@ def build_app() -> gr.Blocks:
         chunk_state = gr.State([])
         graph_state = gr.State({})
         evaluation_state = gr.State({})
+        run_control_state = gr.State(RunControl())
 
         with gr.Tab("0. 專案設定") as project_tab:
             gr.Markdown("### 專案工作區\n建立或載入專案後，可保存本頁面所有連線、模型、參數、Chunk、文件、建圖狀態與問答紀錄。")
@@ -1292,6 +1331,14 @@ def build_app() -> gr.Blocks:
                         value="平衡",
                         label="Schema 粒度",
                     )
+                    max_entity_types = gr.Number(
+                        value=DEFAULT_MAX_ENTITY_TYPES, minimum=1, precision=0,
+                        label="最大實體類型數",
+                    )
+                    max_relationship_types = gr.Number(
+                        value=DEFAULT_MAX_RELATIONSHIP_TYPES, minimum=1, precision=0,
+                        label="最大關係類型數",
+                    )
                     max_concurrent_requests = gr.Number(
                         value=3, minimum=1, precision=0, label="最大並行請求數"
                     )
@@ -1306,6 +1353,14 @@ def build_app() -> gr.Blocks:
                     )
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema", variant="primary"
+                )
+                with gr.Row():
+                    pause_button = gr.Button("⏸ 暫停")
+                    stop_button = gr.Button("⏹ 停止", variant="stop")
+                run_control_status = gr.Markdown(
+                    "「暫停」「停止」在下方「規劃 Schema」或「確認 Schema 並抽取」"
+                    "執行中都可使用：暫停只會停止送出新批次（已送出的批次仍會跑完）；"
+                    "停止會盡快中止整個流程。"
                 )
                 plan_status = gr.Markdown("請先在 PDF 頁面解析並產生 chunks。")
                 gr.HTML(
@@ -1576,6 +1631,7 @@ def build_app() -> gr.Blocks:
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
+            max_entity_types, max_relationship_types,
             max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
@@ -1587,6 +1643,7 @@ def build_app() -> gr.Blocks:
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
+            max_entity_types, max_relationship_types,
             max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
@@ -1631,11 +1688,16 @@ def build_app() -> gr.Blocks:
         load_project_event.success(
             unlock_project_tabs_for_ui, inputs=project_selector, outputs=protected_tabs,
         )
+        project_state.change(
+            _current_project_banner, inputs=project_state, outputs=current_project_banner,
+            show_progress="hidden",
+        )
         auto_save_components = [
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
+            max_entity_types, max_relationship_types,
             max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
@@ -1749,10 +1811,13 @@ def build_app() -> gr.Blocks:
                 graph_llm_model,
                 graph_temperature,
                 schema_granularity,
+                max_entity_types,
+                max_relationship_types,
                 max_concurrent_requests,
                 schema_sampling_mode,
                 schema_sample_page_count,
                 chunk_state,
+                run_control_state,
             ],
             outputs=[plan_status, schema_editor],
         )
@@ -1767,9 +1832,22 @@ def build_app() -> gr.Blocks:
                 chunk_state,
                 schema_editor,
                 documents_state,
+                run_control_state,
             ],
             outputs=[build_status, entity_table, relationship_table, graph_state],
             show_progress="minimal",
+        )
+        pause_button.click(
+            toggle_pause_for_ui,
+            inputs=[run_control_state],
+            outputs=[run_control_status, pause_button],
+            queue=False,
+        )
+        stop_button.click(
+            request_stop_for_ui,
+            inputs=[run_control_state],
+            outputs=[run_control_status],
+            queue=False,
         )
         extraction_event.then(
             save_project_for_ui, inputs=project_setting_inputs,

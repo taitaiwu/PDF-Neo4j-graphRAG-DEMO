@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.error
 import urllib.request
@@ -14,6 +16,67 @@ SCHEMA_CONTEXT_LIMIT = 30_000
 SCHEMA_MERGE_LIMIT = 12_000
 SCHEMA_DESCRIPTION_LIMIT = 120
 EXTRACTION_BATCH_LIMIT = 12_000
+RATE_LIMIT_MAX_RETRIES = 6
+RATE_LIMIT_BASE_DELAY_SECONDS = 2.0
+RATE_LIMIT_MAX_DELAY_SECONDS = 30.0
+
+
+class RunCancelled(Exception):
+    """Raised when a user stops a running schema-planning or extraction job."""
+
+
+class RunControl:
+    """Cooperative stop/pause signal shared between a running job and its UI buttons.
+
+    Checked at safe points (before a batch starts, during rate-limit backoff);
+    an already in-flight HTTP request cannot be interrupted mid-call.
+    """
+
+    def __init__(self) -> None:
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "RunControl":
+        # Gradio deepcopies a gr.State's initial value per browser session;
+        # threading.Event isn't picklable, and each session needs its own
+        # independent, freshly-reset control anyway.
+        return RunControl()
+
+    def reset(self) -> None:
+        self._stop_event.clear()
+        self._pause_event.clear()
+
+    def request_stop(self) -> None:
+        self._stop_event.set()
+
+    def toggle_pause(self) -> bool:
+        if self._pause_event.is_set():
+            self._pause_event.clear()
+        else:
+            self._pause_event.set()
+        return self._pause_event.is_set()
+
+    @property
+    def is_paused(self) -> bool:
+        return self._pause_event.is_set()
+
+    def check(self) -> None:
+        if self._stop_event.is_set():
+            raise RunCancelled("使用者已停止")
+
+    def wait_if_paused(self) -> None:
+        while self._pause_event.is_set():
+            self.check()
+            time.sleep(0.2)
+
+    def sleep(self, seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while True:
+            self.check()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.2, remaining))
 
 
 @dataclass(frozen=True)
@@ -39,28 +102,55 @@ def _api_url(base_url: str, resource: str) -> str:
     return f"{base}/{resource.lstrip('/')}"
 
 
+def _rate_limit_retry_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
+    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+    if retry_after:
+        try:
+            return max(float(retry_after), 0.5)
+        except ValueError:
+            pass
+    return min(RATE_LIMIT_BASE_DELAY_SECONDS * (2**attempt), RATE_LIMIT_MAX_DELAY_SECONDS)
+
+
 def _post_json(
-    url: str, payload: dict[str, Any], api_key: str, timeout: int = 120
+    url: str,
+    payload: dict[str, Any],
+    api_key: str,
+    timeout: int = 120,
+    on_retry: Callable[[int, float], None] | None = None,
+    control: RunControl | None = None,
 ) -> dict[str, Any]:
     headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise ValueError(f"模型 API 回傳 HTTP {exc.code}：{detail}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise ValueError(f"無法連線模型 API：{exc}") from exc
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("模型 API 回傳的不是有效 JSON") from exc
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+        if control:
+            control.check()
+            control.wait_if_paused()
+        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < RATE_LIMIT_MAX_RETRIES:
+                delay = _rate_limit_retry_delay(exc, attempt)
+                exc.close()
+                if on_retry:
+                    on_retry(attempt + 1, delay)
+                if control:
+                    control.sleep(delay)
+                else:
+                    time.sleep(delay)
+                continue
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            raise ValueError(f"模型 API 回傳 HTTP {exc.code}：{detail}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise ValueError(f"無法連線模型 API：{exc}") from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("模型 API 回傳的不是有效 JSON") from exc
     if not isinstance(result, dict):
         raise ValueError("模型 API 回傳格式不正確")
     return result
@@ -127,6 +217,8 @@ def _chat_json(
     temperature: float = 0,
     max_output_tokens: int = 2048,
     validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    on_retry: Callable[[int, float], None] | None = None,
+    control: RunControl | None = None,
 ) -> dict[str, Any]:
     if not 0 <= temperature <= 2:
         raise ValueError("temperature 必須介於 0 到 2")
@@ -151,6 +243,8 @@ def _chat_json(
                 "messages": request_messages,
             },
             api_key,
+            on_retry=on_retry,
+            control=control,
         )
 
     def parse_and_validate(raw_content: str) -> dict[str, Any]:
@@ -300,11 +394,12 @@ def plan_graph_schema(
     chunks: list[TextChunk],
     temperature: float = 0,
     max_output_tokens: int = 2048,
-    progress_callback: Callable[[float, str], None] | None = None,
+    progress_callback: Callable[[float | None, str], None] | None = None,
     schema_granularity: str = "平衡",
     max_entity_types: int = 15,
     max_relationship_types: int = 20,
     max_concurrent_requests: int = 3,
+    control: RunControl | None = None,
 ) -> SchemaPlan:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -344,8 +439,20 @@ def plan_graph_schema(
     batches = _chunk_batches(chunks, SCHEMA_CONTEXT_LIMIT)
     candidates: list[dict[str, Any] | None] = [None] * len(batches)
 
-    def plan_batch(batch: list[TextChunk]) -> dict[str, Any]:
+    def plan_batch(index: int, batch: list[TextChunk]) -> dict[str, Any]:
+        if control:
+            control.check()
+            control.wait_if_paused()
         context = "\n\n".join(_chunk_label(chunk) for chunk in batch)
+
+        def report_retry(attempt: int, delay: float) -> None:
+            if progress_callback:
+                progress_callback(
+                    None,
+                    f"第 {index + 1} / {len(batches)} 批遇到速率限制（HTTP 429），"
+                    f"{delay:.1f} 秒後自動重試（第 {attempt} / {RATE_LIMIT_MAX_RETRIES} 次）…",
+                )
+
         candidate = _chat_json(
             base_url,
             api_key,
@@ -361,13 +468,15 @@ def plan_graph_schema(
             temperature,
             max_output_tokens,
             validate_planned_schema,
+            on_retry=report_retry,
+            control=control,
         )
         return _compact_schema(candidate)
 
     analyzed = 0
     with ThreadPoolExecutor(max_workers=max_concurrent_requests) as executor:
         futures = {
-            executor.submit(plan_batch, batch): (index, batch)
+            executor.submit(plan_batch, index, batch): (index, batch)
             for index, batch in enumerate(batches)
         }
         for future in as_completed(futures):
@@ -389,13 +498,28 @@ def plan_graph_schema(
 
     merge_rounds = 0
     while len(candidates) > 1:
+        if control:
+            control.check()
         merge_rounds += 1
         groups = _schema_groups(candidates, SCHEMA_MERGE_LIMIT)
         merged: list[dict[str, Any] | None] = [None] * len(groups)
 
-        def merge_group(group: list[dict[str, Any]]) -> dict[str, Any]:
+        def merge_group(index: int, group: list[dict[str, Any]]) -> dict[str, Any]:
+            if control:
+                control.check()
+                control.wait_if_paused()
             if len(group) == 1:
                 return group[0]
+
+            def report_retry(attempt: int, delay: float) -> None:
+                if progress_callback:
+                    progress_callback(
+                        None,
+                        f"第 {merge_rounds} 輪整合第 {index + 1} / {len(groups)} 組"
+                        f"遇到速率限制（HTTP 429），{delay:.1f} 秒後自動重試"
+                        f"（第 {attempt} / {RATE_LIMIT_MAX_RETRIES} 次）…",
+                    )
+
             result = _chat_json(
                 base_url,
                 api_key,
@@ -411,13 +535,15 @@ def plan_graph_schema(
                 temperature,
                 max_output_tokens,
                 validate_planned_schema,
+                on_retry=report_retry,
+                control=control,
             )
             return _compact_schema(result)
 
         completed_groups = 0
         with ThreadPoolExecutor(max_workers=max_concurrent_requests) as executor:
             futures = {
-                executor.submit(merge_group, group): index
+                executor.submit(merge_group, index, group): index
                 for index, group in enumerate(groups)
             }
             for future in as_completed(futures):
@@ -465,7 +591,8 @@ def extract_graph(
     temperature: float = 0,
     max_output_tokens: int = 2048,
     max_concurrent_requests: int = 3,
-    progress_callback: Callable[[float, str], None] | None = None,
+    progress_callback: Callable[[float | None, str], None] | None = None,
+    control: RunControl | None = None,
 ) -> GraphExtraction:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -488,8 +615,20 @@ def extract_graph(
     if progress_callback:
         progress_callback(0.0, f"準備抽取 {len(chunks)} 個 chunks")
 
-    def extract_batch(batch: list[TextChunk]) -> dict[str, Any]:
+    def extract_batch(index: int, batch: list[TextChunk]) -> dict[str, Any]:
+        if control:
+            control.check()
+            control.wait_if_paused()
         context = "\n\n".join(_chunk_label(chunk) for chunk in batch)
+
+        def report_retry(attempt: int, delay: float) -> None:
+            if progress_callback:
+                progress_callback(
+                    None,
+                    f"第 {index + 1} / {len(batches)} 批遇到速率限制（HTTP 429），"
+                    f"{delay:.1f} 秒後自動重試（第 {attempt} / {RATE_LIMIT_MAX_RETRIES} 次）…",
+                )
+
         return _chat_json(
             base_url,
             api_key,
@@ -504,18 +643,22 @@ def extract_graph(
             f"schema：\n{json.dumps(schema, ensure_ascii=False)}\n\n文件：\n{context}",
             temperature,
             max_output_tokens,
+            on_retry=report_retry,
+            control=control,
         )
 
     results: list[dict[str, Any] | None] = [None] * len(batches)
     with ThreadPoolExecutor(max_workers=max_concurrent_requests) as executor:
         futures = {
-            executor.submit(extract_batch, batch): (index, batch)
+            executor.submit(extract_batch, index, batch): (index, batch)
             for index, batch in enumerate(batches)
         }
         for future in as_completed(futures):
             batch_index, batch = futures[future]
             try:
                 results[batch_index] = future.result()
+            except RunCancelled:
+                raise
             except Exception as exc:
                 raise RuntimeError(
                     f"知識圖譜抽取第 {batch_index + 1} / {len(batches)} 批失敗：{exc}"

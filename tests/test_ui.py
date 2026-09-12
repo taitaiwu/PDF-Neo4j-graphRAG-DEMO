@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import gradio as gr
+import pytest
 from manual_graphrag import ui
 from manual_graphrag.chunking import PageText, TextChunk
 
@@ -9,6 +10,27 @@ from manual_graphrag.ui import build_app, connection_summary, persist_env_settin
 
 def test_build_app_returns_blocks() -> None:
     assert isinstance(build_app(), gr.Blocks)
+
+
+def test_current_project_banner_reflects_project_name() -> None:
+    assert ui._current_project_banner({}) == "### 📁 目前專案：尚未選擇"
+    assert ui._current_project_banner({"name": "手冊專案"}) == "### 📁 目前專案：手冊專案"
+
+
+def test_build_app_wires_project_state_change_to_banner() -> None:
+    app = build_app()
+    assert any(
+        component.get("props", {}).get("value") == "### 📁 目前專案：尚未選擇"
+        for component in app.config["components"]
+    )
+    dependency = next(
+        item for item in app.config["dependencies"]
+        if str(item.get("api_name", "")).startswith("_current_project_banner")
+    )
+    assert any(
+        (target[1] if isinstance(target, (list, tuple)) else None) == "change"
+        for target in dependency.get("targets", [])
+    )
 
 
 def test_model_fields_offer_openai_models_and_allow_custom_values() -> None:
@@ -35,6 +57,31 @@ def test_model_fields_offer_openai_models_and_allow_custom_values() -> None:
     assert ("gpt-4.1", "gpt-4.1") in llm_choices
     assert ("gpt-4o-mini", "gpt-4o-mini") in llm_choices
     assert ("text-embedding-3-large", "text-embedding-3-large") in embedding_choices
+
+
+def test_pause_and_stop_buttons_bypass_the_queue() -> None:
+    app = build_app()
+    pause_button = next(
+        component for component in app.config["components"]
+        if component.get("props", {}).get("value") == "⏸ 暫停"
+    )
+    stop_button = next(
+        component for component in app.config["components"]
+        if component.get("props", {}).get("value") == "⏹ 停止"
+    )
+    pause_dependency = next(
+        item for item in app.config["dependencies"]
+        if str(item.get("api_name", "")).startswith("toggle_pause_for_ui")
+    )
+    stop_dependency = next(
+        item for item in app.config["dependencies"]
+        if str(item.get("api_name", "")).startswith("request_stop_for_ui")
+    )
+    assert stop_button["props"]["variant"] == "stop"
+    assert pause_dependency["queue"] is False
+    assert stop_dependency["queue"] is False
+    assert any(target[0] == pause_button["id"] for target in pause_dependency["targets"])
+    assert any(target[0] == stop_button["id"] for target in stop_dependency["targets"])
 
 
 def test_plan_schema_button_uses_primary_variant() -> None:
@@ -245,7 +292,7 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
         },
         "bolt://db", "neo4j", "user", "pass", "http://models", "key",
         "build", "embed", "answer", 1200, 100, 0.2,
-        "詳細", 2, "全部頁面", 4, "extract", 2,
+        "詳細", 10, 12, 2, "全部頁面", 4, "extract", 2,
         "關聯擴展檢索", 6, '{"entity_types": []}',
     ]
     saved, save_status = ui.save_project_for_ui(*values)
@@ -254,14 +301,15 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     assert Path(saved["documents"][0]["path"]).read_bytes() == b"pdf"
     assert loaded[0]["project_id"] == created["project_id"]
     assert loaded[11:13] == (1200, 100)
-    assert loaded[24][0].text == "內容"
+    assert loaded[15:17] == (10, 12)
+    assert loaded[26][0].text == "內容"
     stored_project = ui.load_project(created["project_id"])
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
-    assert loaded[33][0][:2] == ["設備", "DEVICE"]
-    assert loaded[34][0][:3] == ["設備", "USES", "零件"]
-    assert "1 個實體、1 筆關係" in loaded[35]
-    assert "已匯入 Neo4j" in loaded[36]
+    assert loaded[35][0][:2] == ["設備", "DEVICE"]
+    assert loaded[36][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[37]
+    assert "已匯入 Neo4j" in loaded[38]
 
 
 def test_project_answer_appends_history(monkeypatch) -> None:
@@ -585,13 +633,67 @@ def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None
     assert status.splitlines()[1].startswith("- ✅「b.pdf」")
 
 
+def test_request_stop_for_ui_sets_flag_on_shared_control() -> None:
+    control = ui.RunControl()
+
+    status = ui.request_stop_for_ui(control)
+
+    assert status.startswith("⏹")
+    with pytest.raises(ui.RunCancelled):
+        control.check()
+
+
+def test_toggle_pause_for_ui_flips_state_and_button_label() -> None:
+    control = ui.RunControl()
+
+    status, button_update = ui.toggle_pause_for_ui(control)
+    assert status.startswith("⏸")
+    assert button_update["value"] == "▶ 繼續"
+    assert control.is_paused is True
+
+    status, button_update = ui.toggle_pause_for_ui(control)
+    assert status.startswith("▶")
+    assert button_update["value"] == "⏸ 暫停"
+    assert control.is_paused is False
+
+
+def test_plan_schema_for_ui_reports_stopped_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ui, "plan_graph_schema",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ui.RunCancelled("stopped")),
+    )
+
+    status, schema_text = ui.plan_schema_for_ui(
+        "http://models/v1", "key", "llm", 0.3, "平衡", 15, 20, 3,
+        "全部頁面", 10, [TextChunk(1, "text", (1,))], ui.RunControl(),
+    )
+
+    assert status.startswith("⏹")
+    assert schema_text == ""
+
+
+def test_extract_graph_for_ui_reports_stopped_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ui, "extract_graph",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ui.RunCancelled("stopped")),
+    )
+    schema = {"entity_types": [{"name": "DEVICE"}], "relationship_types": [{"name": "USES"}]}
+
+    result = ui.extract_graph_for_ui(
+        "http://models/v1", "key", "llm", 0.2, 3,
+        [TextChunk(1, "text", (1,))], json.dumps(schema), {}, ui.RunControl(),
+    )
+
+    assert result == ("⏹ 已停止（使用者中止抽取）。", [], [], {})
+
+
 def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
     from manual_graphrag.graph_service import SchemaPlan
 
     monkeypatch.setattr(
         ui,
         "plan_graph_schema",
-        lambda *args: SchemaPlan(
+        lambda *args, **kwargs: SchemaPlan(
             {"entity_types": [{"name": "DEVICE"}], "relationship_types": [{"name": "USES"}]},
             5,
             5,
@@ -606,16 +708,19 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
         "llm",
         0.3,
         "平衡",
+        15,
+        20,
         3,
         "全部頁面",
         10,
         [TextChunk(1, "text", (1,))],
+        ui.RunControl(),
     )
 
     assert status.startswith("✅")
     assert "全部 1 頁、5 個 chunk" in status
     assert "共 2 批、1 輪整合" in status
-    assert "粒度：平衡" in status
+    assert "粒度：平衡；實體／關係類型上限：15／20" in status
     assert json.loads(schema_text)["entity_types"][0]["name"] == "DEVICE"
 
 
@@ -644,7 +749,7 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
         ],
         processed_chunks=1,
     )
-    monkeypatch.setattr(ui, "extract_graph", lambda *args: extraction)
+    monkeypatch.setattr(ui, "extract_graph", lambda *args, **kwargs: extraction)
     monkeypatch.setattr(
         ui,
         "import_extraction",
@@ -664,6 +769,7 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
         [TextChunk(1, "text", (3,))],
         json.dumps(schema),
         [{"file_name": "manual.pdf"}],
+        ui.RunControl(),
     )
 
     assert status.startswith("✅ 已處理 1 個 chunk")
@@ -680,7 +786,7 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
 
 def test_extract_graph_for_ui_rejects_invalid_schema() -> None:
     result = ui.extract_graph_for_ui(
-        "http://models/v1", "", "llm", 0.2, 3, [], "not-json", {}
+        "http://models/v1", "", "llm", 0.2, 3, [], "not-json", {}, ui.RunControl()
     )
 
     assert result == ("❌ schema 不是有效 JSON。", [], [], {})
