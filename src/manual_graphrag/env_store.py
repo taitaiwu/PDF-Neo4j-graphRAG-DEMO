@@ -10,41 +10,34 @@ from threading import RLock
 _ENV_LOCK = RLock()
 
 ENV_KEYS = (
-    "NEO4J_URI",
-    "NEO4J_DATABASE",
-    "NEO4J_USERNAME",
-    "NEO4J_PASSWORD",
-    "MODEL_API_BASE",
-    "MODEL_API_KEY",
-    "BUILD_MODEL",
-    "EMBEDDING_API_BASE",
-    "EMBEDDING_API_KEY",
-    "EMBEDDING_MODEL",
-    "ANSWER_MODEL",
-    "MODEL_SERVICE_PROFILES",
-    "EMBEDDING_SERVICE_PROFILES",
+    "NEO4J_URI", "NEO4J_DATABASE", "NEO4J_USERNAME", "NEO4J_PASSWORD",
+    "MODEL_OPENAI_API_BASE", "MODEL_OPENAI_API_KEY",
+    "MODEL_OLLAMA_API_BASE", "MODEL_OLLAMA_API_KEY",
+    "EMBEDDING_OPENAI_API_BASE", "EMBEDDING_OPENAI_API_KEY",
+    "EMBEDDING_OLLAMA_API_BASE", "EMBEDDING_OLLAMA_API_KEY",
 )
 
+# These keys belonged to the former mixed connection/model format. save_env removes
+# them so an existing .env is migrated the next time settings are saved.
+LEGACY_ENV_KEYS = {
+    "MODEL_API_BASE", "MODEL_API_KEY", "BUILD_MODEL",
+    "EMBEDDING_API_BASE", "EMBEDDING_API_KEY", "EMBEDDING_MODEL", "ANSWER_MODEL",
+    "MODEL_SERVICE_PROFILES", "EMBEDDING_SERVICE_PROFILES",
+}
+
 DEFAULTS = {
-    "NEO4J_URI": "bolt://localhost:7687",
-    "NEO4J_DATABASE": "neo4j",
-    "NEO4J_USERNAME": "neo4j",
-    "NEO4J_PASSWORD": "",
-    "MODEL_API_BASE": "https://api.openai.com/v1",
-    "MODEL_API_KEY": "",
-    "BUILD_MODEL": "gpt-4.1-mini",
-    "EMBEDDING_API_BASE": "https://api.openai.com/v1",
-    "EMBEDDING_API_KEY": "",
-    "EMBEDDING_MODEL": "text-embedding-3-small",
-    "ANSWER_MODEL": "gpt-4.1-mini",
-    "MODEL_SERVICE_PROFILES": "",
-    "EMBEDDING_SERVICE_PROFILES": "",
+    "NEO4J_URI": "bolt://localhost:7687", "NEO4J_DATABASE": "neo4j",
+    "NEO4J_USERNAME": "neo4j", "NEO4J_PASSWORD": "",
+    "MODEL_OPENAI_API_BASE": "https://api.openai.com/v1", "MODEL_OPENAI_API_KEY": "",
+    "MODEL_OLLAMA_API_BASE": "http://localhost:11434/v1", "MODEL_OLLAMA_API_KEY": "",
+    "EMBEDDING_OPENAI_API_BASE": "https://api.openai.com/v1", "EMBEDDING_OPENAI_API_KEY": "",
+    "EMBEDDING_OLLAMA_API_BASE": "http://localhost:11434/v1", "EMBEDDING_OLLAMA_API_KEY": "",
 }
 
 
 def _decode_value(raw: str) -> str:
     value = raw.strip()
-    if value.startswith(('"', "'")):
+    if value.startswith(("\"", "'")):
         try:
             return str(json.loads(value))
         except (json.JSONDecodeError, TypeError):
@@ -82,26 +75,23 @@ def _save_env(values: dict[str, object], path: str | Path) -> Path:
     current.update({key: str(value) for key, value in values.items() if key in ENV_KEYS})
     written: set[str] = set()
     output: list[str] = []
-
     for line in current_lines:
         stripped = line.strip()
         if stripped and not stripped.startswith("#") and "=" in stripped:
             key = stripped.split("=", 1)[0].strip()
-            if key in current:
+            if key in LEGACY_ENV_KEYS:
+                continue
+            if key in ENV_KEYS:
                 output.append(f"{key}={json.dumps(current[key], ensure_ascii=False)}")
                 written.add(key)
                 continue
         output.append(line)
-
     if output and output[-1] != "":
         output.append("")
     for key in ENV_KEYS:
         if key not in written:
             output.append(f"{key}={json.dumps(current[key], ensure_ascii=False)}")
-
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
-    )
+    descriptor, temporary_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write("\n".join(output).rstrip() + "\n")

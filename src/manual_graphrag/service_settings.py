@@ -1,83 +1,112 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import json
+import os
 from pathlib import Path
+import tempfile
+from threading import RLock
 from typing import Any
-from urllib.parse import urlsplit
 
-from .config import OLLAMA_DEFAULT_BASE_URL
+import yaml
+
 from .env_store import load_env, save_env
 
 
-OPENAI_MODELS_PATH = Path(__file__).resolve().parents[2] / "config/openai_models.json"
-PROFILE_KEYS = {"llm": "MODEL_SERVICE_PROFILES", "embedding": "EMBEDDING_SERVICE_PROFILES"}
+MODEL_SETTINGS_PATH = Path("config/model_settings.yaml")
 MODEL_COUNTS = {"llm": 5, "embedding": 1}
+_SETTINGS_LOCK = RLock()
+DEFAULT_OPENAI_MODELS = {
+    "llm": ["gpt-4.1-mini", "gpt-4o-mini"],
+    "embedding": ["text-embedding-3-small", "text-embedding-3-large"],
+}
+DEFAULT_SELECTIONS = {
+    "llm": ["gpt-4.1-mini", "gpt-4.1-mini", "gpt-4.1-mini", "gpt-4.1-mini", "gpt-4.1-mini"],
+    "embedding": ["text-embedding-3-small"],
+}
+
+
+def _default_document() -> dict[str, Any]:
+    return {
+        "openai_models": deepcopy(DEFAULT_OPENAI_MODELS),
+        "services": {
+            kind: {
+                "active": "OpenAI",
+                "profiles": {
+                    "OpenAI": {"rows": [], "models": deepcopy(DEFAULT_SELECTIONS[kind])},
+                    "Ollama": {"rows": [], "models": [None] * MODEL_COUNTS[kind]},
+                },
+            } for kind in MODEL_COUNTS
+        },
+    }
+
+
+def _load_document(path: Path | None = None) -> dict[str, Any]:
+    path = MODEL_SETTINGS_PATH if path is None else path
+    if not path.exists():
+        return _default_document()
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError()
+        return data
+    except (OSError, yaml.YAMLError, ValueError) as exc:
+        raise ValueError(f"模型設定檔無效：{path}") from exc
+
+
+def _save_document(data: dict[str, Any], path: Path | None = None) -> Path:
+    path = MODEL_SETTINGS_PATH if path is None else path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(data, handle, allow_unicode=True, sort_keys=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    except Exception:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+    return path
 
 
 def openai_models(kind: str) -> list[str]:
     try:
-        data = json.loads(OPENAI_MODELS_PATH.read_text(encoding="utf-8"))
-        models = data[kind]
-        if not isinstance(models, list) or not models or any(
-            not isinstance(model, str) or not model.strip() for model in models
-        ):
+        models = _load_document()["openai_models"][kind]
+        if not isinstance(models, list) or not models or any(not isinstance(model, str) or not model.strip() for model in models):
             raise ValueError()
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise ValueError(f"OpenAI 模型設定檔無效：{OPENAI_MODELS_PATH.name}（{kind}）") from exc
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"模型設定檔無效：{MODEL_SETTINGS_PATH}（openai_models.{kind}）") from exc
     return list(dict.fromkeys(model.strip() for model in models))
 
 
-def provider_for_url(base_url: str) -> str:
-    try:
-        return "Ollama" if urlsplit(base_url).port == 11434 else "OpenAI"
-    except ValueError:
-        return "OpenAI"
+def _credentials(env: dict[str, str], kind: str, provider: str) -> tuple[str, str]:
+    prefix = "MODEL" if kind == "llm" else "EMBEDDING"
+    provider_key = provider.upper()
+    return env[f"{prefix}_{provider_key}_API_BASE"], env[f"{prefix}_{provider_key}_API_KEY"]
 
 
 def load_service_settings(kind: str, env: dict[str, str] | None = None) -> dict[str, Any]:
+    if kind not in MODEL_COUNTS:
+        raise ValueError(f"不支援的模型服務種類：{kind}")
     env = load_env() if env is None else env
-    prefix = "MODEL" if kind == "llm" else "EMBEDDING"
-    base = env[f"{prefix}_API_BASE"]
-    active = provider_for_url(base)
-    current_models = (
-        [env["BUILD_MODEL"], env["BUILD_MODEL"], env["ANSWER_MODEL"], env["ANSWER_MODEL"], env["ANSWER_MODEL"]]
-        if kind == "llm" else [env["EMBEDDING_MODEL"]]
-    )
-    profiles = {
-        provider: {"base_url": url, "api_key": "", "rows": [], "models": [None] * MODEL_COUNTS[kind]}
-        for provider, url in [("OpenAI", "https://api.openai.com/v1"), ("Ollama", OLLAMA_DEFAULT_BASE_URL)]
-    }
-    profiles[active].update(base_url=base or profiles[active]["base_url"], api_key=env[f"{prefix}_API_KEY"], models=current_models)
-    if active == "Ollama":
-        profiles[active]["rows"] = [[True, model] for model in dict.fromkeys(current_models) if model]
-    raw = env.get(PROFILE_KEYS[kind], "")
-    if raw:
-        try:
-            saved = json.loads(raw)
-            if saved["active"] not in profiles:
+    document = _load_document()
+    try:
+        saved = document["services"][kind]
+        active = saved["active"]
+        if active not in {"OpenAI", "Ollama"}:
+            raise ValueError()
+        profiles = {}
+        for provider in ("OpenAI", "Ollama"):
+            profile = saved["profiles"][provider]
+            rows, models = profile["rows"], profile["models"]
+            if not isinstance(models, list) or len(models) != MODEL_COUNTS[kind] or any(model is not None and not isinstance(model, str) for model in models):
                 raise ValueError()
-            for provider in profiles:
-                profile = saved["profiles"][provider]
-                if not isinstance(profile["base_url"], str) or not isinstance(profile["api_key"], str):
-                    raise ValueError()
-                if not isinstance(profile["models"], list) or len(profile["models"]) != MODEL_COUNTS[kind] or any(
-                    model is not None and not isinstance(model, str) for model in profile["models"]
-                ):
-                    raise ValueError()
-                if not isinstance(profile["rows"], list) or any(
-                    not isinstance(row, list) or len(row) != 2 or not isinstance(row[0], bool)
-                    or not isinstance(row[1], str) for row in profile["rows"]
-                ):
-                    raise ValueError()
-                profiles[provider] = {key: deepcopy(profile[key]) for key in ("base_url", "api_key", "rows", "models")}
-            active = saved["active"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("服務設定格式錯誤，請檢查 .env 中的 " + PROFILE_KEYS[kind]) from exc
-    # Connection success is tied to this session, never trusted from disk.
-    for profile in profiles.values():
-        profile["connected"] = False
-        profile["status"] = "請先測試連線。"
+            if not isinstance(rows, list) or any(not isinstance(row, list) or len(row) != 2 or not isinstance(row[0], bool) or not isinstance(row[1], str) for row in rows):
+                raise ValueError()
+            base_url, api_key = _credentials(env, kind, provider)
+            profiles[provider] = {"base_url": base_url, "api_key": api_key, "rows": deepcopy(rows), "models": deepcopy(models), "connected": False, "status": "請先測試連線。"}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"模型設定檔無效：{MODEL_SETTINGS_PATH}（services.{kind}）") from exc
     profiles["OpenAI"]["rows"] = []
     return {"kind": kind, "active": active, "profiles": profiles}
 
@@ -90,31 +119,17 @@ def provider_models(state: dict[str, Any], provider: str) -> list[str]:
 
 
 def service_choices(state: dict[str, Any]) -> list[str]:
-    """Return usable models from both providers, independent of the active editor."""
-    return list(dict.fromkeys(
-        [*provider_models(state, "OpenAI"), *provider_models(state, "Ollama")]
-    ))
+    return list(dict.fromkeys([*provider_models(state, "OpenAI"), *provider_models(state, "Ollama")]))
 
 
 def service_choice_items(state: dict[str, Any]) -> list[tuple[str, str]]:
-    items: list[tuple[str, str]] = []
-    for provider in ("OpenAI", "Ollama"):
-        items.extend(
-            (f"{provider}｜{model}", model)
-            for model in provider_models(state, provider)
-        )
-    return items
+    return [(f"{provider}｜{model}", model) for provider in ("OpenAI", "Ollama") for model in provider_models(state, provider)]
 
 
-def resolve_model_service(
-    state: dict[str, Any], model: str | None,
-) -> tuple[str, str, str]:
+def resolve_model_service(state: dict[str, Any], model: str | None) -> tuple[str, str, str]:
     if not model:
         raise ValueError("請先選擇模型")
-    providers = [
-        provider for provider in ("OpenAI", "Ollama")
-        if model in provider_models(state, provider)
-    ]
+    providers = [provider for provider in ("OpenAI", "Ollama") if model in provider_models(state, provider)]
     if not providers:
         raise ValueError(f"模型「{model}」目前不可用，請先完成服務連線或勾選模型")
     provider = state["active"] if state["active"] in providers else providers[0]
@@ -123,16 +138,28 @@ def resolve_model_service(
 
 
 def save_service_settings(state: dict[str, Any]) -> None:
-    saved = {"active": state["active"], "profiles": {
-        provider: {key: profile[key] for key in ("base_url", "api_key", "rows", "models")}
-        for provider, profile in state["profiles"].items()
-    }}
-    save_env({PROFILE_KEYS[state["kind"]]: json.dumps(saved, ensure_ascii=False)})
+    kind = state["kind"]
+    with _SETTINGS_LOCK:
+        document = _load_document()
+        document.setdefault("openai_models", deepcopy(DEFAULT_OPENAI_MODELS))
+        document.setdefault("services", {})[kind] = {
+            "active": state["active"],
+            "profiles": {
+                provider: {key: deepcopy(profile[key]) for key in ("rows", "models")}
+                for provider, profile in state["profiles"].items()
+            },
+        }
+        _save_document(document)
+        prefix = "MODEL" if kind == "llm" else "EMBEDDING"
+        connection_values = {}
+        for provider, profile in state["profiles"].items():
+            provider_key = provider.upper()
+            connection_values[f"{prefix}_{provider_key}_API_BASE"] = profile["base_url"]
+            connection_values[f"{prefix}_{provider_key}_API_KEY"] = profile["api_key"]
+        save_env(connection_values)
 
 
-def capture_service_settings(
-    state: dict[str, Any], base_url: str, api_key: str, rows: list[list[Any]], models: list[str | None],
-) -> dict[str, Any]:
+def capture_service_settings(state: dict[str, Any], base_url: str, api_key: str, rows: list[list[Any]], models: list[str | None]) -> dict[str, Any]:
     state = deepcopy(state)
     profile = state["profiles"][state["active"]]
     changed = (profile["base_url"], profile["api_key"]) != (base_url, api_key)
@@ -141,7 +168,6 @@ def capture_service_settings(
         profile.update(connected=False, rows=[], models=[None] * MODEL_COUNTS[state["kind"]], status="設定已變更，請重新測試連線或取得模型清單。")
     else:
         if state["active"] == "Ollama":
-            # Only checkboxes from the fetched catalog may change.
             checked = {row[1] for row in rows if len(row) == 2 and row[0] is True}
             profile["rows"] = [[model in checked, model] for _, model in profile["rows"]]
         if state["active"] == "Ollama" or profile["connected"]:
@@ -150,16 +176,13 @@ def capture_service_settings(
     return state
 
 
-def restore_service_settings(
-    state: dict[str, Any], base_url: str, api_key: str, models: dict[int, str | None],
-) -> dict[str, Any]:
+def restore_service_settings(state: dict[str, Any], base_url: str, api_key: str, models: dict[int, str | None]) -> dict[str, Any]:
     state = deepcopy(state)
-    provider = next((name for name, p in state["profiles"].items() if p["base_url"] == base_url), provider_for_url(base_url))
+    provider = next((name for name, profile in state["profiles"].items() if profile["base_url"] == base_url), state["active"])
     state["active"] = provider
     profile = state["profiles"][provider]
     if (profile["base_url"], profile["api_key"]) != (base_url, api_key):
         profile.update(base_url=base_url, api_key=api_key, connected=False, rows=[], status="請先測試連線或取得模型清單。")
     for index, model in models.items():
         profile["models"][index] = model
-    # Saved model names cannot expand the OpenAI allowlist or bypass Ollama checkboxes.
     return state

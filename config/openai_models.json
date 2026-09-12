@@ -1,4 +1,0 @@
-{
-  "llm": ["gpt-4.1-mini", "gpt-4o-mini"],
-  "embedding": ["text-embedding-3-small", "text-embedding-3-large"]
-}

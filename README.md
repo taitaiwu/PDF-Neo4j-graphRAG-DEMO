@@ -118,16 +118,19 @@ NEO4J_DATABASE=neo4j
 NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=your-password
 
-MODEL_API_BASE=http://host.docker.internal:11434/v1
-MODEL_API_KEY=your-api-key
-BUILD_MODEL=your-build-model
-EMBEDDING_MODEL=your-embedding-model
-ANSWER_MODEL=your-answer-model
+MODEL_OPENAI_API_BASE=https://api.openai.com/v1
+MODEL_OPENAI_API_KEY=your-openai-api-key
+MODEL_OLLAMA_API_BASE=http://host.docker.internal:11434/v1
+MODEL_OLLAMA_API_KEY=
+EMBEDDING_OPENAI_API_BASE=https://api.openai.com/v1
+EMBEDDING_OPENAI_API_KEY=your-openai-api-key
+EMBEDDING_OLLAMA_API_BASE=http://host.docker.internal:11434/v1
+EMBEDDING_OLLAMA_API_KEY=
 ~~~
 
 - Neo4j 或模型服務若運行於宿主機，容器內不能使用 localhost，請使用 host.docker.internal。
-- 使用 OpenAI 官方 API 時，將 MODEL_API_BASE 設為 https://api.openai.com/v1。
-- 模型欄位必須填入服務端實際提供的模型名稱。
+- OpenAI 與 Ollama 的 API Base URL／API Key 使用獨立欄位；模型服務與 Embedding 服務也各自保存連線。
+- 模型白名單、目前來源、模型選擇與 Ollama 勾選清單保存在 `config/model_settings.yaml`。
 
 ### 4. 建置映像
 
@@ -146,6 +149,7 @@ docker run -d \
   -p 7860:7860 \
   --add-host=host.docker.internal:host-gateway \
   -v "$(pwd)/.env:/app/.env" \
+  -v "$(pwd)/config/model_settings.yaml:/app/config/model_settings.yaml" \
   -v "$(pwd)/data:/app/data" \
   pdf-graphrag:latest
 ~~~
@@ -153,7 +157,7 @@ docker run -d \
 Windows PowerShell（單行）：
 
 ~~~powershell
-docker run -d --name pdf-graphrag --restart unless-stopped -p 7860:7860 --add-host=host.docker.internal:host-gateway -v "$PWD/.env:/app/.env" -v "$PWD/data:/app/data" pdf-graphrag:latest
+docker run -d --name pdf-graphrag --restart unless-stopped -p 7860:7860 --add-host=host.docker.internal:host-gateway -v "$PWD/.env:/app/.env" -v "$PWD/config/model_settings.yaml:/app/config/model_settings.yaml" -v "$PWD/data:/app/data" pdf-graphrag:latest
 ~~~
 
 確認服務：
@@ -168,9 +172,9 @@ docker logs -f pdf-graphrag
 - **OpenAI**：按「測試模型服務連線」或「測試 Embedding 服務連線」。連線成功後，LLM 僅提供 `gpt-4.1-mini`、`gpt-4o-mini`，Embedding 僅提供 `text-embedding-3-small`、`text-embedding-3-large`。OpenAI 不顯示取得清單按鈕或勾選表格。連線測試確認 API 可存取，不會執行付費生成或驗證剩餘額度。
 - **Ollama**：預設網址為 `http://localhost:11434/v1`，金鑰可留空。按「獲得模型清單」或「獲得 Embedding 模型清單」，再勾選要使用的模型。兩張表格各自保存勾選，因為 Ollama 回傳的清單可能同時包含 LLM 與 Embedding 模型。模型名稱欄為唯讀；取消勾選目前使用的模型後，需在後續頁面重新選擇。
 
-後續頁面的模型選單以 `OpenAI｜模型`、`Ollama｜模型` 標示來源，不受目前正在編輯哪一種服務影響；執行時會自動使用所選模型來源的網址與金鑰。同名模型同時存在於兩邊時，使用第 1 頁目前選取的服務。兩種服務各自保存 OpenAI／Ollama 的網址、金鑰、模型選擇與 Ollama 勾選清單；設定寫入 `.env` 的 `MODEL_SERVICE_PROFILES` 與 `EMBEDDING_SERVICE_PROFILES`，切換或重新啟動後仍保留。重新啟動、重新讀取 `.env` 或修改 OpenAI 連線資料後，必須重新測試連線才能使用 OpenAI 模型。
+後續頁面的模型選單以 `OpenAI｜模型`、`Ollama｜模型` 標示來源，不受目前正在編輯哪一種服務影響；執行時會自動使用所選模型來源的網址與金鑰。同名模型同時存在於兩邊時，使用第 1 頁目前選取的服務。OpenAI／Ollama 的網址與金鑰分別寫入 `.env`；目前來源、模型選擇與 Ollama 勾選清單寫入 [`config/model_settings.yaml`](config/model_settings.yaml)，切換或重新啟動後仍會保留。重新啟動、重新讀取 `.env` 或修改 OpenAI 連線資料後，必須重新測試連線才能使用 OpenAI 模型。
 
-OpenAI 白名單可修改 [`config/openai_models.json`](config/openai_models.json)，`llm` 與 `embedding` 分別為兩種服務允許的模型名稱陣列。修改後重新測試連線即可套用；空清單或無效 JSON 會顯示錯誤，不會開放其他模型。Docker 映像也包含此設定檔，可透過掛載覆蓋。
+OpenAI 白名單也在 `config/model_settings.yaml` 的 `openai_models.llm` 與 `openai_models.embedding`。修改後重新測試連線即可套用；空清單或無效 YAML 會顯示錯誤，不會開放其他模型。Docker 部署若要保留介面更新的模型選擇，請將此 YAML 檔一併掛載。
 
 ## 部署後如何啟動
 
@@ -225,11 +229,11 @@ docker logs pdf-graphrag
 - 確認 Neo4j Bolt 連接埠通常為 7687，且帳號、密碼、資料庫名稱正確。
 - 確認本機服務已監聽容器可連線的網路介面。
 - Linux 無法解析 host.docker.internal 時，確認 docker run 包含 --add-host=host.docker.internal:host-gateway。
-- 修改 .env 後可在介面重新讀取，或執行 docker restart pdf-graphrag。
+- 修改 `.env` 或 `config/model_settings.yaml` 後可在介面重新讀取，或執行 `docker restart pdf-graphrag`。
 
 ### 設定或資料沒有保留
 
-確認 .env 與 data 掛載路徑存在且有讀寫權限。連線設定會寫回 .env，持久資料則寫入 data 目錄。
+確認 `.env`、`config/model_settings.yaml` 與 `data` 掛載路徑存在且有寫入權限。連線設定寫回 `.env`，模型設定寫回 YAML，專案資料寫入 `data`。
 
 ## 非 Docker 啟動方式
 

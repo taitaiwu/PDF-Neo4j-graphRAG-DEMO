@@ -283,7 +283,9 @@ def test_persist_env_settings_writes_all_fields(tmp_path, monkeypatch) -> None:
     content = (tmp_path / ".env").read_text(encoding="utf-8")
     assert status.startswith("✅")
     assert 'NEO4J_PASSWORD="pass"' in content
-    assert 'ANSWER_MODEL="answer"' in content
+    assert 'ANSWER_MODEL' not in content
+    assert 'BUILD_MODEL' not in content
+    assert 'MODEL_SERVICE_PROFILES' not in content
 
 
 
@@ -1022,8 +1024,10 @@ def test_unselected_models_report_actionable_errors_without_network() -> None:
         assert "選擇" in result[0]
 
 
-def test_empty_model_selections_are_saved_as_empty_env_values(tmp_path, monkeypatch) -> None:
+def test_model_selections_are_not_saved_in_env(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    ui.persist_env_settings("", "", "", "", "", "", "", "", None, None, None)
-    env = ui.load_env()
-    assert env["BUILD_MODEL"] == env["EMBEDDING_MODEL"] == env["ANSWER_MODEL"] == ""
+    ui.persist_env_settings("", "", "", "", "", "", "", "", "build", "embed", "answer")
+    content = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "BUILD_MODEL" not in content
+    assert "EMBEDDING_MODEL" not in content
+    assert "ANSWER_MODEL" not in content

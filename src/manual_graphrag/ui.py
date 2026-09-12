@@ -239,41 +239,28 @@ def persist_env_settings(
     embedding_model: str,
     answer_model: str,
 ) -> str:
-    save_env(
-        {
-            "NEO4J_URI": neo4j_uri,
-            "NEO4J_DATABASE": neo4j_database,
-            "NEO4J_USERNAME": neo4j_username,
-            "NEO4J_PASSWORD": neo4j_password,
-            "MODEL_API_BASE": model_endpoint,
-            "MODEL_API_KEY": api_key,
-            "BUILD_MODEL": build_model or "",
-            "EMBEDDING_API_BASE": embedding_api_base,
-            "EMBEDDING_API_KEY": embedding_api_key,
-            "EMBEDDING_MODEL": embedding_model or "",
-            "ANSWER_MODEL": answer_model or "",
-        }
-    )
-    return "✅ 已自動儲存至 .env"
+    save_env({
+        "NEO4J_URI": neo4j_uri,
+        "NEO4J_DATABASE": neo4j_database,
+        "NEO4J_USERNAME": neo4j_username,
+        "NEO4J_PASSWORD": neo4j_password,
+    })
+    return "✅ 連線設定已自動儲存；模型選擇保存在 config/model_settings.yaml"
 
 
 def reload_env_settings() -> tuple[str, ...]:
-    settings = load_env()
+    env = load_env()
+    llm = load_service_settings("llm", env)
+    embedding = load_service_settings("embedding", env)
+    llm_profile = llm["profiles"][llm["active"]]
+    embedding_profile = embedding["profiles"][embedding["active"]]
     return (
-        settings["NEO4J_URI"],
-        settings["NEO4J_DATABASE"],
-        settings["NEO4J_USERNAME"],
-        settings["NEO4J_PASSWORD"],
-        settings["MODEL_API_BASE"],
-        settings["MODEL_API_KEY"],
-        settings["EMBEDDING_API_BASE"],
-        settings["EMBEDDING_API_KEY"],
-        settings["BUILD_MODEL"],
-        settings["EMBEDDING_MODEL"],
-        settings["ANSWER_MODEL"],
-        "✅ 已重新讀取 .env",
+        env["NEO4J_URI"], env["NEO4J_DATABASE"], env["NEO4J_USERNAME"], env["NEO4J_PASSWORD"],
+        llm_profile["base_url"], llm_profile["api_key"],
+        embedding_profile["base_url"], embedding_profile["api_key"],
+        llm_profile["models"][0], embedding_profile["models"][0], llm_profile["models"][4],
+        "✅ 已重新讀取 .env 與模型 YAML",
     )
-
 
 
 def unlock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
@@ -445,6 +432,10 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         raise gr.Error(str(exc))
     settings = project.get("settings") or {}
     env, get = load_env(), settings.get
+    llm_settings = load_service_settings("llm", env)
+    embedding_settings = load_service_settings("embedding", env)
+    llm_profile = llm_settings["profiles"][llm_settings["active"]]
+    embedding_profile = embedding_settings["profiles"][embedding_settings["active"]]
     documents = project.get("documents_meta") or []
     chunks = _stored_chunks(project.get("chunks") or [])
     graph = project.get("graph_state") or {}
@@ -472,9 +463,9 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         project, f"✅ 已載入專案「{project['name']}」。",
         get("neo4j_uri", env["NEO4J_URI"]), get("neo4j_database", env["NEO4J_DATABASE"]),
         get("neo4j_username", env["NEO4J_USERNAME"]), get("neo4j_password", env["NEO4J_PASSWORD"]),
-        get("model_endpoint", env["MODEL_API_BASE"]), get("api_key", env["MODEL_API_KEY"]),
-        get("graph_llm_model", env["BUILD_MODEL"]), get("graph_embedding_model", env["EMBEDDING_MODEL"]),
-        get("answer_model", env["ANSWER_MODEL"]),
+        get("model_endpoint", llm_profile["base_url"]), get("api_key", llm_profile["api_key"]),
+        get("graph_llm_model", llm_profile["models"][0]), get("graph_embedding_model", embedding_profile["models"][0]),
+        get("answer_model", llm_profile["models"][4]),
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
         get("schema_granularity", "平衡"),
         get("max_concurrent_requests", 3),
@@ -482,7 +473,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
             value=get("schema_sampling_mode", "全部頁面"),
             visible=get("schema_sampling_mode", "全部頁面") == "隨機抽取 N 頁",
         ),
-        get("schema_sample_page_count", 10), get("extraction_llm_model", env["BUILD_MODEL"]),
+        get("schema_sample_page_count", 10), get("extraction_llm_model", llm_profile["models"][1]),
         get("extraction_max_concurrent_requests", 3),
         _display_retrieval_mode(get("retrieval_mode")), get("top_k", 8), get("schema_text", ""),
         documents, chunks, graph, active_preview, active_chunks,
@@ -642,8 +633,9 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     preferences = evaluation.get("preferences") or {}
     questions = evaluation.get("questions") or []
     results = evaluation.get("results") or []
-    env = load_env()
-    legacy_model = preferences.get("model", env["ANSWER_MODEL"])
+    llm = load_service_settings("llm")
+    profile = llm["profiles"][llm["active"]]
+    legacy_model = preferences.get("model", profile["models"][4])
     return (
         evaluation, _evaluation_question_rows(questions), _evaluation_result_rows(results),
         preferences.get("generation_model", legacy_model),
@@ -1414,8 +1406,8 @@ def build_app() -> gr.Blocks:
                     )
                     embedding_connection_status = gr.Markdown(embedding_profile["status"])
                     reload_button = gr.Button("重新讀取 .env")
-            gr.Markdown("⚠️ Password 與 API Key 會以明文寫入本機 `.env`；請勿提交此檔案。")
-            env_status = gr.Markdown("啟動時已讀取 .env；欄位修改後會自動儲存。")
+            gr.Markdown("⚠️ Password、API Base URL 與 API Key 會寫入本機 `.env`；模型清單與選擇保存在 `config/model_settings.yaml`。")
+            env_status = gr.Markdown("啟動時已讀取 `.env` 與模型 YAML；欄位修改後會自動儲存。")
 
         with gr.Tab("2. PDF 與參數", interactive=False) as pdf_tab:
             with gr.Row():

@@ -6,15 +6,15 @@ def test_env_round_trip_preserves_special_characters(tmp_path) -> None:
     save_env(
         {
             "NEO4J_PASSWORD": "p#a ss=word",
-            "MODEL_API_KEY": "sk-test",
-            "BUILD_MODEL": "model-a",
+            "MODEL_OPENAI_API_KEY": "sk-test",
+            "MODEL_OLLAMA_API_BASE": "http://ollama:11434/v1",
         },
         path,
     )
     loaded = load_env(path)
     assert loaded["NEO4J_PASSWORD"] == "p#a ss=word"
-    assert loaded["MODEL_API_KEY"] == "sk-test"
-    assert loaded["BUILD_MODEL"] == "model-a"
+    assert loaded["MODEL_OPENAI_API_KEY"] == "sk-test"
+    assert loaded["MODEL_OLLAMA_API_BASE"] == "http://ollama:11434/v1"
 
 
 def test_save_env_preserves_unmanaged_values(tmp_path) -> None:
@@ -26,16 +26,16 @@ def test_save_env_preserves_unmanaged_values(tmp_path) -> None:
     assert load_env(path)["NEO4J_URI"] == "bolt://new"
 
 
-def test_concurrent_setting_updates_preserve_both_service_profiles(tmp_path) -> None:
+def test_concurrent_connection_updates_preserve_all_provider_credentials(tmp_path) -> None:
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
     path = tmp_path / ".env"
     updates = {
-        "MODEL_SERVICE_PROFILES": '{"llm":"saved"}',
-        "EMBEDDING_SERVICE_PROFILES": '{"embedding":"saved"}',
-        "MODEL_API_KEY": "llm-key",
-        "EMBEDDING_API_KEY": "embedding-key",
+        "MODEL_OPENAI_API_KEY": "llm-openai-key",
+        "MODEL_OLLAMA_API_KEY": "llm-ollama-key",
+        "EMBEDDING_OPENAI_API_KEY": "embedding-openai-key",
+        "EMBEDDING_OLLAMA_API_KEY": "embedding-ollama-key",
     }
     barrier = Barrier(len(updates))
     def write(item):
@@ -46,3 +46,13 @@ def test_concurrent_setting_updates_preserve_both_service_profiles(tmp_path) -> 
         list(executor.map(write, updates.items()))
     loaded = load_env(path)
     assert all(loaded[key] == value for key, value in updates.items())
+
+
+def test_save_env_removes_legacy_model_and_profile_keys(tmp_path) -> None:
+    path = tmp_path / ".env"
+    path.write_text('BUILD_MODEL="old"\nMODEL_SERVICE_PROFILES="{}"\n', encoding="utf-8")
+    save_env({"MODEL_OPENAI_API_KEY": "new"}, path)
+    content = path.read_text(encoding="utf-8")
+    assert "BUILD_MODEL" not in content
+    assert "MODEL_SERVICE_PROFILES" not in content
+    assert 'MODEL_OPENAI_API_KEY="new"' in content

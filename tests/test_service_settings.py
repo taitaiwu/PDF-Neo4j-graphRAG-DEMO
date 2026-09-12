@@ -1,4 +1,4 @@
-import json
+import yaml
 
 import pytest
 
@@ -126,14 +126,20 @@ def test_failed_ollama_fetch_preserves_checked_catalog(monkeypatch):
     assert failed[6] == "❌ offline"
 
 
-def test_custom_json_controls_allowlist_and_invalid_json_fails_closed(tmp_path, monkeypatch):
-    path = tmp_path / "openai_models.json"
-    monkeypatch.setattr(settings, "OPENAI_MODELS_PATH", path)
+def test_custom_yaml_controls_allowlist_and_invalid_yaml_fails_closed(tmp_path, monkeypatch):
+    path = tmp_path / "model_settings.yaml"
+    monkeypatch.setattr(settings, "MODEL_SETTINGS_PATH", path)
     monkeypatch.setattr(ui, "check_model_connection", lambda *args: None)
-    path.write_text(json.dumps({"llm": ["custom-mini"], "embedding": ["custom-embed"]}))
-    assert act(service(), "test")[7]["choices"] == choices("OpenAI", ["custom-mini"])
-    path.write_text("{}")
-    failed = act(service(), "test")
+    document = settings._default_document()
+    document["openai_models"] = {"llm": ["custom-mini"], "embedding": ["custom-embed"]}
+    path.write_text(yaml.safe_dump(document))
+    connected = act(service(), "test")
+    assert connected[7]["choices"] == choices("OpenAI", ["custom-mini"])
+    path.write_text("openai_models: {}\n")
+    failed = ui.service_action_for_ui(
+        "test", "OpenAI", connected[0], connected[1], connected[2], [],
+        *( ["custom-mini"] * settings.MODEL_COUNTS["llm"] ),
+    )
     assert "設定檔無效" in failed[6]
     assert failed[7]["choices"] == []
 
@@ -170,10 +176,12 @@ def test_evaluation_cannot_restore_unapproved_models(monkeypatch):
     assert loaded[4]["value"] == "gpt-4o-mini"
 
 
-def test_profile_load_rejects_invalid_json_without_exposing_keys():
-    env = dict(DEFAULTS, MODEL_SERVICE_PROFILES='{"secret":"sensitive"}')
-    with pytest.raises(ValueError, match="MODEL_SERVICE_PROFILES") as error:
-        settings.load_service_settings("llm", env)
+def test_profile_load_rejects_invalid_yaml_without_exposing_keys(tmp_path, monkeypatch):
+    path = tmp_path / "model_settings.yaml"
+    path.write_text("services:\n  llm:\n    secret: sensitive\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "MODEL_SETTINGS_PATH", path)
+    with pytest.raises(ValueError, match="services.llm") as error:
+        settings.load_service_settings("llm", dict(DEFAULTS))
     assert "sensitive" not in str(error.value)
 
 
@@ -248,13 +256,15 @@ def test_reload_restores_both_profiles_and_revokes_openai_connection(monkeypatch
     assert loaded[25]["choices"] == []
 
 
-def test_invalid_json_after_successful_connection_revokes_models(tmp_path, monkeypatch):
-    path = tmp_path / "openai_models.json"
-    monkeypatch.setattr(settings, "OPENAI_MODELS_PATH", path)
+def test_invalid_yaml_after_successful_connection_revokes_models(tmp_path, monkeypatch):
+    path = tmp_path / "model_settings.yaml"
+    monkeypatch.setattr(settings, "MODEL_SETTINGS_PATH", path)
     monkeypatch.setattr(ui, "check_model_connection", lambda *args: None)
-    path.write_text(json.dumps({"llm": ["mini"]}))
+    document = settings._default_document()
+    document["openai_models"] = {"llm": ["mini"], "embedding": ["embed"]}
+    path.write_text(yaml.safe_dump(document))
     connected = act(service(), "test")
-    path.write_text("{}")
+    path.write_text("openai_models: {}\n")
     failed = ui.service_action_for_ui("test", "OpenAI", connected[0], connected[1], connected[2], [], *(["mini"] * 5))
     assert "設定檔無效" in failed[6]
     assert failed[7]["choices"] == []

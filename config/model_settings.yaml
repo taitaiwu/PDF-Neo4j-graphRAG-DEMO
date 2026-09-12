@@ -1,0 +1,58 @@
+openai_models:
+  llm:
+  - gpt-4.1-mini
+  - gpt-4o-mini
+  embedding:
+  - text-embedding-3-small
+  - text-embedding-3-large
+services:
+  llm:
+    active: Ollama
+    profiles:
+      OpenAI:
+        rows: []
+        models:
+        - gpt-4.1-mini
+        - gpt-4.1-mini
+        - gpt-4.1-mini
+        - gpt-4.1-mini
+        - gpt-4.1-mini
+      Ollama:
+        rows:
+        - - false
+          - deepseek-r1:14b
+        - - false
+          - deepseek-r1:32b
+        - - true
+          - gemma2:9b
+        - - false
+          - gemma3:4b
+        - - false
+          - gemma4:26b
+        models:
+        - null
+        - null
+        - null
+        - null
+        - null
+  embedding:
+    active: OpenAI
+    profiles:
+      OpenAI:
+        rows: []
+        models:
+        - text-embedding-3-small
+      Ollama:
+        rows:
+        - - false
+          - deepseek-r1:14b
+        - - false
+          - deepseek-r1:32b
+        - - false
+          - gemma2:9b
+        - - false
+          - gemma3:4b
+        - - false
+          - gemma4:26b
+        models:
+        - null
