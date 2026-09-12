@@ -8,18 +8,54 @@ def test_generate_evaluation_questions_validates_and_numbers(monkeypatch) -> Non
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({
             "questions": [
-                {"question": "問題一？", "expected_answer": "答案一", "source_pages": [2]},
-                {"question": "問題二？", "expected_answer": "答案二", "source_pages": [3]},
+                {"question": "問題一？", "expected_answer": "答案一", "source_pages": [2],
+                 "source_chunk_numbers": [1]},
+                {"question": "問題二？", "expected_answer": "答案二", "source_pages": [3],
+                 "source_chunk_numbers": [1]},
             ]
         })
 
     monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
     questions = evaluation_service.generate_evaluation_questions(
-        "http://models", "key", "model", [TextChunk(1, "文件", (2, 3))], 2
+        "http://models", "key", "model", [TextChunk(1, "文件", (2, 3), "manual.pdf")], 2
     )
 
     assert [item["number"] for item in questions] == [1, 2]
     assert questions[0]["source_pages"] == [2]
+    assert questions[0]["document"] == "manual.pdf"
+
+
+def test_generate_evaluation_questions_rejects_missing_chunk_numbers(monkeypatch) -> None:
+    def fake_chat(*args, **kwargs):
+        return kwargs["validator"]({
+            "questions": [
+                {"question": "問題一？", "expected_answer": "答案一", "source_pages": [2]},
+            ]
+        })
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+    with pytest.raises(ValueError, match="source_chunk_numbers"):
+        evaluation_service.generate_evaluation_questions(
+            "http://models", "key", "model", [TextChunk(1, "文件", (2,), "manual.pdf")], 1
+        )
+
+
+def test_generate_evaluation_questions_joins_multiple_source_documents(monkeypatch) -> None:
+    def fake_chat(*args, **kwargs):
+        return kwargs["validator"]({
+            "questions": [
+                {"question": "問題一？", "expected_answer": "答案一", "source_pages": [1],
+                 "source_chunk_numbers": [1, 2]},
+            ]
+        })
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+    questions = evaluation_service.generate_evaluation_questions(
+        "http://models", "key", "model",
+        [TextChunk(1, "文件一", (1,), "a.pdf"), TextChunk(2, "文件二", (1,), "b.pdf")], 1
+    )
+
+    assert questions[0]["document"] == "a.pdf、b.pdf"
 
 
 def test_generate_evaluation_questions_rejects_invalid_input() -> None:

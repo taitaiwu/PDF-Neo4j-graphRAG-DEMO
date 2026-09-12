@@ -160,11 +160,14 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     question_table = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "來源頁碼"]
+        == ["編號", "問題", "標準答案", "來源頁碼", "來源文件"]
     )
     assert any(
         str(dependency.get("api_name", "")).startswith("save_evaluation_questions_for_ui")
-        and [question_table["id"], "input"] in dependency.get("targets", [])
+        and any(
+            tuple(target) == (question_table["id"], "input")
+            for target in dependency.get("targets", [])
+        )
         for dependency in app.config["dependencies"]
     )
     assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
@@ -173,7 +176,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     components = app.config["components"]
     question_table_index = next(
         index for index, component in enumerate(components)
-        if component.get("props", {}).get("headers") == ["編號", "問題", "標準答案", "來源頁碼"]
+        if component.get("props", {}).get("headers") == ["編號", "問題", "標準答案", "來源頁碼", "來源文件"]
     )
     metrics_box_index = next(
         index for index, component in enumerate(components)
@@ -241,8 +244,8 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
                                "source_pages": [1]}],
         },
         "bolt://db", "neo4j", "user", "pass", "http://models", "key",
-        "build", "embed", "answer", 1, 5, 1200, 100, 0.2, 3000,
-        "詳細", 10, 12, 2, "全部頁面", 4, "extract", 2,
+        "build", "embed", "answer", 1200, 100, 0.2,
+        "詳細", 2, "全部頁面", 4, "extract", 2,
         "關聯擴展檢索", 6, '{"entity_types": []}',
     ]
     saved, save_status = ui.save_project_for_ui(*values)
@@ -250,15 +253,15 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     assert save_status.startswith("✅")
     assert Path(saved["documents"][0]["path"]).read_bytes() == b"pdf"
     assert loaded[0]["project_id"] == created["project_id"]
-    assert loaded[13:15] == (1200, 100)
-    assert loaded[29][0].text == "內容"
+    assert loaded[11:13] == (1200, 100)
+    assert loaded[24][0].text == "內容"
     stored_project = ui.load_project(created["project_id"])
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
-    assert loaded[39][0][:2] == ["設備", "DEVICE"]
-    assert loaded[40][0][:3] == ["設備", "USES", "零件"]
-    assert "1 個實體、1 筆關係" in loaded[41]
-    assert "已匯入 Neo4j" in loaded[42]
+    assert loaded[33][0][:2] == ["設備", "DEVICE"]
+    assert loaded[34][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[35]
+    assert "已匯入 Neo4j" in loaded[36]
 
 
 def test_project_answer_appends_history(monkeypatch) -> None:
@@ -307,7 +310,8 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     ]}
 
     status, rows, updated = ui.run_evaluation_for_ui(
-        "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
+        "project", "endpoint", "key", "embed-endpoint", "embed-key",
+        "bolt", "neo4j", "user", "pass",
         "model", "關聯擴展檢索", 8, evaluation,
     )
 
@@ -317,6 +321,33 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     assert rows[0][3:] == ["實際答案", "✅ 通過", "正確"]
     assert updated["results"][0]["passed"] is True
     assert captured["evaluation"] == updated
+
+
+def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(monkeypatch) -> None:
+    captured = {}
+
+    def fake_answer_question_for_ui(*args):
+        captured["args"] = args
+        return "✅ 完成", "實際答案", []
+
+    monkeypatch.setattr(ui, "answer_question_for_ui", fake_answer_question_for_ui)
+    monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *args: {"passed": True, "reason": "正確"})
+    monkeypatch.setattr(ui, "save_project", lambda project_id, payload: {})
+    evaluation = {"questions": [
+        {"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}
+    ]}
+
+    ui.run_evaluation_for_ui(
+        "project", "endpoint", "key", "embed-endpoint", "embed-key",
+        "bolt", "neo4j", "user", "pass",
+        "model", "關聯擴展檢索", 8, evaluation,
+    )
+
+    assert captured["args"] == (
+        "endpoint", "key", "embed-endpoint", "embed-key",
+        "bolt", "neo4j", "user", "pass",
+        "model", "Q", "關聯擴展檢索", 8,
+    )
 
 
 def test_edit_questions_auto_save_and_clear_results(monkeypatch) -> None:
@@ -378,57 +409,60 @@ def test_import_questions_supports_json_and_csv(tmp_path, monkeypatch) -> None:
     assert csv_result[2]["dirty"] is False
     assert "已匯入並自動儲存" in csv_result[0]
 
-def test_preview_page_filters_chunks_and_reports_page() -> None:
+def test_switch_document_cycles_through_documents() -> None:
+    documents = [
+        {"file_name": "a.pdf", "page_start": 1, "page_end": 2},
+        {"file_name": "b.pdf", "page_start": 1, "page_end": 2},
+    ]
     chunks = [
-        TextChunk(1, "first", (1,)),
-        TextChunk(2, "shared", (1, 2)),
-        TextChunk(3, "second", (2,)),
+        TextChunk(1, "a-text", (1,), "a.pdf"),
+        TextChunk(2, "b-text", (1,), "b.pdf"),
     ]
 
-    status, rows = ui.preview_page(2, chunks, {"page_count": 3})
+    doc, doc_chunks, rows, status = ui.next_document(documents, chunks, documents[0])
 
-    assert status == "第 2 / 3 頁；顯示 2 個相關 chunk。"
-    assert [row[0] for row in rows] == [2, 3]
+    assert doc["file_name"] == "b.pdf"
+    assert [chunk.document for chunk in doc_chunks] == ["b.pdf"]
+    assert [row[0] for row in rows] == [2]
+    assert status == "文件 2 / 2：b.pdf（第 1–2 頁），共 1 個 chunk。"
+
+    back, back_chunks, back_rows, back_status = ui.previous_document(documents, chunks, doc)
+    assert back["file_name"] == "a.pdf"
+    assert [chunk.document for chunk in back_chunks] == ["a.pdf"]
+    assert back_status == "文件 1 / 2：a.pdf（第 1–2 頁），共 1 個 chunk。"
 
 
-def test_preview_page_reports_empty_page() -> None:
-    status, rows = ui.preview_page(3, [TextChunk(1, "first", (1,))], {"page_count": 3})
+def test_switch_document_wraps_around_and_handles_empty_list() -> None:
+    documents = [{"file_name": "only.pdf", "page_start": 1, "page_end": 1}]
+    chunks = [TextChunk(1, "text", (1,), "only.pdf")]
 
-    assert status == "第 3 / 3 頁；本頁沒有可解析文字或相關 chunk。"
+    doc, *_rest = ui.next_document(documents, chunks, documents[0])
+    assert doc["file_name"] == "only.pdf"
+
+    doc, doc_chunks, rows, status = ui.previous_document([], [], {})
+    assert doc == {}
+    assert doc_chunks == []
     assert rows == []
+    assert status == "尚未解析任何 PDF。"
 
 
-def test_page_navigation_stays_within_document_bounds() -> None:
-    state = {"page_count": 3}
-
-    assert ui.previous_page(1, state) == 1
-    assert ui.previous_page(3, state) == 2
-    assert ui.next_page(2, state) == 3
-    assert ui.next_page(3, state) == 3
-
-    ranged_state = {"page_count": 3, "page_start": 2, "page_end": 4}
-    assert ui.previous_page(2, ranged_state) == 2
-    assert ui.next_page(3, ranged_state) == 4
-    assert ui.next_page(4, ranged_state) == 4
-
-
-def test_add_document_for_ui_initializes_page_navigation(monkeypatch) -> None:
+def test_add_document_for_ui_initializes_active_document(monkeypatch) -> None:
     pages = [PageText(2, "two"), PageText(3, "three")]
     chunks = [
         TextChunk(1, "two", (2,), "manual.pdf"),
         TextChunk(2, "three", (3,), "manual.pdf"),
     ]
-    monkeypatch.setattr(ui, "extract_pdf", lambda path, start, end: (pages, []))
+    monkeypatch.setattr(ui, "extract_pdf", lambda path: (pages, []))
     monkeypatch.setattr(ui, "chunk_pages", lambda *args, **kwargs: chunks)
 
-    result = ui.add_document_for_ui("manual.pdf", 100, 0, 2, 3, [], [])
+    result = ui.add_document_for_ui("manual.pdf", 100, 0, [], [])
     (
         status, rows, documents, stored_chunks, active_preview, active_chunks,
-        slider_update, page_status, documents_rows, pdf_reset, remove_choices,
+        document_status, documents_rows, pdf_reset, remove_choices,
     ) = result
 
     assert status.startswith("✅「manual.pdf」第 2–3 頁，產生 2 個 chunk")
-    assert [row[0] for row in rows] == [1]
+    assert [row[0] for row in rows] == [1, 2]
     assert documents[0]["file_name"] == "manual.pdf"
     assert documents[0]["page_count"] == 2
     assert documents[0]["page_start"] == 2
@@ -436,21 +470,18 @@ def test_add_document_for_ui_initializes_page_navigation(monkeypatch) -> None:
     assert stored_chunks == chunks
     assert active_chunks == chunks
     assert active_preview["file_name"] == "manual.pdf"
-    assert slider_update["minimum"] == 2
-    assert slider_update["maximum"] == 3
-    assert slider_update["value"] == 2
-    assert page_status == "第 2 / 3 頁；顯示 1 個相關 chunk。"
+    assert document_status == "文件 1 / 1：manual.pdf（第 2–3 頁），共 2 個 chunk。"
     assert documents_rows == [["manual.pdf", "2–3", 2]]
     assert remove_choices["choices"] == ["manual.pdf"]
 
 
 def test_add_document_for_ui_rejects_duplicate_document_name(monkeypatch) -> None:
     monkeypatch.setattr(
-        ui, "extract_pdf", lambda path, start, end: ((_ for _ in ()).throw(AssertionError()))
+        ui, "extract_pdf", lambda path: ((_ for _ in ()).throw(AssertionError()))
     )
     existing = [{"file_name": "manual.pdf"}]
 
-    status, *_ = ui.add_document_for_ui("manual.pdf", 100, 0, 1, None, existing, [])
+    status, *_ = ui.add_document_for_ui("manual.pdf", 100, 0, existing, [])
 
     assert status.startswith("❌")
     assert "同名文件" in status
@@ -472,7 +503,7 @@ def test_remove_document_for_ui_prunes_documents_and_chunks_without_project(monk
     result = ui.remove_document_for_ui("", "a.pdf", documents, chunks)
     (
         status, remaining_documents, remaining_chunks, active_preview, active_chunks,
-        slider_update, page_status, documents_rows, remove_choices, rows,
+        document_status, documents_rows, remove_choices, rows,
     ) = result
 
     assert status.startswith("✅ 已移除 1 份文件「a.pdf」")
@@ -529,18 +560,18 @@ def test_remove_document_for_ui_supports_multi_select(monkeypatch) -> None:
 
 
 def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None:
-    def fake_extract_pdf(path, start, end):
+    def fake_extract_pdf(path):
         name = Path(path).stem
         return [PageText(1, name)], []
 
     monkeypatch.setattr(ui, "extract_pdf", fake_extract_pdf)
 
     result = ui.add_document_for_ui(
-        ["a.pdf", "b.pdf"], 1500, 200, 1, None, [], []
+        ["a.pdf", "b.pdf"], 1500, 200, [], []
     )
     (
         status, rows, documents, chunks, active_preview, active_chunks,
-        slider_update, page_status, documents_rows, pdf_reset, remove_choices,
+        document_status, documents_rows, pdf_reset, remove_choices,
     ) = result
 
     assert [doc["file_name"] for doc in documents] == ["a.pdf", "b.pdf"]
@@ -549,18 +580,9 @@ def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None
     assert active_preview["file_name"] == "b.pdf"
     assert "a.pdf" in status and "b.pdf" in status
     assert "2 份文件" in status
-
-
-def test_initialize_page_range_defaults_end_to_last_page(monkeypatch) -> None:
-    monkeypatch.setattr(ui, "get_pdf_page_count", lambda path: 326)
-
-    start_update, end_update, status = ui.initialize_page_range("manual.pdf")
-
-    assert start_update["value"] == 1
-    assert start_update["maximum"] == 326
-    assert end_update["value"] == 326
-    assert end_update["maximum"] == 326
-    assert status == "已偵測到 326 頁；解析結束頁預設為第 326 頁。"
+    assert status.count("- ✅") == 2
+    assert status.splitlines()[0].startswith("- ✅「a.pdf」")
+    assert status.splitlines()[1].startswith("- ✅「b.pdf」")
 
 
 def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
@@ -583,10 +605,7 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
         "key",
         "llm",
         0.3,
-        999,
         "平衡",
-        15,
-        20,
         3,
         "全部頁面",
         10,
@@ -596,7 +615,7 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
     assert status.startswith("✅")
     assert "全部 1 頁、5 個 chunk" in status
     assert "共 2 批、1 輪整合" in status
-    assert "粒度：平衡；實體／關係類型上限：15／20" in status
+    assert "粒度：平衡" in status
     assert json.loads(schema_text)["entity_types"][0]["name"] == "DEVICE"
 
 
@@ -641,7 +660,6 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
         "key",
         "llm",
         0.2,
-        1500,
         3,
         [TextChunk(1, "text", (3,))],
         json.dumps(schema),
@@ -653,7 +671,7 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
     assert relationships[0][:3] == ["設備 A", "USES", "設備 B"]
     assert state["document"] == "manual.pdf"
     assert state["temperature"] == 0.2
-    assert state["max_output_tokens"] == 1500
+    assert state["max_output_tokens"] == ui.DEFAULT_MAX_OUTPUT_TOKENS
     assert state["max_concurrent_requests"] == 3
     assert state["chunks"][0]["text"] == "text"
     assert state["neo4j_imported"] is False
@@ -662,7 +680,7 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
 
 def test_extract_graph_for_ui_rejects_invalid_schema() -> None:
     result = ui.extract_graph_for_ui(
-        "http://models/v1", "", "llm", 0.2, 1500, 3, [], "not-json", {}
+        "http://models/v1", "", "llm", 0.2, 3, [], "not-json", {}
     )
 
     assert result == ("❌ schema 不是有效 JSON。", [], [], {})

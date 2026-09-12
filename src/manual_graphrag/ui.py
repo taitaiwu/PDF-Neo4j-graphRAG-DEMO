@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import gradio as gr
 
-from .chunking import TextChunk, chunk_pages, preview_rows_for_page
+from .chunking import TextChunk, chunk_pages, preview_rows
 from .config import (
     OPENAI_EMBEDDING_MODELS,
     OPENAI_LLM_MODELS,
@@ -31,7 +31,7 @@ from .neo4j_service import (
     search_graph_evidence,
     vector_index_name,
 )
-from .pdf_service import extract_pdf, get_pdf_page_count
+from .pdf_service import extract_pdf
 from .project_store import (
     append_question,
     create_project,
@@ -43,6 +43,11 @@ from .project_store import (
 )
 from .qa_service import answer_graph_question, check_embedding_connection, embedding_vectors
 from .storage import write_json
+
+
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_MAX_ENTITY_TYPES = 15
+DEFAULT_MAX_RELATIONSHIP_TYPES = 20
 
 
 def connection_summary(
@@ -232,6 +237,18 @@ def _document_choices(documents: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
+def _chunk_rows(chunks: list[TextChunk]) -> list[list[object]]:
+    return preview_rows(chunks, limit=len(chunks))
+
+
+def _document_status(index: int, total: int, doc: dict[str, Any], chunk_count: int) -> str:
+    if not total:
+        return "尚未解析任何 PDF。"
+    name = doc.get("file_name", "")
+    page_range = f"{doc.get('page_start', '')}–{doc.get('page_end', '')}"
+    return f"文件 {index + 1} / {total}：{name}（第 {page_range} 頁），共 {chunk_count} 個 chunk。"
+
+
 def _history_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
     return [[i.get("asked_at", ""), i.get("question", ""), i.get("answer", ""),
              i.get("retrieval_mode", ""), i.get("document", "")] for i in reversed(questions)]
@@ -266,10 +283,10 @@ def save_project_for_ui(
     chunks: list[TextChunk], graph_state: dict[str, Any],
     neo4j_uri: str, neo4j_database: str, neo4j_username: str, neo4j_password: str,
     model_endpoint: str, api_key: str, graph_llm_model: str,
-    graph_embedding_model: str, answer_model: str, start_page: int,
-    end_page: int | None, chunk_size: int, chunk_overlap: int,
-    graph_temperature: float, graph_max_output_tokens: int,
-    schema_granularity: str, max_entity_types: int, max_relationship_types: int,
+    graph_embedding_model: str, answer_model: str,
+    chunk_size: int, chunk_overlap: int,
+    graph_temperature: float,
+    schema_granularity: str,
     max_concurrent_requests: int, schema_sampling_mode: str,
     schema_sample_page_count: int, extraction_llm_model: str,
     extraction_max_concurrent_requests: int,
@@ -282,13 +299,10 @@ def save_project_for_ui(
         "neo4j_username": neo4j_username, "neo4j_password": neo4j_password,
         "model_endpoint": model_endpoint, "api_key": api_key,
         "graph_llm_model": graph_llm_model, "graph_embedding_model": graph_embedding_model,
-        "answer_model": answer_model, "start_page": int(start_page),
-        "end_page": None if end_page is None else int(end_page),
+        "answer_model": answer_model,
         "chunk_size": int(chunk_size), "chunk_overlap": int(chunk_overlap),
         "graph_temperature": float(graph_temperature),
-        "graph_max_output_tokens": int(graph_max_output_tokens),
         "schema_granularity": schema_granularity,
-        "max_entity_types": int(max_entity_types), "max_relationship_types": int(max_relationship_types),
         "max_concurrent_requests": int(max_concurrent_requests),
         "schema_sampling_mode": schema_sampling_mode,
         "schema_sample_page_count": int(schema_sample_page_count),
@@ -322,9 +336,10 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
     active_chunks = [
         chunk for chunk in chunks if chunk.document == active_preview.get("file_name")
     ] if active_preview else []
-    page_start = int(active_preview.get("page_start", get("start_page", 1)))
-    page_end = int(active_preview.get("page_end", get("end_page") or page_start))
-    rows = preview_rows_for_page(active_chunks, page_start) if active_chunks else []
+    document_status = (
+        _document_status(len(documents) - 1, len(documents), active_preview, len(active_chunks))
+        if documents else "請先解析 PDF。"
+    )
     entity_rows, relationship_rows = _graph_rows(graph)
     if graph.get("run_id"):
         graph_status = (
@@ -343,10 +358,9 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         get("neo4j_username", env["NEO4J_USERNAME"]), get("neo4j_password", env["NEO4J_PASSWORD"]),
         get("model_endpoint", env["MODEL_API_BASE"]), get("api_key", env["MODEL_API_KEY"]),
         get("graph_llm_model", env["BUILD_MODEL"]), get("graph_embedding_model", env["EMBEDDING_MODEL"]),
-        get("answer_model", env["ANSWER_MODEL"]), get("start_page", 1), get("end_page"),
+        get("answer_model", env["ANSWER_MODEL"]),
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
-        get("graph_max_output_tokens", 4096), get("schema_granularity", "平衡"),
-        get("max_entity_types", 15), get("max_relationship_types", 20),
+        get("schema_granularity", "平衡"),
         get("max_concurrent_requests", 3),
         gr.update(
             value=get("schema_sampling_mode", "全部頁面"),
@@ -357,11 +371,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         _display_retrieval_mode(get("retrieval_mode")), get("top_k", 8), get("schema_text", ""),
         documents, chunks, graph, active_preview, active_chunks,
         _document_rows(documents), _document_choices(documents),
-        gr.update(
-            minimum=page_start, maximum=page_end, value=page_start,
-            interactive=bool(active_chunks),
-        ),
-        rows, _page_status(page_start, page_end, len(rows)) if active_chunks else "請先解析 PDF。",
+        _chunk_rows(active_chunks), document_status,
         _history_rows(project.get("questions") or []),
         entity_rows, relationship_rows, graph_status, import_status,
     )
@@ -388,7 +398,8 @@ def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ..
 
 def _evaluation_question_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
     return [[item["number"], item["question"], item["expected_answer"],
-             ", ".join(map(str, item.get("source_pages", [])))] for item in questions]
+             ", ".join(map(str, item.get("source_pages", []))),
+             item.get("document", "")] for item in questions]
 
 
 def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
@@ -413,9 +424,11 @@ def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
             pages = [int(value) for value in page_values if str(value).strip()]
         except ValueError as exc:
             raise ValueError(f"第 {index} 題的來源頁碼必須是逗號分隔的整數") from exc
+        document = str(row[4]).strip() if len(row) > 4 and row[4] is not None else ""
         questions.append({
             "number": index, "question": question,
             "expected_answer": answer, "source_pages": pages,
+            "document": document,
         })
     return questions
 
@@ -453,13 +466,15 @@ def import_evaluation_questions_for_ui(
             if not isinstance(items, list):
                 raise ValueError("JSON 必須是題目陣列或包含 questions 陣列")
             rows = [[item.get("number", index), item.get("question", ""),
-                     item.get("expected_answer", ""), item.get("source_pages", [])]
+                     item.get("expected_answer", ""), item.get("source_pages", []),
+                     item.get("document", "")]
                     for index, item in enumerate(items, start=1) if isinstance(item, dict)]
         elif path.suffix.lower() == ".csv":
             with path.open(encoding="utf-8-sig", newline="") as handle:
                 items = list(csv.DictReader(handle))
             rows = [[item.get("number", index), item.get("question", ""),
-                     item.get("expected_answer", ""), item.get("source_pages", "")]
+                     item.get("expected_answer", ""), item.get("source_pages", ""),
+                     item.get("document", "")]
                     for index, item in enumerate(items, start=1)]
         else:
             raise ValueError("只支援 .json 或 .csv 題目檔")
@@ -567,6 +582,7 @@ def generate_evaluation_for_ui(
 
 def run_evaluation_for_ui(
     project_id: str, model_endpoint: str, api_key: str,
+    embedding_api_base: str, embedding_api_key: str,
     neo4j_uri: str, neo4j_database: str, neo4j_username: str, neo4j_password: str,
     model: str, retrieval_mode: str, top_k: int, evaluation: dict[str, Any],
     progress=gr.Progress(),
@@ -582,9 +598,9 @@ def run_evaluation_for_ui(
     for index, item in enumerate(questions, start=1):
         progress((index - 1) / len(questions), desc=f"測試第 {index} / {len(questions)} 題")
         status, actual, _ = answer_question_for_ui(
-            model_endpoint, api_key, neo4j_uri, neo4j_database,
-            neo4j_username, neo4j_password, model, item["question"],
-            retrieval_mode, int(top_k),
+            model_endpoint, api_key, embedding_api_base, embedding_api_key,
+            neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            model, item["question"], retrieval_mode, int(top_k),
         )
         if status.startswith("✅"):
             try:
@@ -613,46 +629,18 @@ def run_evaluation_for_ui(
     )
     return summary, _evaluation_result_rows(results), updated
 
-def initialize_page_range(
-    file_paths: list[str] | str | None,
-) -> tuple[dict[str, Any], dict[str, Any], str]:
-    if not file_paths:
-        return (
-            gr.update(value=1),
-            gr.update(value=None),
-            "尚未解析 PDF。",
-        )
-    paths = file_paths if isinstance(file_paths, list) else [file_paths]
-    if len(paths) > 1:
-        return (
-            gr.update(value=1),
-            gr.update(value=None),
-            f"已選擇 {len(paths)} 份 PDF；將以各自完整頁碼範圍解析（如需裁切頁碼，請一次上傳一份）。",
-        )
-    try:
-        page_count = get_pdf_page_count(paths[0])
-    except ValueError as exc:
-        return gr.update(value=1), gr.update(value=None), f"❌ {exc}"
-    return (
-        gr.update(value=1, maximum=page_count),
-        gr.update(value=page_count, maximum=page_count),
-        f"已偵測到 {page_count} 頁；解析結束頁預設為第 {page_count} 頁。",
-    )
-
 def _add_single_document(
     file_path: str,
     parsed_chunk_size: int,
     parsed_chunk_overlap: int,
-    requested_start: int,
-    requested_end: int | None,
     documents: list[dict[str, Any]],
     chunks: list[TextChunk],
-) -> tuple[str, dict[str, Any] | None, list[TextChunk], list[list[object]]]:
+) -> tuple[str, dict[str, Any] | None, list[TextChunk]]:
     file_name = Path(file_path).name
     if any(doc.get("file_name") == file_name for doc in documents):
-        return f"❌「{file_name}」：專案中已有同名文件，請先移除或重新命名後再上傳。", None, [], []
+        return f"❌「{file_name}」：專案中已有同名文件，請先移除或重新命名後再上傳。", None, []
     try:
-        pages, empty_pages = extract_pdf(file_path, requested_start, requested_end)
+        pages, empty_pages = extract_pdf(file_path)
         next_number = max((chunk.number for chunk in chunks), default=0) + 1
         new_chunks = chunk_pages(
             pages, parsed_chunk_size, parsed_chunk_overlap,
@@ -661,7 +649,7 @@ def _add_single_document(
         if not new_chunks:
             raise ValueError("PDF 沒有可解析文字；掃描文件需在後續版本加入 OCR。")
     except (ValueError, TypeError) as exc:
-        return f"❌「{file_name}」：{exc}", None, [], []
+        return f"❌「{file_name}」：{exc}", None, []
     parsed_start, parsed_end = pages[0].page, pages[-1].page
     doc_state = {
         "file_path": file_path,
@@ -676,21 +664,18 @@ def _add_single_document(
     note = f"✅「{file_name}」第 {parsed_start}–{parsed_end} 頁，產生 {len(new_chunks)} 個 chunk。"
     if empty_pages:
         note += f" 無文字頁面：{', '.join(map(str, empty_pages))}。"
-    first_page_rows = preview_rows_for_page(new_chunks, parsed_start)
-    return note, doc_state, new_chunks, first_page_rows
+    return note, doc_state, new_chunks
 
 
 def add_document_for_ui(
     file_paths: list[str] | str | None,
     chunk_size: int,
     chunk_overlap: int,
-    start_page: int | float,
-    end_page: int | float | None,
     documents: list[dict[str, Any]],
     chunks: list[TextChunk],
 ) -> tuple[
     str, list[list[object]], list[dict[str, Any]], list[TextChunk],
-    dict[str, Any], list[TextChunk], dict[str, Any], str,
+    dict[str, Any], list[TextChunk], str,
     list[list[object]], dict[str, Any], dict[str, Any],
 ]:
     documents = list(documents or [])
@@ -698,7 +683,7 @@ def add_document_for_ui(
     if not file_paths:
         return (
             "請先上傳 PDF。", [], documents, chunks, {}, [],
-            gr.update(), "尚未解析 PDF。", _document_rows(documents), gr.update(),
+            "尚未解析任何 PDF。", _document_rows(documents), gr.update(),
             _document_choices(documents),
         )
     try:
@@ -711,49 +696,43 @@ def add_document_for_ui(
     except (ValueError, TypeError) as exc:
         return (
             f"❌ {exc}", [], documents, chunks, {}, [],
-            gr.update(), "無法解析頁面。", _document_rows(documents), gr.update(),
+            "無法解析頁面。", _document_rows(documents), gr.update(),
             _document_choices(documents),
         )
-    requested_start = int(start_page)
-    requested_end = None if end_page is None else int(end_page)
 
     paths = file_paths if isinstance(file_paths, list) else [file_paths]
     notes: list[str] = []
     last_doc_state: dict[str, Any] = {}
     last_new_chunks: list[TextChunk] = []
-    last_rows: list[list[object]] = []
     for file_path in paths:
-        note, doc_state, new_chunks, rows = _add_single_document(
-            file_path, parsed_chunk_size, parsed_chunk_overlap,
-            requested_start, requested_end, documents, chunks,
+        note, doc_state, new_chunks = _add_single_document(
+            file_path, parsed_chunk_size, parsed_chunk_overlap, documents, chunks,
         )
         notes.append(note)
         if doc_state is not None:
             documents = documents + [doc_state]
             chunks = chunks + new_chunks
-            last_doc_state, last_new_chunks, last_rows = doc_state, new_chunks, rows
+            last_doc_state, last_new_chunks = doc_state, new_chunks
 
-    status = " ".join(notes) + f"（專案累計 {len(chunks)} 個 chunk，{len(documents)} 份文件）"
+    summary = f"（專案累計 {len(chunks)} 個 chunk，{len(documents)} 份文件）"
+    if len(notes) > 1:
+        status = "\n".join(f"- {note}" for note in notes) + f"\n\n{summary}"
+    else:
+        status = notes[0] + summary
     if not last_doc_state:
         return (
             status, [], documents, chunks, {}, [],
-            gr.update(), "無法解析頁面。", _document_rows(documents), gr.update(),
+            "無法解析頁面。", _document_rows(documents), gr.update(),
             _document_choices(documents),
         )
     return (
         status,
-        last_rows,
+        _chunk_rows(last_new_chunks),
         documents,
         chunks,
         last_doc_state,
         last_new_chunks,
-        gr.update(
-            minimum=last_doc_state["page_start"],
-            maximum=last_doc_state["page_end"],
-            value=last_doc_state["page_start"],
-            interactive=True,
-        ),
-        _page_status(last_doc_state["page_start"], last_doc_state["page_end"], len(last_rows)),
+        _document_status(len(documents) - 1, len(documents), last_doc_state, len(last_new_chunks)),
         _document_rows(documents),
         gr.update(value=None),
         _document_choices(documents),
@@ -767,7 +746,7 @@ def remove_document_for_ui(
     chunks: list[TextChunk],
 ) -> tuple[
     str, list[dict[str, Any]], list[TextChunk], dict[str, Any], list[TextChunk],
-    dict[str, Any], str, list[list[object]], dict[str, Any], list[list[object]],
+    str, list[list[object]], dict[str, Any], list[list[object]],
 ]:
     documents = list(documents or [])
     chunks = list(chunks or [])
@@ -778,7 +757,7 @@ def remove_document_for_ui(
     if not names:
         return (
             "請先選擇要移除的 PDF。", documents, chunks, {}, [],
-            gr.update(), "請先解析 PDF。", _document_rows(documents),
+            "請先解析 PDF。", _document_rows(documents),
             _document_choices(documents), [],
         )
     if project_id:
@@ -788,7 +767,7 @@ def remove_document_for_ui(
             except (OSError, ValueError) as exc:
                 return (
                     f"❌ {exc}", documents, chunks, {}, [],
-                    gr.update(), "請先解析 PDF。", _document_rows(documents),
+                    "請先解析 PDF。", _document_rows(documents),
                     _document_choices(documents), [],
                 )
     name_set = set(names)
@@ -798,12 +777,13 @@ def remove_document_for_ui(
     active_chunks = [
         chunk for chunk in chunks if chunk.document == active_preview.get("file_name")
     ] if active_preview else []
-    page_start = int(active_preview.get("page_start", 1))
-    page_end = int(active_preview.get("page_end", page_start))
-    rows = preview_rows_for_page(active_chunks, page_start) if active_chunks else []
     status = (
         f"✅ 已移除 {len(names)} 份文件「{'、'.join(names)}」"
         f"（專案剩餘 {len(chunks)} 個 chunk、{len(documents)} 份文件）。"
+    )
+    document_status = (
+        _document_status(len(documents) - 1, len(documents), active_preview, len(active_chunks))
+        if documents else "請先解析 PDF。"
     )
     return (
         status,
@@ -811,49 +791,44 @@ def remove_document_for_ui(
         chunks,
         active_preview,
         active_chunks,
-        gr.update(
-            minimum=page_start, maximum=page_end, value=page_start,
-            interactive=bool(active_chunks),
-        ),
-        _page_status(page_start, page_end, len(rows)) if active_chunks else "請先解析 PDF。",
+        document_status,
         _document_rows(documents),
         _document_choices(documents),
-        rows,
+        _chunk_rows(active_chunks),
     )
 
 
-def _page_status(page_number: int, page_count: int, chunk_count: int) -> str:
-    if chunk_count:
-        detail = f"顯示 {chunk_count} 個相關 chunk。"
-    else:
-        detail = "本頁沒有可解析文字或相關 chunk。"
-    return f"第 {page_number} / {page_count} 頁；{detail}"
+def switch_document(
+    offset: int,
+    documents: list[dict[str, Any]],
+    chunks: list[TextChunk],
+    active: dict[str, Any],
+) -> tuple[dict[str, Any], list[TextChunk], list[list[object]], str]:
+    documents = documents or []
+    if not documents:
+        return {}, [], [], "尚未解析任何 PDF。"
+    names = [doc.get("file_name", "") for doc in documents]
+    current_name = (active or {}).get("file_name", "")
+    current_index = names.index(current_name) if current_name in names else len(documents) - 1
+    new_index = (current_index + offset) % len(documents)
+    doc = documents[new_index]
+    doc_chunks = [chunk for chunk in (chunks or []) if chunk.document == doc.get("file_name")]
+    return (
+        doc, doc_chunks, _chunk_rows(doc_chunks),
+        _document_status(new_index, len(documents), doc, len(doc_chunks)),
+    )
 
 
-def preview_page(
-    page_number: int | float, chunks: list[TextChunk], state: dict[str, Any]
-) -> tuple[str, list[list[object]]]:
-    if not state or not chunks:
-        return "請先解析 PDF。", []
-    page_start = max(1, int(state.get("page_start", 1)))
-    page_end = max(page_start, int(state.get("page_end", state.get("page_count", 1))))
-    page = max(page_start, min(int(page_number), page_end))
-    rows = preview_rows_for_page(chunks, page)
-    return _page_status(page, page_end, len(rows)), rows
+def previous_document(
+    documents: list[dict[str, Any]], chunks: list[TextChunk], active: dict[str, Any]
+) -> tuple[dict[str, Any], list[TextChunk], list[list[object]], str]:
+    return switch_document(-1, documents, chunks, active)
 
 
-def _move_page(page_number: int | float, state: dict[str, Any], offset: int) -> int:
-    page_start = max(1, int(state.get("page_start", 1))) if state else 1
-    page_end = max(page_start, int(state.get("page_end", state.get("page_count", 1))))
-    return max(page_start, min(int(page_number) + offset, page_end))
-
-
-def previous_page(page_number: int | float, state: dict[str, Any]) -> int:
-    return _move_page(page_number, state, -1)
-
-
-def next_page(page_number: int | float, state: dict[str, Any]) -> int:
-    return _move_page(page_number, state, 1)
+def next_document(
+    documents: list[dict[str, Any]], chunks: list[TextChunk], active: dict[str, Any]
+) -> tuple[dict[str, Any], list[TextChunk], list[list[object]], str]:
+    return switch_document(1, documents, chunks, active)
 
 
 def save_config(state: dict[str, Any]) -> tuple[str, str | None]:
@@ -893,10 +868,7 @@ def plan_schema_for_ui(
     api_key: str,
     llm_model: str,
     temperature: float,
-    max_output_tokens: int,
     schema_granularity: str,
-    max_entity_types: int,
-    max_relationship_types: int,
     max_concurrent_requests: int,
     sampling_mode: str,
     sample_page_count: int,
@@ -913,11 +885,11 @@ def plan_schema_for_ui(
             llm_model,
             planning_chunks,
             float(temperature),
-            int(max_output_tokens),
+            DEFAULT_MAX_OUTPUT_TOKENS,
             lambda value, description: progress(value, desc=description),
             schema_granularity,
-            int(max_entity_types),
-            int(max_relationship_types),
+            DEFAULT_MAX_ENTITY_TYPES,
+            DEFAULT_MAX_RELATIONSHIP_TYPES,
             int(max_concurrent_requests),
         )
     except ValueError as exc:
@@ -934,7 +906,7 @@ def plan_schema_for_ui(
         f"{plan.analyzed_chunks} 個 chunk，"
         f"共 {plan.batch_count} 批、{plan.merge_rounds} 輪整合。"
         f"粒度：{schema_granularity}；實體／關係類型上限："
-        f"{int(max_entity_types)}／{int(max_relationship_types)}。"
+        f"{DEFAULT_MAX_ENTITY_TYPES}／{DEFAULT_MAX_RELATIONSHIP_TYPES}（固定）。"
         f"最大並行請求數：{int(max_concurrent_requests)}。"
         "請確認或編輯後再進行抽取。"
     )
@@ -946,7 +918,6 @@ def extract_graph_for_ui(
     api_key: str,
     llm_model: str,
     temperature: float,
-    max_output_tokens: int,
     max_concurrent_requests: int,
     chunks: list[TextChunk],
     schema_text: str,
@@ -965,7 +936,7 @@ def extract_graph_for_ui(
             chunks,
             schema,
             float(temperature),
-            int(max_output_tokens),
+            DEFAULT_MAX_OUTPUT_TOKENS,
             int(max_concurrent_requests),
             lambda value, description: progress(value, desc=description),
         )
@@ -1004,7 +975,7 @@ def extract_graph_for_ui(
         "document": document_name,
         "llm_model": llm_model,
         "temperature": float(temperature),
-        "max_output_tokens": int(max_output_tokens),
+        "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
         "max_concurrent_requests": int(max_concurrent_requests),
         "schema": schema,
         "entities": extraction.entities,
@@ -1235,15 +1206,12 @@ def build_app() -> gr.Blocks:
                     neo4j_test_button = gr.Button("測試 Neo4j 連線", variant="primary")
                     neo4j_connection_status = gr.Markdown()
                 with gr.Column():
-                    gr.Markdown("### 模型服務（對話／建圖用，例如 Groq）")
+                    gr.Markdown("### 模型服務（對話／建圖用，預設使用 OpenAI）")
                     model_endpoint = gr.Textbox(label="API Base URL", value=env["MODEL_API_BASE"])
                     api_key = gr.Textbox(label="API Key", value=env["MODEL_API_KEY"], type="password")
                     model_test_button = gr.Button("測試模型服務連線", variant="primary")
                     model_connection_status = gr.Markdown()
-                    gr.Markdown(
-                        "### Embedding 服務（例如 Voyage AI）\n"
-                        "Groq 未提供 embeddings API，請另外填寫可產生向量的服務。"
-                    )
+                    gr.Markdown("### Embedding 服務（預設使用 OpenAI）")
                     embedding_api_base = gr.Textbox(
                         label="Embedding API Base URL", value=env["EMBEDDING_API_BASE"]
                     )
@@ -1266,16 +1234,6 @@ def build_app() -> gr.Blocks:
                         label="PDF 使用手冊（可一次選取多個檔案）",
                         file_types=[".pdf"], file_count="multiple", type="filepath",
                     )
-                    with gr.Row():
-                        start_page = gr.Number(
-                            value=1, minimum=1, precision=0, label="解析起始頁"
-                        )
-                        end_page = gr.Number(
-                            value=None,
-                            minimum=1,
-                            precision=0,
-                            label="解析結束頁（上傳後自動設為最後一頁）",
-                        )
                     chunk_size = gr.Slider(100, 10000, value=1500, step=100, label="Chunk size（字元）")
                     chunk_overlap = gr.Slider(0, 2000, value=200, step=50, label="Chunk overlap（字元）")
                     preview_button = gr.Button("解析並加入專案", variant="primary")
@@ -1296,11 +1254,8 @@ def build_app() -> gr.Blocks:
                 with gr.Column(scale=3):
                     preview_status = gr.Markdown("尚未解析 PDF。可重複上傳多份 PDF，逐一加入同一個專案。")
                     with gr.Row():
-                        previous_button = gr.Button("上一頁", scale=1)
-                        page_selector = gr.Slider(
-                            1, 1, value=1, step=1, label="PDF 頁碼", interactive=False, scale=8
-                        )
-                        next_button = gr.Button("下一頁", scale=1)
+                        previous_button = gr.Button("上一份文件", scale=1)
+                        next_button = gr.Button("下一份文件", scale=1)
                     page_status = gr.Markdown("請先解析 PDF。")
                     chunk_table = gr.Dataframe(
                         headers=["編號", "文件", "頁碼", "字元數", "內容"],
@@ -1331,20 +1286,11 @@ def build_app() -> gr.Blocks:
                     graph_temperature = gr.Slider(
                         0, 2, value=0, step=0.1, label="Temperature"
                     )
-                    graph_max_output_tokens = gr.Number(
-                        value=4096, minimum=1, precision=0, label="最大輸出 tokens"
-                    )
                 with gr.Row():
                     schema_granularity = gr.Radio(
                         ["粗略", "平衡", "詳細"],
                         value="平衡",
                         label="Schema 粒度",
-                    )
-                    max_entity_types = gr.Number(
-                        value=15, minimum=1, precision=0, label="最大實體類型數"
-                    )
-                    max_relationship_types = gr.Number(
-                        value=20, minimum=1, precision=0, label="最大關係類型數"
                     )
                     max_concurrent_requests = gr.Number(
                         value=3, minimum=1, precision=0, label="最大並行請求數"
@@ -1498,8 +1444,8 @@ def build_app() -> gr.Blocks:
             )
             gr.Markdown("#### 測試題目")
             evaluation_questions_table = gr.Dataframe(
-                headers=["編號", "問題", "標準答案", "來源頁碼"],
-                datatype=["number", "str", "str", "str"],
+                headers=["編號", "問題", "標準答案", "來源頁碼", "來源文件"],
+                datatype=["number", "str", "str", "str", "str"],
                 type="array", interactive=True, wrap=True,
                 elem_classes="evaluation-table",
             )
@@ -1616,8 +1562,9 @@ def build_app() -> gr.Blocks:
         )
         run_evaluation_button.click(
             run_evaluation_for_ui,
-            inputs=[project_selector, model_endpoint, api_key, neo4j_uri,
-                    neo4j_database, neo4j_username, neo4j_password,
+            inputs=[project_selector, model_endpoint, api_key,
+                    embedding_api_base, embedding_api_key,
+                    neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
                     evaluation_test_model, evaluation_retrieval_mode,
                     evaluation_top_k, evaluation_state],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
@@ -1627,9 +1574,9 @@ def build_app() -> gr.Blocks:
             project_selector, documents_state, chunk_state, graph_state,
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
-            answer_model, start_page, end_page, chunk_size, chunk_overlap,
-            graph_temperature, graph_max_output_tokens, schema_granularity,
-            max_entity_types, max_relationship_types, max_concurrent_requests,
+            answer_model, chunk_size, chunk_overlap,
+            graph_temperature, schema_granularity,
+            max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
@@ -1638,16 +1585,16 @@ def build_app() -> gr.Blocks:
             project_state, project_status,
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
-            answer_model, start_page, end_page, chunk_size, chunk_overlap,
-            graph_temperature, graph_max_output_tokens, schema_granularity,
-            max_entity_types, max_relationship_types, max_concurrent_requests,
+            answer_model, chunk_size, chunk_overlap,
+            graph_temperature, schema_granularity,
+            max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
             documents_state, chunk_state, graph_state,
             active_preview_state, active_chunks_state,
             documents_table, remove_document_selector,
-            page_selector, chunk_table, page_status, history_table,
+            chunk_table, page_status, history_table,
             entity_table, relationship_table, build_status, import_status,
         ]
         project_tab.select(refresh_projects_for_ui, outputs=project_selector)
@@ -1687,9 +1634,9 @@ def build_app() -> gr.Blocks:
         auto_save_components = [
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             model_endpoint, api_key, graph_llm_model, graph_embedding_model,
-            answer_model, start_page, end_page, chunk_size, chunk_overlap,
-            graph_temperature, graph_max_output_tokens, schema_granularity,
-            max_entity_types, max_relationship_types, max_concurrent_requests,
+            answer_model, chunk_size, chunk_overlap,
+            graph_temperature, schema_granularity,
+            max_concurrent_requests,
             schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
@@ -1731,19 +1678,12 @@ def build_app() -> gr.Blocks:
         for component in env_inputs:
             component.change(persist_env_settings, inputs=env_inputs, outputs=env_status)
         reload_button.click(reload_env_settings, outputs=[*env_inputs, env_status])
-        pdf_file.upload(
-            initialize_page_range,
-            inputs=pdf_file,
-            outputs=[start_page, end_page, preview_status],
-        )
         preview_event = preview_button.click(
             add_document_for_ui,
             inputs=[
                 pdf_file,
                 chunk_size,
                 chunk_overlap,
-                start_page,
-                end_page,
                 documents_state,
                 chunk_state,
             ],
@@ -1754,7 +1694,6 @@ def build_app() -> gr.Blocks:
                 chunk_state,
                 active_preview_state,
                 active_chunks_state,
-                page_selector,
                 page_status,
                 documents_table,
                 pdf_file,
@@ -1774,7 +1713,6 @@ def build_app() -> gr.Blocks:
                 chunk_state,
                 active_preview_state,
                 active_chunks_state,
-                page_selector,
                 page_status,
                 documents_table,
                 remove_document_selector,
@@ -1785,16 +1723,15 @@ def build_app() -> gr.Blocks:
             save_project_for_ui, inputs=project_setting_inputs,
             outputs=[project_state, project_status], show_progress="hidden",
         )
-        page_selector.change(
-            preview_page,
-            inputs=[page_selector, active_chunks_state, active_preview_state],
-            outputs=[page_status, chunk_table],
-        )
         previous_button.click(
-            previous_page, inputs=[page_selector, active_preview_state], outputs=page_selector
+            previous_document,
+            inputs=[documents_state, chunk_state, active_preview_state],
+            outputs=[active_preview_state, active_chunks_state, chunk_table, page_status],
         )
         next_button.click(
-            next_page, inputs=[page_selector, active_preview_state], outputs=page_selector
+            next_document,
+            inputs=[documents_state, chunk_state, active_preview_state],
+            outputs=[active_preview_state, active_chunks_state, chunk_table, page_status],
         )
         export_button.click(
             save_config, inputs=[active_preview_state], outputs=[preview_status, export_file]
@@ -1811,10 +1748,7 @@ def build_app() -> gr.Blocks:
                 api_key,
                 graph_llm_model,
                 graph_temperature,
-                graph_max_output_tokens,
                 schema_granularity,
-                max_entity_types,
-                max_relationship_types,
                 max_concurrent_requests,
                 schema_sampling_mode,
                 schema_sample_page_count,
@@ -1829,7 +1763,6 @@ def build_app() -> gr.Blocks:
                 api_key,
                 extraction_llm_model,
                 graph_temperature,
-                graph_max_output_tokens,
                 extraction_max_concurrent_requests,
                 chunk_state,
                 schema_editor,

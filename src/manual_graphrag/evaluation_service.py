@@ -10,9 +10,9 @@ from .graph_service import _chat_json
 EVALUATION_CONTEXT_LIMIT = 30_000
 
 
-def _evaluation_context(chunks: list[TextChunk]) -> str:
+def _evaluation_context(chunks: list[TextChunk]) -> tuple[str, set[int]]:
     if not chunks:
-        return ""
+        return "", set()
     max_samples = max(1, EVALUATION_CONTEXT_LIMIT // 500)
     if len(chunks) <= max_samples:
         sampled = chunks
@@ -22,10 +22,11 @@ def _evaluation_context(chunks: list[TextChunk]) -> str:
             for index in range(max_samples)
         ]
     per_chunk = max(200, EVALUATION_CONTEXT_LIMIT // len(sampled) - 80)
-    return "\n\n".join(
+    context = "\n\n".join(
         f"[CHUNK {chunk.number}; PAGES {','.join(map(str, chunk.pages))}]\n{chunk.text[:per_chunk]}"
         for chunk in sampled
     )
+    return context, {chunk.number for chunk in sampled}
 
 
 def generate_evaluation_questions(
@@ -40,6 +41,9 @@ def generate_evaluation_questions(
         raise ValueError("請先解析 PDF 並產生 chunks")
     if not 1 <= count <= 100:
         raise ValueError("題目數量必須介於 1 到 100")
+
+    context, available_chunk_numbers = _evaluation_context(chunks)
+    chunk_lookup = {chunk.number: chunk for chunk in chunks}
 
     def validate(payload: dict[str, Any]) -> dict[str, Any]:
         questions = payload.get("questions")
@@ -56,11 +60,33 @@ def generate_evaluation_questions(
             pages = item.get("source_pages", [])
             if not isinstance(pages, list):
                 raise ValueError("source_pages 必須是陣列")
+            raw_numbers = item.get("source_chunk_numbers", [])
+            if not isinstance(raw_numbers, list):
+                raise ValueError("source_chunk_numbers 必須是陣列")
+            chunk_numbers: list[int] = []
+            for value in raw_numbers:
+                try:
+                    number = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if number in available_chunk_numbers and number not in chunk_numbers:
+                    chunk_numbers.append(number)
+            if not chunk_numbers:
+                raise ValueError("每一題都必須包含至少一個有效的 source_chunk_numbers")
+            document = "、".join(
+                dict.fromkeys(
+                    chunk_lookup[number].document
+                    for number in chunk_numbers
+                    if chunk_lookup[number].document
+                )
+            )
             normalized.append({
                 "number": index,
                 "question": question,
                 "expected_answer": answer,
                 "source_pages": [int(page) for page in pages],
+                "source_chunk_numbers": chunk_numbers,
+                "document": document,
             })
         return {"questions": normalized}
 
@@ -70,9 +96,11 @@ def generate_evaluation_questions(
         model,
         "你是文件問答評測資料設計師。只能根據提供的文件內容出題，並只輸出 JSON。",
         f"請建立剛好 {count} 道可由文件明確回答、彼此不重複且涵蓋不同內容的繁體中文問題。"
-        "每題提供精確標準答案與來源頁碼。輸出格式："
-        '{"questions":[{"question":"...","expected_answer":"...","source_pages":[1]}]}。\n\n'
-        f"文件：\n{_evaluation_context(chunks)}",
+        "每題提供精確標準答案、來源頁碼，以及該題所依據的 CHUNK 編號"
+        "（source_chunk_numbers，必須引用下方文件中標示的 CHUNK 編號）。輸出格式："
+        '{"questions":[{"question":"...","expected_answer":"...","source_pages":[1],'
+        '"source_chunk_numbers":[1]}]}。\n\n'
+        f"文件：\n{context}",
         temperature=0.2,
         max_output_tokens=max(2048, count * 300),
         validator=validate,
