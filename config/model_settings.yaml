@@ -19,16 +19,8 @@ services:
         - gpt-4.1-mini
       Ollama:
         rows:
-        - - false
-          - deepseek-r1:14b
-        - - false
-          - deepseek-r1:32b
         - - true
-          - gemma2:9b
-        - - false
-          - gemma3:4b
-        - - false
-          - gemma4:26b
+          - gemma4:12b
         models:
         - null
         - null
@@ -45,15 +37,7 @@ services:
       Ollama:
         rows:
         - - false
-          - deepseek-r1:14b
-        - - false
-          - deepseek-r1:32b
-        - - false
-          - gemma2:9b
-        - - false
-          - gemma3:4b
-        - - false
-          - gemma4:26b
+          - gemma4:12b
         models:
         - null
       Voyage:

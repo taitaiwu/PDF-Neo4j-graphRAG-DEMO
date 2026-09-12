@@ -1101,7 +1101,7 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     assert loaded[6] == "關聯擴展檢索"
 
 
-def test_project_list_refreshes_on_page_load_focus_and_tab_select(tmp_path, monkeypatch) -> None:
+def test_project_list_refreshes_on_page_load_and_tab_select_without_focus_rerender(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     app = build_app()
     selector = next(
@@ -1113,9 +1113,11 @@ def test_project_list_refreshes_on_page_load_focus_and_tab_select(tmp_path, monk
         dependency for dependency in app.config["dependencies"]
         if str(dependency.get("api_name", "")).startswith("refresh_projects_for_ui")
     ]
-    assert {
+    triggers = {
         target[1] for dependency in dependencies for target in dependency["targets"]
-    } == {"load", "focus", "select"}
+    }
+    assert triggers == {"load", "select"}
+    assert "focus" not in triggers
     assert all(dependency["outputs"] == [selector["id"]] for dependency in dependencies)
 
     project = ui.create_project("新增專案")

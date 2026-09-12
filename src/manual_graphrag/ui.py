@@ -1827,7 +1827,6 @@ def build_app() -> gr.Blocks:
         ]
         project_tab.select(refresh_projects_for_ui, outputs=project_selector)
         app.load(refresh_projects_for_ui, outputs=project_selector)
-        project_selector.focus(refresh_projects_for_ui, outputs=project_selector)
         create_project_event = create_project_button.click(
             create_project_for_ui, inputs=new_project_name,
             outputs=[project_selector, project_state, project_status],
