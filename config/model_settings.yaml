@@ -56,3 +56,14 @@ services:
           - gemma4:26b
         models:
         - null
+      Voyage:
+        rows: []
+        models:
+        - voyage-4
+voyage_models:
+- voyage-4-large
+- voyage-4
+- voyage-4-lite
+- voyage-code-3
+- voyage-finance-2
+- voyage-law-2

@@ -14,11 +14,16 @@ from .env_store import load_env, save_env
 
 MODEL_SETTINGS_PATH = Path("config/model_settings.yaml")
 MODEL_COUNTS = {"llm": 5, "embedding": 1}
+PROVIDERS_BY_KIND = {"llm": ("OpenAI", "Ollama"), "embedding": ("OpenAI", "Ollama", "Voyage")}
 _SETTINGS_LOCK = RLock()
 DEFAULT_OPENAI_MODELS = {
     "llm": ["gpt-4.1-mini", "gpt-4o-mini"],
     "embedding": ["text-embedding-3-small", "text-embedding-3-large"],
 }
+DEFAULT_VOYAGE_MODELS = [
+    "voyage-4-large", "voyage-4", "voyage-4-lite", "voyage-code-3",
+    "voyage-finance-2", "voyage-law-2",
+]
 DEFAULT_SELECTIONS = {
     "llm": ["gpt-4.1-mini", "gpt-4.1-mini", "gpt-4.1-mini", "gpt-4.1-mini", "gpt-4.1-mini"],
     "embedding": ["text-embedding-3-small"],
@@ -28,12 +33,19 @@ DEFAULT_SELECTIONS = {
 def _default_document() -> dict[str, Any]:
     return {
         "openai_models": deepcopy(DEFAULT_OPENAI_MODELS),
+        "voyage_models": deepcopy(DEFAULT_VOYAGE_MODELS),
         "services": {
             kind: {
                 "active": "OpenAI",
                 "profiles": {
-                    "OpenAI": {"rows": [], "models": deepcopy(DEFAULT_SELECTIONS[kind])},
-                    "Ollama": {"rows": [], "models": [None] * MODEL_COUNTS[kind]},
+                    provider: {
+                        "rows": [],
+                        "models": (
+                            deepcopy(DEFAULT_SELECTIONS[kind]) if provider == "OpenAI"
+                            else (["voyage-4"] if provider == "Voyage" else [None] * MODEL_COUNTS[kind])
+                        ),
+                    }
+                    for provider in PROVIDERS_BY_KIND[kind]
                 },
             } for kind in MODEL_COUNTS
         },
@@ -79,6 +91,30 @@ def openai_models(kind: str) -> list[str]:
     return list(dict.fromkeys(model.strip() for model in models))
 
 
+def configured_models(kind: str, provider: str) -> list[str]:
+    if provider == "OpenAI":
+        return openai_models(kind)
+    if provider == "Voyage" and kind == "embedding":
+        try:
+            models = _load_document()["voyage_models"]
+            if not isinstance(models, list) or not models or any(not isinstance(model, str) or not model.strip() for model in models):
+                raise ValueError()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"模型設定檔無效：{MODEL_SETTINGS_PATH}（voyage_models）") from exc
+        return list(dict.fromkeys(model.strip() for model in models))
+    raise ValueError(f"{provider} 沒有固定模型清單")
+
+
+def preferred_service_model(state: dict[str, Any]) -> str | None:
+    providers = ("OpenAI", "Voyage", "Ollama") if state["kind"] == "embedding" else ("OpenAI", "Ollama")
+    for provider in providers:
+        if provider in state["profiles"]:
+            models = provider_models(state, provider)
+            if models:
+                return models[0]
+    return None
+
+
 def _credentials(env: dict[str, str], kind: str, provider: str) -> tuple[str, str]:
     prefix = "MODEL" if kind == "llm" else "EMBEDDING"
     provider_key = provider.upper()
@@ -93,10 +129,10 @@ def load_service_settings(kind: str, env: dict[str, str] | None = None) -> dict[
     try:
         saved = document["services"][kind]
         active = saved["active"]
-        if active not in {"OpenAI", "Ollama"}:
+        if active not in PROVIDERS_BY_KIND[kind]:
             raise ValueError()
         profiles = {}
-        for provider in ("OpenAI", "Ollama"):
+        for provider in PROVIDERS_BY_KIND[kind]:
             profile = saved["profiles"][provider]
             rows, models = profile["rows"], profile["models"]
             if not isinstance(models, list) or len(models) != MODEL_COUNTS[kind] or any(model is not None and not isinstance(model, str) for model in models):
@@ -108,6 +144,8 @@ def load_service_settings(kind: str, env: dict[str, str] | None = None) -> dict[
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"模型設定檔無效：{MODEL_SETTINGS_PATH}（services.{kind}）") from exc
     profiles["OpenAI"]["rows"] = []
+    if "Voyage" in profiles:
+        profiles["Voyage"]["rows"] = []
     return {"kind": kind, "active": active, "profiles": profiles}
 
 
@@ -115,23 +153,23 @@ def provider_models(state: dict[str, Any], provider: str) -> list[str]:
     profile = state["profiles"][provider]
     if not profile["connected"]:
         return []
-    if provider == "OpenAI":
-        return openai_models(state["kind"])
+    if provider in {"OpenAI", "Voyage"}:
+        return configured_models(state["kind"], provider)
     return list(dict.fromkeys(row[1] for row in profile["rows"] if row[0]))
 
 
 def service_choices(state: dict[str, Any]) -> list[str]:
-    return list(dict.fromkeys([*provider_models(state, "OpenAI"), *provider_models(state, "Ollama")]))
+    return list(dict.fromkeys([model for provider in PROVIDERS_BY_KIND[state["kind"]] for model in provider_models(state, provider)]))
 
 
 def service_choice_items(state: dict[str, Any]) -> list[tuple[str, str]]:
-    return [(f"{provider}｜{model}", model) for provider in ("OpenAI", "Ollama") for model in provider_models(state, provider)]
+    return [(f"{provider}｜{model}", model) for provider in PROVIDERS_BY_KIND[state["kind"]] for model in provider_models(state, provider)]
 
 
 def resolve_model_service(state: dict[str, Any], model: str | None) -> tuple[str, str, str]:
     if not model:
         raise ValueError("請先選擇模型")
-    providers = [provider for provider in ("OpenAI", "Ollama") if model in provider_models(state, provider)]
+    providers = [provider for provider in PROVIDERS_BY_KIND[state["kind"]] if model in provider_models(state, provider)]
     if not providers:
         raise ValueError(f"模型「{model}」目前不可用，請先完成服務連線或勾選模型")
     provider = state["active"] if state["active"] in providers else providers[0]
@@ -144,6 +182,7 @@ def save_service_settings(state: dict[str, Any]) -> None:
     with _SETTINGS_LOCK:
         document = _load_document()
         document.setdefault("openai_models", deepcopy(DEFAULT_OPENAI_MODELS))
+        document.setdefault("voyage_models", deepcopy(DEFAULT_VOYAGE_MODELS))
         document.setdefault("services", {})[kind] = {
             "active": state["active"],
             "profiles": {

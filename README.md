@@ -28,7 +28,7 @@
 - 每次匯入前自動清空本工具建立的既有圖譜，再寫入本次抽取結果。
 - 從 PDF 自動建立指定數量的問題、標準答案與來源頁碼，支援手動編輯、保存及 JSON／CSV 匯入與 JSON 匯出，再一鍵執行 RAG 回答及模型判分。
 - 使用 Neo4j 官方 HybridCypherRetriever 執行向量與全文混合搜尋，並結合圖譜擴展及原文片段組成 GraphRAG 問答內容。
-- 模型與 Embedding 服務可分別切換 OpenAI／Ollama，並保留各自的連線設定。後續模型選單會同時顯示可用的 OpenAI 模型與已勾選的 Ollama 模型，執行時自動使用該模型所屬服務。
+- 模型服務可切換 OpenAI／Ollama，Embedding 服務可切換 OpenAI／Ollama／Voyage，並保留各自的連線設定。後續模型選單會顯示已驗證的 OpenAI、Ollama 與 Voyage 模型，執行時自動使用該模型所屬服務。
 
 ## 實作原理
 
@@ -126,10 +126,12 @@ EMBEDDING_OPENAI_API_BASE=https://api.openai.com/v1
 EMBEDDING_OPENAI_API_KEY=your-openai-api-key
 EMBEDDING_OLLAMA_API_BASE=http://host.docker.internal:11434/v1
 EMBEDDING_OLLAMA_API_KEY=
+EMBEDDING_VOYAGE_API_BASE=https://api.voyageai.com/v1
+EMBEDDING_VOYAGE_API_KEY=your-voyage-api-key
 ~~~
 
 - Neo4j 或模型服務若運行於宿主機，容器內不能使用 localhost，請使用 host.docker.internal。
-- OpenAI 與 Ollama 的 API Base URL／API Key 使用獨立欄位；模型服務與 Embedding 服務也各自保存連線。
+- OpenAI、Ollama 與 Voyage 的 API Base URL／API Key 使用獨立欄位；模型服務與 Embedding 服務也各自保存連線。
 - 模型白名單、目前來源、模型選擇與 Ollama 勾選清單保存在 `config/model_settings.yaml`。
 
 ### 4. 建置映像
@@ -171,10 +173,11 @@ docker logs -f pdf-graphrag
 
 - **OpenAI**：按「測試模型服務連線」或「測試 Embedding 服務連線」。連線成功後，LLM 僅提供 `gpt-4.1-mini`、`gpt-4o-mini`，Embedding 僅提供 `text-embedding-3-small`、`text-embedding-3-large`。OpenAI 不顯示取得清單按鈕或勾選表格。連線測試確認 API 可存取，不會執行付費生成或驗證剩餘額度。
 - **Ollama**：預設網址為 `http://localhost:11434/v1`，金鑰可留空。按「獲得模型清單」或「獲得 Embedding 模型清單」，再勾選要使用的模型。兩張表格各自保存勾選，因為 Ollama 回傳的清單可能同時包含 LLM 與 Embedding 模型。模型名稱欄為唯讀；取消勾選目前使用的模型後，需在後續頁面重新選擇。
+- **Voyage**：只提供 Embedding，預設網址為 `https://api.voyageai.com/v1`。填入 API key 並測試成功後，可使用 YAML 中 `voyage_models` 列出的模型。
 
 後續頁面的模型選單以 `OpenAI｜模型`、`Ollama｜模型` 標示來源，不受目前正在編輯哪一種服務影響；執行時會自動使用所選模型來源的網址與金鑰。同名模型同時存在於兩邊時，使用第 1 頁目前選取的服務。OpenAI／Ollama 的網址與金鑰分別寫入 `.env`；目前來源、模型選擇與 Ollama 勾選清單寫入 [`config/model_settings.yaml`](config/model_settings.yaml)，切換或重新啟動後仍會保留。重新啟動、重新讀取 `.env` 或修改 OpenAI 連線資料後，必須重新測試連線才能使用 OpenAI 模型。
 
-OpenAI 白名單也在 `config/model_settings.yaml` 的 `openai_models.llm` 與 `openai_models.embedding`。修改後重新測試連線即可套用；空清單或無效 YAML 會顯示錯誤，不會開放其他模型。Docker 部署若要保留介面更新的模型選擇，請將此 YAML 檔一併掛載。
+OpenAI 白名單在 `config/model_settings.yaml` 的 `openai_models.llm` 與 `openai_models.embedding`，Voyage 白名單在 `voyage_models`。修改後重新測試連線即可套用；空清單或無效 YAML 會顯示錯誤，不會開放其他模型。Docker 部署若要保留介面更新的模型選擇，請將此 YAML 檔一併掛載。
 
 ## 部署後如何啟動
 

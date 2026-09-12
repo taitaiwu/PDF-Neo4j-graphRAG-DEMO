@@ -51,7 +51,7 @@ def test_openai_requires_connection_then_only_offers_json_allowlist(monkeypatch,
     assert tested[6].startswith("✅")
     # Neither a forged table nor the hidden fetch action may add extra OpenAI models.
     edited = act(tested[0], "edit", rows=[[True, "expensive-model"]], models=["expensive-model"] * settings.MODEL_COUNTS[kind])
-    assert all(u["choices"] == choices("OpenAI", expected) and u["value"] is None for u in edited[7:])
+    assert all(u["choices"] == choices("OpenAI", expected) and u["value"] == expected[0] for u in edited[7:])
     fetched = act(tested[0], "fetch")
     assert all(u["choices"] == choices("OpenAI", expected) for u in fetched[7:])
 
@@ -148,6 +148,24 @@ def test_custom_yaml_controls_allowlist_and_invalid_yaml_fails_closed(tmp_path, 
     assert failed[7]["choices"] == []
 
 
+
+def test_voyage_embedding_uses_configured_models_and_embeddings_connection(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        ui, "check_embedding_connection",
+        lambda base, key, model: calls.append((base, key, model)),
+    )
+    state = service("embedding")
+    switched = act(state, "switch", provider="Voyage")
+    assert switched[1] == "https://api.voyageai.com/v1"
+    assert switched[3]["visible"] is False
+    assert switched[4]["visible"] is True
+    assert switched[5]["visible"] is False
+    tested = act(switched[0], "test", key="voyage-key")
+    assert calls == [("https://api.voyageai.com/v1", "voyage-key", "voyage-4-large")]
+    assert tested[7]["choices"][0] == ("Voyage｜voyage-4-large", "voyage-4-large")
+    assert tested[7]["value"] == "voyage-4-large"
+
 def test_saved_project_cannot_bypass_openai_allowlist_or_connection(monkeypatch):
     monkeypatch.setattr(ui, "check_model_connection", lambda *args: None)
     project = ui.create_project("saved")
@@ -161,9 +179,9 @@ def test_saved_project_cannot_bypass_openai_allowlist_or_connection(monkeypatch)
     llm = act(service(), "test")[0]
     embed = act(service("embedding"), "test")[0]
     loaded = ui.load_project_with_services_for_ui(project["project_id"], llm, embed)
-    assert loaded[8]["value"] is None
+    assert loaded[8]["value"] == "gpt-4.1-mini"
     assert loaded[18]["value"] == "gpt-4o-mini"
-    assert loaded[9]["value"] is None
+    assert loaded[9]["value"] == "text-embedding-3-small"
     assert loaded[8]["choices"] == choices("OpenAI", settings.openai_models("llm"))
     assert loaded[9]["choices"] == choices("OpenAI", settings.openai_models("embedding"))
 
@@ -241,7 +259,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
         load = event(button("載入專案")["id"], "click")
         loaded = (await app.process_api(load["id"], [project["project_id"], None, None], state=session))["data"]
         assert loaded[8]["value"] == "gpt-4o-mini"
-        assert loaded[18]["value"] is None
+        assert loaded[18]["value"] == "gpt-4.1-mini"
         reload = event(button("重新讀取 .env")["id"], "click")
         reloaded = (await app.process_api(reload["id"], [], state=session))["data"]
         assert reloaded[12]["choices"] == []
@@ -274,6 +292,14 @@ def test_invalid_yaml_after_successful_connection_revokes_models(tmp_path, monke
     assert "設定檔無效" in failed[6]
     assert failed[7]["choices"] == []
 
+
+
+def test_preferred_llm_model_uses_openai_before_ollama(monkeypatch):
+    state = service("llm")
+    state["profiles"]["Ollama"].update(connected=True, rows=[[True, "local-chat"]])
+    assert settings.preferred_service_model(state) == "local-chat"
+    state["profiles"]["OpenAI"]["connected"] = True
+    assert settings.preferred_service_model(state) == "gpt-4.1-mini"
 
 def test_both_provider_models_remain_visible_and_route_to_their_own_service(monkeypatch):
     monkeypatch.setattr(ui, "check_model_connection", lambda *args: None)

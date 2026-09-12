@@ -79,6 +79,7 @@ def test_pages_three_through_five_default_all_llm_fields_to_gpt_4_1_mini(monkeyp
         ui, "service_choice_items",
         lambda state: [("OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"), ("OpenAI｜gpt-4o-mini", "gpt-4o-mini")],
     )
+    monkeypatch.setattr(ui, "preferred_service_model", lambda state: "gpt-4.1-mini")
     app = build_app()
     labels = {
         "Schema 規劃 LLM", "知識圖譜抽取 LLM", "生題模型", "回答與評判模型", "問答 LLM",
@@ -194,7 +195,8 @@ def test_workflow_gate_requires_project_neo4j_llm_and_embedding() -> None:
     assert all(update["interactive"] is True for update in ui.workflow_tabs_for_ui("project", True, llm, embedding))
 
 
-def test_ollama_models_require_current_successful_fetch(monkeypatch) -> None:
+def test_ollama_models_require_current_successful_fetch(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     state = settings.load_service_settings("llm")
     profile = state["profiles"]["Ollama"]
     state["active"] = "Ollama"
@@ -343,6 +345,30 @@ def test_persist_env_settings_writes_all_fields(tmp_path, monkeypatch) -> None:
 
 
 
+
+def test_pdf_table_has_checkbox_and_new_project_resets_visible_status() -> None:
+    app = build_app()
+    components = app.config["components"]
+    table = next(
+        component for component in components
+        if component.get("props", {}).get("headers") == ["選取", "文件", "頁碼範圍", "Chunk 數"]
+    )
+    assert table["props"]["datatype"] == ["bool", "str", "str", "number"]
+    assert table["props"]["interactive"] is True
+    create_button = next(
+        component for component in components
+        if component.get("props", {}).get("value") == "建立新專案"
+    )
+    create_event = next(
+        dependency for dependency in app.config["dependencies"]
+        if (create_button["id"], "click") in dependency["targets"]
+    )
+    assert any(
+        dependency.get("trigger_after") == create_event["id"]
+        and str(dependency.get("api_name", "")).startswith("reset_new_project_pdf_status_for_ui")
+        for dependency in app.config["dependencies"]
+    )
+
 def test_build_app_has_independent_provider_switches_and_ollama_tables() -> None:
     app = build_app()
     components = app.config["components"]
@@ -355,7 +381,10 @@ def test_build_app_has_independent_provider_switches_and_ollama_tables() -> None
     ]:
         table = next(c for c in components if c.get("props", {}).get("label") == label)
         provider = next(c for c in components if c.get("props", {}).get("label") == provider_label)
-        assert provider["props"]["choices"] == [("OpenAI", "OpenAI"), ("Ollama", "Ollama")]
+        expected_providers = [("OpenAI", "OpenAI"), ("Ollama", "Ollama")]
+        if provider_label == "Embedding 服務來源":
+            expected_providers.append(("Voyage", "Voyage"))
+        assert provider["props"]["choices"] == expected_providers
         ollama = provider["props"]["value"] == "Ollama"
         assert buttons[fetch_label]["props"]["visible"] == ollama
         assert buttons[test_label]["props"]["visible"] != ollama
@@ -614,7 +643,7 @@ def test_add_document_for_ui_initializes_active_document(monkeypatch) -> None:
     assert active_chunks == chunks
     assert active_preview["file_name"] == "manual.pdf"
     assert document_status == "文件 1 / 1：manual.pdf（第 2–3 頁），共 2 個 chunk。"
-    assert documents_rows == [["manual.pdf", "2–3", 2]]
+    assert documents_rows == [[False, "manual.pdf", "2–3", 2]]
     assert remove_choices["choices"] == ["manual.pdf"]
 
 
@@ -629,6 +658,26 @@ def test_add_document_for_ui_rejects_duplicate_document_name(monkeypatch) -> Non
     assert status.startswith("❌")
     assert "同名文件" in status
 
+
+
+def test_document_table_selection_removes_checked_pdfs(monkeypatch) -> None:
+    removed = []
+    monkeypatch.setattr(ui, "remove_document", lambda project_id, name: removed.append(name))
+    documents = [
+        {"file_name": "a.pdf", "page_start": 1, "page_end": 1},
+        {"file_name": "b.pdf", "page_start": 1, "page_end": 2},
+    ]
+    table = [[True, "a.pdf", "1–1", 1], [False, "b.pdf", "1–2", 2]]
+    result = ui.remove_document_for_ui("project", table, documents, [])
+    assert removed == ["a.pdf"]
+    assert [doc["file_name"] for doc in result[1]] == ["b.pdf"]
+    assert result[6] == [[False, "b.pdf", "1–2", 0]]
+
+
+def test_new_project_resets_pdf_status_message() -> None:
+    assert ui.reset_new_project_pdf_status_for_ui() == (
+        "尚未解析 PDF。可重複上傳多份 PDF，逐一加入同一個專案。"
+    )
 
 def test_remove_document_for_ui_prunes_documents_and_chunks_without_project(monkeypatch) -> None:
     monkeypatch.setattr(
@@ -654,7 +703,7 @@ def test_remove_document_for_ui_prunes_documents_and_chunks_without_project(monk
     assert [chunk.document for chunk in remaining_chunks] == ["b.pdf"]
     assert active_preview["file_name"] == "b.pdf"
     assert active_chunks == remaining_chunks
-    assert documents_rows == [["b.pdf", "1–2", 0]]
+    assert documents_rows == [[False, "b.pdf", "1–2", 0]]
     assert remove_choices["choices"] == ["b.pdf"]
 
 

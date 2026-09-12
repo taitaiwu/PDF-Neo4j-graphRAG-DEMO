@@ -15,6 +15,7 @@ ENV_KEYS = (
     "MODEL_OLLAMA_API_BASE", "MODEL_OLLAMA_API_KEY",
     "EMBEDDING_OPENAI_API_BASE", "EMBEDDING_OPENAI_API_KEY",
     "EMBEDDING_OLLAMA_API_BASE", "EMBEDDING_OLLAMA_API_KEY",
+    "EMBEDDING_VOYAGE_API_BASE", "EMBEDDING_VOYAGE_API_KEY",
 )
 
 # These keys belonged to the former mixed connection/model format. save_env removes
@@ -32,6 +33,7 @@ DEFAULTS = {
     "MODEL_OLLAMA_API_BASE": "http://localhost:11434/v1", "MODEL_OLLAMA_API_KEY": "",
     "EMBEDDING_OPENAI_API_BASE": "https://api.openai.com/v1", "EMBEDDING_OPENAI_API_KEY": "",
     "EMBEDDING_OLLAMA_API_BASE": "http://localhost:11434/v1", "EMBEDDING_OLLAMA_API_KEY": "",
+    "EMBEDDING_VOYAGE_API_BASE": "https://api.voyageai.com/v1", "EMBEDDING_VOYAGE_API_KEY": "",
 }
 
 

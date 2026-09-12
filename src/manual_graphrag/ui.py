@@ -16,8 +16,8 @@ from .config import (
 )
 from .env_store import load_env, save_env
 from .service_settings import (
-    capture_service_settings, load_service_settings, openai_models,
-    provider_models, restore_service_settings, resolve_model_service, save_service_settings,
+    capture_service_settings, configured_models, load_service_settings, openai_models,
+    preferred_service_model, provider_models, restore_service_settings, resolve_model_service, save_service_settings,
     service_choice_items, service_choices,
 )
 from .evaluation_service import generate_evaluation_questions, judge_evaluation_answer
@@ -136,12 +136,13 @@ def render_service_for_ui(state: dict[str, Any]) -> tuple[Any, ...]:
     ollama = state["active"] == "Ollama"
     allowed = service_choices(state)
     choice_items = service_choice_items(state)
-    rows = profile["rows"] if ollama else [[True, model] for model in allowed]
+    rows = profile["rows"] if ollama else [[True, model] for model in provider_models(state, state["active"])]
+    fallback = preferred_service_model(state)
     return (
         state, profile["base_url"], profile["api_key"],
         gr.update(value=rows, visible=ollama), gr.update(visible=not ollama),
         gr.update(visible=ollama), profile["status"],
-        *(gr.update(choices=choice_items, value=model if model in allowed else None) for model in profile["models"]),
+        *(gr.update(choices=choice_items, value=model if model in allowed else fallback) for model in profile["models"]),
     )
 
 
@@ -151,15 +152,19 @@ def service_action_for_ui(
 ) -> tuple[Any, ...]:
     state = capture_service_settings(state, base_url, api_key, rows, list(models))
     if action == "switch":
-        if provider not in {"OpenAI", "Ollama"}:
+        if provider not in state["profiles"]:
             raise gr.Error("不支援的服務")
         state["active"] = provider
     profile = state["profiles"][state["active"]]
     try:
-        if action == "test" and state["active"] == "OpenAI":
-            allowed = openai_models(state["kind"])
+        if action == "test" and state["active"] in {"OpenAI", "Voyage"}:
+            provider_name = state["active"]
+            allowed = configured_models(state["kind"], provider_name)
             profile["connected"] = False
-            check_model_connection(profile["base_url"], profile["api_key"])
+            if provider_name == "Voyage":
+                check_embedding_connection(profile["base_url"], profile["api_key"], allowed[0])
+            else:
+                check_model_connection(profile["base_url"], profile["api_key"])
             profile["connected"] = True
             profile["models"] = [model if model in allowed else allowed[0] for model in profile["models"]]
             profile["status"] = "✅ 連線成功；可用模型：" + "、".join(allowed)
@@ -273,7 +278,7 @@ def workflow_tabs_for_ui(
 ) -> tuple[dict[str, Any], ...]:
     def has_available_service(state: dict[str, Any]) -> bool:
         try:
-            return any(provider_models(state, provider) for provider in ("OpenAI", "Ollama"))
+            return any(provider_models(state, provider) for provider in state["profiles"])
         except ValueError:
             return False
 
@@ -328,6 +333,10 @@ def refresh_projects_for_ui() -> dict[str, Any]:
     return gr.update(choices=_project_choices())
 
 
+def reset_new_project_pdf_status_for_ui() -> str:
+    return "尚未解析 PDF。可重複上傳多份 PDF，逐一加入同一個專案。"
+
+
 def _chunk_dicts(chunks: list[TextChunk]) -> list[dict[str, Any]]:
     return [
         {"number": c.number, "text": c.text, "pages": list(c.pages), "document": c.document}
@@ -348,6 +357,7 @@ def _stored_chunks(items: list[dict[str, Any]]) -> list[TextChunk]:
 def _document_rows(documents: list[dict[str, Any]]) -> list[list[object]]:
     return [
         [
+            False,
             doc.get("file_name", ""),
             f"{doc.get('page_start', '')}–{doc.get('page_end', '')}",
             doc.get("chunk_count", 0),
@@ -882,10 +892,13 @@ def remove_document_for_ui(
 ]:
     documents = list(documents or [])
     chunks = list(chunks or [])
-    names = [
-        name for name in (file_names if isinstance(file_names, list) else [file_names])
-        if name
-    ]
+    if isinstance(file_names, list) and file_names and isinstance(file_names[0], list):
+        names = [str(row[1]) for row in file_names if len(row) >= 2 and row[0] is True and row[1]]
+    else:
+        names = [
+            str(name) for name in (file_names if isinstance(file_names, list) else [file_names])
+            if name
+        ]
     if not names:
         return (
             "請先選擇要移除的 PDF。", documents, chunks, {}, [],
@@ -1340,9 +1353,10 @@ def build_app() -> gr.Blocks:
     embedding_allowed = service_choices(embedding_settings)
     llm_profile = llm_settings["profiles"][llm_settings["active"]]
     embedding_profile = embedding_settings["profiles"][embedding_settings["active"]]
+    preferred_llm = preferred_service_model(llm_settings)
     initial_llm_credentials = [
-        resolve_model_credentials_for_ui(llm_settings, model)
-        for model in llm_profile["models"]
+        resolve_model_credentials_for_ui(llm_settings, preferred_llm)
+        for _ in llm_profile["models"]
     ]
     initial_embedding_credentials = resolve_model_credentials_for_ui(
         embedding_settings, embedding_profile["models"][0]
@@ -1408,7 +1422,7 @@ def build_app() -> gr.Blocks:
                     )
                     model_connection_status = gr.Markdown(llm_profile["status"])
                     gr.Markdown("### Embedding 服務")
-                    embedding_provider = gr.Radio(["OpenAI", "Ollama"], value=embedding_settings["active"], label="Embedding 服務來源")
+                    embedding_provider = gr.Radio(["OpenAI", "Ollama", "Voyage"], value=embedding_settings["active"], label="Embedding 服務來源")
                     embedding_api_base = gr.Textbox(
                         label="Embedding API Base URL", value=embedding_profile["base_url"]
                     )
@@ -1444,14 +1458,15 @@ def build_app() -> gr.Blocks:
                     export_file = gr.File(label="設定 JSON", interactive=False)
                     gr.Markdown("##### 已加入本專案的 PDF")
                     documents_table = gr.Dataframe(
-                        headers=["文件", "頁碼範圍", "Chunk 數"],
-                        datatype=["str", "str", "number"],
-                        interactive=False,
+                        headers=["選取", "文件", "頁碼範圍", "Chunk 數"],
+                        datatype=["bool", "str", "str", "number"],
+                        interactive=True, static_columns=[1, 2, 3],
+                        row_count=(0, "fixed"), col_count=(4, "fixed"),
                         wrap=True,
                     )
                     remove_document_selector = gr.Dropdown(
                         label="選擇要移除的 PDF（可多選）", choices=[],
-                        multiselect=True, interactive=True,
+                        multiselect=True, interactive=True, visible=False,
                     )
                     remove_document_button = gr.Button("移除選定的 PDF", variant="stop")
                 with gr.Column(scale=3):
@@ -1487,7 +1502,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     graph_llm_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
+                        value=preferred_llm,
                         allow_custom_value=False,
                         label="Schema 規劃 LLM",
                     )
@@ -1544,7 +1559,7 @@ def build_app() -> gr.Blocks:
                 )
                 extraction_llm_model = gr.Dropdown(
                     choices=llm_choices,
-                    value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
+                    value=preferred_llm,
                     allow_custom_value=False,
                     label="知識圖譜抽取 LLM",
                 )
@@ -1599,7 +1614,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     evaluation_generation_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
+                        value=preferred_llm,
                         allow_custom_value=False,
                         label="生題模型",
                     )
@@ -1610,7 +1625,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     evaluation_test_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
+                        value=preferred_llm,
                         allow_custom_value=False,
                         label="回答與評判模型",
                     )
@@ -1662,7 +1677,7 @@ def build_app() -> gr.Blocks:
             )
             answer_model = gr.Dropdown(
                 choices=llm_choices,
-                value=DEFAULT_LLM_MODEL if DEFAULT_LLM_MODEL in llm_allowed else None,
+                value=preferred_llm,
                 allow_custom_value=False,
                 label="問答 LLM",
             )
@@ -1811,6 +1826,10 @@ def build_app() -> gr.Blocks:
             create_project_for_ui, inputs=new_project_name,
             outputs=[project_selector, project_state, project_status],
         )
+        create_project_event.success(
+            reset_new_project_pdf_status_for_ui,
+            outputs=preview_status, show_progress="hidden",
+        )
         load_project_event = load_project_button.click(
             load_project_with_services_for_ui,
             inputs=[project_selector, llm_service_state, embedding_service_state],
@@ -1819,6 +1838,16 @@ def build_app() -> gr.Blocks:
                      model_connection_status, evaluation_generation_model, evaluation_test_model,
                      embedding_provider, embedding_service_state, embedding_models_table,
                      embedding_test_button, embedding_list_button, embedding_connection_status],
+        )
+        initialize_project_event = create_project_event.success(
+            load_project_with_services_for_ui,
+            inputs=[project_selector, llm_service_state, embedding_service_state],
+            outputs=[*project_load_outputs,
+                     llm_provider, llm_service_state, llm_models_table, model_test_button, model_list_button,
+                     model_connection_status, evaluation_generation_model, evaluation_test_model,
+                     embedding_provider, embedding_service_state, embedding_models_table,
+                     embedding_test_button, embedding_list_button, embedding_connection_status],
+            show_progress="hidden",
         )
         protected_tabs = [pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
         delete_project_event = delete_project_button.click(
@@ -1841,7 +1870,7 @@ def build_app() -> gr.Blocks:
             show_progress="hidden",
         )
         access_inputs = [project_selector, neo4j_connected_state, llm_service_state, embedding_service_state]
-        create_project_event.success(
+        initialize_project_event.success(
             workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
         )
         load_project_event.success(
@@ -1992,7 +2021,7 @@ def build_app() -> gr.Blocks:
         )
         remove_document_event = remove_document_button.click(
             remove_document_for_ui,
-            inputs=[project_selector, remove_document_selector, documents_state, chunk_state],
+            inputs=[project_selector, documents_table, documents_state, chunk_state],
             outputs=[
                 preview_status,
                 documents_state,
