@@ -113,8 +113,10 @@ def load_service_settings(kind: str, env: dict[str, str] | None = None) -> dict[
 
 def provider_models(state: dict[str, Any], provider: str) -> list[str]:
     profile = state["profiles"][provider]
+    if not profile["connected"]:
+        return []
     if provider == "OpenAI":
-        return openai_models(state["kind"]) if profile["connected"] else []
+        return openai_models(state["kind"])
     return list(dict.fromkeys(row[1] for row in profile["rows"] if row[0]))
 
 

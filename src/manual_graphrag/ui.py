@@ -17,7 +17,7 @@ from .config import (
 from .env_store import load_env, save_env
 from .service_settings import (
     capture_service_settings, load_service_settings, openai_models,
-    restore_service_settings, resolve_model_service, save_service_settings,
+    provider_models, restore_service_settings, resolve_model_service, save_service_settings,
     service_choice_items, service_choices,
 )
 from .evaluation_service import generate_evaluation_questions, judge_evaluation_answer
@@ -91,12 +91,12 @@ def connection_summary(
 
 def check_neo4j_for_ui(
     uri: str, database: str, username: str, password: str
-) -> str:
+) -> tuple[str, bool]:
     try:
         check_neo4j_connection(uri, database, username, password)
     except ValueError as exc:
-        return f"❌ {exc}"
-    return "✅ Neo4j 連線成功，且可存取指定 Database。"
+        return f"❌ {exc}", False
+    return "✅ Neo4j 連線成功，且可存取指定 Database。", True
 
 
 def check_model_service_for_ui(base_url: str, api_key: str) -> str:
@@ -164,17 +164,18 @@ def service_action_for_ui(
             profile["models"] = [model if model in allowed else allowed[0] for model in profile["models"]]
             profile["status"] = "✅ 連線成功；可用模型：" + "、".join(allowed)
         elif action == "fetch" and state["active"] == "Ollama":
+            profile["connected"] = False
             available = list_models(profile["base_url"], profile["api_key"])
             selected = selected_models_for_ui(profile["rows"])
             profile["rows"] = [[model in selected, model] for model in available]
+            profile["connected"] = True
             profile["status"] = f"✅ 已取得 {len(available)} 個模型；請勾選此服務要使用的模型。"
         result = render_service_for_ui(state)
         save_service_settings(state)
         return result
     except (OSError, ValueError) as exc:
         profile["status"] = f"❌ {exc}"
-        if state["active"] == "OpenAI":
-            profile["connected"] = False
+        profile["connected"] = False
         try:
             save_service_settings(state)
         except OSError:
@@ -264,9 +265,29 @@ def reload_env_settings() -> tuple[str, ...]:
     )
 
 
-def unlock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
-    enabled = bool(project_id)
+def workflow_tabs_for_ui(
+    project_id: str,
+    neo4j_connected: bool,
+    llm_state: dict[str, Any],
+    embedding_state: dict[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    def has_available_service(state: dict[str, Any]) -> bool:
+        try:
+            return any(provider_models(state, provider) for provider in ("OpenAI", "Ollama"))
+        except ValueError:
+            return False
+
+    enabled = bool(
+        project_id and neo4j_connected
+        and has_available_service(llm_state)
+        and has_available_service(embedding_state)
+    )
     return tuple(gr.update(interactive=enabled) for _ in range(5))
+
+
+def lock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
+    """Keep delete-project output compatibility; successful setup uses workflow_tabs_for_ui."""
+    return tuple(gr.update(interactive=False) for _ in range(5))
 
 
 def delete_project_for_ui(
@@ -277,11 +298,11 @@ def delete_project_for_ui(
     except (OSError, ValueError) as exc:
         return (
             gr.update(), gr.update(), f"❌ {exc}",
-            *unlock_project_tabs_for_ui(project_id), False,
+            *lock_project_tabs_for_ui(project_id), False,
         )
     return (
         gr.update(choices=_project_choices(), value=None), {},
-        f"✅ 已刪除專案「{name}」。", *unlock_project_tabs_for_ui(""), True,
+        f"✅ 已刪除專案「{name}」。", *lock_project_tabs_for_ui(""), True,
     )
 
 
@@ -1342,6 +1363,7 @@ def build_app() -> gr.Blocks:
         graph_state = gr.State({})
         evaluation_state = gr.State({})
         run_control_state = gr.State(RunControl())
+        neo4j_connected_state = gr.State(False)
 
         with gr.Tab("0. 專案設定") as project_tab:
             gr.Markdown("### 專案工作區\n建立或載入專案後，可保存本頁面所有連線、模型、參數、Chunk、文件、建圖狀態與問答紀錄。")
@@ -1818,11 +1840,12 @@ def build_app() -> gr.Blocks:
             outputs=project_selector,
             show_progress="hidden",
         )
+        access_inputs = [project_selector, neo4j_connected_state, llm_service_state, embedding_service_state]
         create_project_event.success(
-            unlock_project_tabs_for_ui, inputs=project_selector, outputs=protected_tabs,
+            workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
         )
         load_project_event.success(
-            unlock_project_tabs_for_ui, inputs=project_selector, outputs=protected_tabs,
+            workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
         )
         project_state.change(
             _current_project_banner, inputs=project_state, outputs=current_project_banner,
@@ -1844,11 +1867,25 @@ def build_app() -> gr.Blocks:
                 outputs=[project_state, project_status], show_progress="hidden",
             )
 
-        neo4j_test_button.click(
+        neo4j_test_event = neo4j_test_button.click(
             check_neo4j_for_ui,
             inputs=[neo4j_uri, neo4j_database, neo4j_username, neo4j_password],
-            outputs=neo4j_connection_status,
+            outputs=[neo4j_connection_status, neo4j_connected_state],
         )
+        neo4j_test_event.then(
+            workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
+            show_progress="hidden",
+        )
+        for neo4j_field in [neo4j_uri, neo4j_database, neo4j_username, neo4j_password]:
+            invalidation = neo4j_field.input(
+                lambda: (False, "設定已變更，請重新測試 Neo4j 連線。"),
+                outputs=[neo4j_connected_state, neo4j_connection_status],
+                show_progress="hidden",
+            )
+            invalidation.then(
+                workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
+                show_progress="hidden",
+            )
         llm_model_fields = [
             graph_llm_model, extraction_llm_model, evaluation_generation_model,
             evaluation_test_model, answer_model,
@@ -1869,11 +1906,18 @@ def build_app() -> gr.Blocks:
              [graph_embedding_model], embedding_service_outputs),
         ]:
             inputs = [provider, state, endpoint, key, table, *fields]
-            provider.input(partial(service_action_for_ui, "switch"), inputs=inputs, outputs=outputs, concurrency_id="service-settings")
-            test_button.click(partial(service_action_for_ui, "test"), inputs=inputs, outputs=outputs, concurrency_id="service-settings")
-            fetch_button.click(partial(service_action_for_ui, "fetch"), inputs=inputs, outputs=outputs, concurrency_id="service-settings")
+            service_events = [
+                provider.input(partial(service_action_for_ui, "switch"), inputs=inputs, outputs=outputs, concurrency_id="service-settings"),
+                test_button.click(partial(service_action_for_ui, "test"), inputs=inputs, outputs=outputs, concurrency_id="service-settings"),
+                fetch_button.click(partial(service_action_for_ui, "fetch"), inputs=inputs, outputs=outputs, concurrency_id="service-settings"),
+            ]
             for component in [endpoint, key, table, *fields]:
-                component.input(partial(service_action_for_ui, "edit"), inputs=inputs, outputs=outputs, show_progress="hidden", concurrency_id="service-settings")
+                service_events.append(component.input(partial(service_action_for_ui, "edit"), inputs=inputs, outputs=outputs, show_progress="hidden", concurrency_id="service-settings"))
+            for service_event in service_events:
+                service_event.then(
+                    workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
+                    show_progress="hidden",
+                )
         for field, endpoint_state, key_state in [
             (graph_llm_model, schema_model_endpoint, schema_model_key),
             (extraction_llm_model, extraction_model_endpoint, extraction_model_key),
@@ -1907,11 +1951,18 @@ def build_app() -> gr.Blocks:
         ]
         for component in env_inputs:
             component.change(persist_env_settings, inputs=env_inputs, outputs=env_status)
-        reload_button.click(
+        reload_event = reload_button.click(
             reload_env_with_services_for_ui,
             outputs=[neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
                      llm_provider, *llm_service_outputs,
                      embedding_provider, *embedding_service_outputs, env_status],
+        )
+        reload_reset_event = reload_event.then(
+            lambda: False, outputs=neo4j_connected_state, show_progress="hidden",
+        )
+        reload_reset_event.then(
+            workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
+            show_progress="hidden",
         )
         preview_event = preview_button.click(
             add_document_for_ui,

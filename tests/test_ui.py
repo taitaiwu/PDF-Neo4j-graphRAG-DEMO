@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import gradio as gr
 import pytest
-from manual_graphrag import ui
+from manual_graphrag import service_settings as settings, ui
 from manual_graphrag.chunking import PageText, TextChunk
 
 from manual_graphrag.ui import build_app, connection_summary, persist_env_settings
@@ -167,15 +167,51 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     )
     assert connection_tab["props"].get("interactive", True) is True
     assert all(tab["props"]["interactive"] is False for tab in tabs)
-    assert all(update["interactive"] is False for update in ui.unlock_project_tabs_for_ui(""))
-    assert all(update["interactive"] is True for update in ui.unlock_project_tabs_for_ui("project"))
-    unlock_dependencies = [
+    llm = settings.load_service_settings("llm")
+    embedding = settings.load_service_settings("embedding")
+    assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("", False, llm, embedding))
+    llm["profiles"]["OpenAI"]["connected"] = True
+    embedding["profiles"]["OpenAI"]["connected"] = True
+    assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("project", False, llm, embedding))
+    assert all(update["interactive"] is True for update in ui.workflow_tabs_for_ui("project", True, llm, embedding))
+    gate_dependencies = [
         dependency for dependency in app.config["dependencies"]
-        if str(dependency.get("api_name", "")).startswith("unlock_project_tabs_for_ui")
+        if str(dependency.get("api_name", "")).startswith("workflow_tabs_for_ui")
     ]
-    assert len(unlock_dependencies) == 2
-    assert all(len(dependency["outputs"]) == 5 for dependency in unlock_dependencies)
+    assert len(gate_dependencies) >= 5
+    assert all(len(dependency["outputs"]) == 5 for dependency in gate_dependencies)
 
+
+
+def test_workflow_gate_requires_project_neo4j_llm_and_embedding() -> None:
+    llm = settings.load_service_settings("llm")
+    embedding = settings.load_service_settings("embedding")
+    assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("", False, llm, embedding))
+    assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("project", False, llm, embedding))
+    llm["profiles"]["OpenAI"]["connected"] = True
+    assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("project", True, llm, embedding))
+    embedding["profiles"]["OpenAI"]["connected"] = True
+    assert all(update["interactive"] is True for update in ui.workflow_tabs_for_ui("project", True, llm, embedding))
+
+
+def test_ollama_models_require_current_successful_fetch(monkeypatch) -> None:
+    state = settings.load_service_settings("llm")
+    profile = state["profiles"]["Ollama"]
+    state["active"] = "Ollama"
+    profile["rows"] = [[True, "local-model"]]
+    assert settings.service_choices(state) == []
+    monkeypatch.setattr(ui, "list_models", lambda *args: ["local-model"])
+    fetched = ui.service_action_for_ui(
+        "fetch", "Ollama", state, profile["base_url"], profile["api_key"],
+        profile["rows"], *profile["models"],
+    )
+    assert settings.service_choices(fetched[0]) == ["local-model"]
+    monkeypatch.setattr(ui, "list_models", lambda *args: (_ for _ in ()).throw(ValueError("offline")))
+    failed = ui.service_action_for_ui(
+        "fetch", "Ollama", fetched[0], fetched[1], fetched[2], fetched[3]["value"],
+        *[field["value"] for field in fetched[7:]],
+    )
+    assert settings.service_choices(failed[0]) == []
 
 def test_delete_project_refreshes_list_after_server_delete(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)

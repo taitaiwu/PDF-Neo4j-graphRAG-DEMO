@@ -86,8 +86,10 @@ def test_switch_preserves_both_profiles_credentials_checks_and_models(monkeypatc
     assert reloaded["active"] == "Ollama"
     assert reloaded["profiles"]["OpenAI"]["api_key"] == "openai-secret"
     assert reloaded["profiles"]["OpenAI"]["connected"] is False
-    assert settings.service_choices(reloaded) == [chosen]
+    assert settings.service_choices(reloaded) == []
     assert reloaded["profiles"]["Ollama"]["models"] == [chosen] * count
+    revalidated = act(reloaded, "fetch")
+    assert settings.service_choices(revalidated[0]) == [chosen]
 
 
 def test_llm_and_embedding_ollama_catalogs_have_independent_checks(monkeypatch):
@@ -96,8 +98,8 @@ def test_llm_and_embedding_ollama_catalogs_have_independent_checks(monkeypatch):
         switched = act(service(kind), "switch", provider="Ollama")
         fetched = act(switched[0], "fetch")
         act(fetched[0], "edit", rows=[[chosen == name, name] for name in ["chat", "embed"]])
-    assert settings.service_choices(settings.load_service_settings("llm")) == ["chat"]
-    assert settings.service_choices(settings.load_service_settings("embedding")) == ["embed"]
+    assert settings.service_choices(settings.load_service_settings("llm")) == []
+    assert settings.service_choices(settings.load_service_settings("embedding")) == []
 
 
 def test_connection_failure_and_credential_edit_revoke_openai_models(monkeypatch):
@@ -122,7 +124,9 @@ def test_failed_ollama_fetch_preserves_checked_catalog(monkeypatch):
     monkeypatch.setattr(ui, "list_models", fail)
     failed = act(selected[0], "fetch")
     assert failed[3]["value"] == [[True, "chat"], [False, "embed"]]
-    assert all(u["choices"] == choices("Ollama", ["chat"]) for u in failed[7:])
+    assert all(u["choices"] == [] for u in failed[7:])
+    assert failed[0]["profiles"]["Ollama"]["rows"] == [[True, "chat"], [False, "embed"]]
+    assert failed[0]["profiles"]["Ollama"]["connected"] is False
     assert failed[6] == "❌ offline"
 
 
@@ -240,7 +244,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
         assert loaded[18]["value"] is None
         reload = event(button("重新讀取 .env")["id"], "click")
         reloaded = (await app.process_api(reload["id"], [], state=session))["data"]
-        assert reloaded[12]["choices"] == [["Ollama｜chat-local", "chat-local"]]
+        assert reloaded[12]["choices"] == []
     asyncio.run(run())
 
 
@@ -302,7 +306,7 @@ def test_duplicate_model_name_uses_active_provider_credentials(monkeypatch):
     state = service()
     state["profiles"]["OpenAI"].update(connected=True, api_key="openai-key")
     state["profiles"]["Ollama"].update(
-        base_url="http://ollama:11434/v1", rows=[[True, "same-model"]],
+        base_url="http://ollama:11434/v1", rows=[[True, "same-model"]], connected=True,
     )
     state["active"] = "OpenAI"
     assert settings.resolve_model_service(state, "same-model")[:2] == (
