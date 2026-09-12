@@ -444,7 +444,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         get("neo4j_username", env["NEO4J_USERNAME"]), get("neo4j_password", env["NEO4J_PASSWORD"]),
         get("model_endpoint", env["MODEL_API_BASE"]), get("api_key", env["MODEL_API_KEY"]),
         get("graph_llm_model", env["BUILD_MODEL"]), get("graph_embedding_model", env["EMBEDDING_MODEL"]),
-        get("answer_model", env["ANSWER_MODEL"]),
+        get("answer_model", env["ANSWER_MODEL"]), get("start_page", 1), get("end_page") or 1,
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
         get("schema_granularity", "平衡"),
         get("max_entity_types", DEFAULT_MAX_ENTITY_TYPES),
@@ -717,43 +717,24 @@ def run_evaluation_for_ui(
     )
     return summary, _evaluation_result_rows(results), updated
 
-def _add_single_document(
-    file_path: str,
-    parsed_chunk_size: int,
-    parsed_chunk_overlap: int,
-    documents: list[dict[str, Any]],
-    chunks: list[TextChunk],
-) -> tuple[str, dict[str, Any] | None, list[TextChunk]]:
-    file_name = Path(file_path).name
-    if any(doc.get("file_name") == file_name for doc in documents):
-        return f"❌「{file_name}」：專案中已有同名文件，請先移除或重新命名後再上傳。", None, []
-    try:
-        pages, empty_pages = extract_pdf(file_path)
-        next_number = max((chunk.number for chunk in chunks), default=0) + 1
-        new_chunks = chunk_pages(
-            pages, parsed_chunk_size, parsed_chunk_overlap,
-            document=file_name, start_number=next_number,
+def initialize_page_range(
+    file_path: str | None,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    if not file_path:
+        return (
+            gr.update(value=1),
+            gr.update(value=1),
+            "尚未解析 PDF。",
         )
-        if not new_chunks:
-            raise ValueError("PDF 沒有可解析文字；掃描文件需在後續版本加入 OCR。")
-    except (ValueError, TypeError) as exc:
-        return f"❌「{file_name}」：{exc}", None, []
-    parsed_start, parsed_end = pages[0].page, pages[-1].page
-    doc_state = {
-        "file_path": file_path,
-        "file_name": file_name,
-        "page_count": len(pages),
-        "page_start": parsed_start,
-        "page_end": parsed_end,
-        "empty_pages": empty_pages,
-        "chunk_count": len(new_chunks),
-        "config": {"chunk_size": parsed_chunk_size, "chunk_overlap": parsed_chunk_overlap},
-    }
-    note = f"✅「{file_name}」第 {parsed_start}–{parsed_end} 頁，產生 {len(new_chunks)} 個 chunk。"
-    if empty_pages:
-        note += f" 無文字頁面：{', '.join(map(str, empty_pages))}。"
-    return note, doc_state, new_chunks
-
+    try:
+        page_count = get_pdf_page_count(file_path)
+    except ValueError as exc:
+        return gr.update(value=1), gr.update(value=1), f"❌ {exc}"
+    return (
+        gr.update(value=1, maximum=page_count),
+        gr.update(value=page_count, maximum=page_count),
+        f"已偵測到 {page_count} 頁；解析結束頁預設為第 {page_count} 頁。",
+    )
 
 def add_document_for_ui(
     file_paths: list[str] | str | None,
@@ -1366,10 +1347,17 @@ def build_app() -> gr.Blocks:
         with gr.Tab("2. PDF 與參數", interactive=False) as pdf_tab:
             with gr.Row():
                 with gr.Column(scale=1):
-                    pdf_file = gr.File(
-                        label="PDF 使用手冊（可一次選取多個檔案）",
-                        file_types=[".pdf"], file_count="multiple", type="filepath",
-                    )
+                    pdf_file = gr.File(label="PDF 使用手冊", file_types=[".pdf"], type="filepath")
+                    with gr.Row():
+                        start_page = gr.Number(
+                            value=1, minimum=1, precision=0, label="解析起始頁"
+                        )
+                        end_page = gr.Number(
+                            value=1,
+                            minimum=1,
+                            precision=0,
+                            label="解析結束頁（上傳後自動設為最後一頁）",
+                        )
                     chunk_size = gr.Slider(100, 10000, value=1500, step=100, label="Chunk size（字元）")
                     chunk_overlap = gr.Slider(0, 2000, value=200, step=50, label="Chunk overlap（字元）")
                     preview_button = gr.Button("解析並加入專案", variant="primary")

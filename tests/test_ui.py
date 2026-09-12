@@ -117,6 +117,18 @@ def test_project_page_uses_automatic_refresh_and_save() -> None:
     )
 
 
+def test_pdf_page_range_has_valid_values_before_upload() -> None:
+    app = build_app()
+    fields = {
+        component.get("props", {}).get("label"): component
+        for component in app.config["components"]
+    }
+
+    assert fields["解析起始頁"]["props"]["value"] == 1
+    assert fields["解析結束頁（上傳後自動設為最後一頁）"]["props"]["value"] == 1
+    assert fields["解析結束頁（上傳後自動設為最後一頁）"]["props"]["minimum"] == 1
+
+
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
@@ -645,6 +657,16 @@ def test_remove_document_for_ui_deletes_from_project_when_loaded(monkeypatch) ->
     assert remaining_documents == []
     assert status.startswith("✅")
 
+def test_initialize_page_range_without_pdf_keeps_valid_page_values() -> None:
+    start_update, end_update, status = ui.initialize_page_range(None)
+
+    assert start_update["value"] == 1
+    assert end_update["value"] == 1
+    assert status == "尚未解析 PDF。"
+
+
+def test_initialize_page_range_defaults_end_to_last_page(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "get_pdf_page_count", lambda path: 326)
 
 def test_remove_document_for_ui_supports_multi_select(monkeypatch) -> None:
     removed = []
