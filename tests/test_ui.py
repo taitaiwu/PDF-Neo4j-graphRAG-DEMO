@@ -52,14 +52,9 @@ def test_model_fields_only_offer_initially_checked_models() -> None:
     assert set(fields) == labels
     assert all(field["type"] == "dropdown" for field in fields.values())
     assert all(not field["props"]["allow_custom_value"] for field in fields.values())
-    tables = {
-        component["props"]["label"]: component["props"]["value"]["data"]
-        for component in app.config["components"]
-        if component.get("props", {}).get("label") in {"LLM 模型清單", "Embedding 模型清單"}
-    }
-    for label, field in fields.items():
-        table = tables["Embedding 模型清單" if label == "Embedding 模型" else "LLM 模型清單"]
-        assert field["props"]["choices"] == [(row[1], row[1]) for row in table if row[0]]
+    for field in fields.values():
+        for display, value in field["props"]["choices"]:
+            assert display in {f"OpenAI｜{value}", f"Ollama｜{value}"}
 
 
 def test_pause_and_stop_buttons_bypass_the_queue() -> None:

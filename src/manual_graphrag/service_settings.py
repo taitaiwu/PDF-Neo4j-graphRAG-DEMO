@@ -82,11 +82,44 @@ def load_service_settings(kind: str, env: dict[str, str] | None = None) -> dict[
     return {"kind": kind, "active": active, "profiles": profiles}
 
 
-def service_choices(state: dict[str, Any]) -> list[str]:
-    profile = state["profiles"][state["active"]]
-    if state["active"] == "OpenAI":
+def provider_models(state: dict[str, Any], provider: str) -> list[str]:
+    profile = state["profiles"][provider]
+    if provider == "OpenAI":
         return openai_models(state["kind"]) if profile["connected"] else []
     return list(dict.fromkeys(row[1] for row in profile["rows"] if row[0]))
+
+
+def service_choices(state: dict[str, Any]) -> list[str]:
+    """Return usable models from both providers, independent of the active editor."""
+    return list(dict.fromkeys(
+        [*provider_models(state, "OpenAI"), *provider_models(state, "Ollama")]
+    ))
+
+
+def service_choice_items(state: dict[str, Any]) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    for provider in ("OpenAI", "Ollama"):
+        items.extend(
+            (f"{provider}｜{model}", model)
+            for model in provider_models(state, provider)
+        )
+    return items
+
+
+def resolve_model_service(
+    state: dict[str, Any], model: str | None,
+) -> tuple[str, str, str]:
+    if not model:
+        raise ValueError("請先選擇模型")
+    providers = [
+        provider for provider in ("OpenAI", "Ollama")
+        if model in provider_models(state, provider)
+    ]
+    if not providers:
+        raise ValueError(f"模型「{model}」目前不可用，請先完成服務連線或勾選模型")
+    provider = state["active"] if state["active"] in providers else providers[0]
+    profile = state["profiles"][provider]
+    return profile["base_url"], profile["api_key"], model
 
 
 def save_service_settings(state: dict[str, Any]) -> None:

@@ -11,6 +11,10 @@ def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
+def choices(provider, models):
+    return [(f"{provider}｜{model}", model) for model in models]
+
+
 def service(kind="llm"):
     return settings.load_service_settings(kind, dict(DEFAULTS))
 
@@ -43,13 +47,13 @@ def test_openai_requires_connection_then_only_offers_json_allowlist(monkeypatch,
     assert tested[4]["visible"] is True
     assert tested[5]["visible"] is False
     assert tested[3]["visible"] is False
-    assert all(u["choices"] == expected for u in tested[7:])
+    assert all(u["choices"] == choices("OpenAI", expected) for u in tested[7:])
     assert tested[6].startswith("✅")
     # Neither a forged table nor the hidden fetch action may add extra OpenAI models.
     edited = act(tested[0], "edit", rows=[[True, "expensive-model"]], models=["expensive-model"] * settings.MODEL_COUNTS[kind])
-    assert all(u["choices"] == expected and u["value"] is None for u in edited[7:])
+    assert all(u["choices"] == choices("OpenAI", expected) and u["value"] is None for u in edited[7:])
     fetched = act(tested[0], "fetch")
-    assert all(u["choices"] == expected for u in fetched[7:])
+    assert all(u["choices"] == choices("OpenAI", expected) for u in fetched[7:])
 
 
 @pytest.mark.parametrize("kind", ["llm", "embedding"])
@@ -77,7 +81,7 @@ def test_switch_preserves_both_profiles_credentials_checks_and_models(monkeypatc
     again = act(back[0], "switch", provider="Ollama")
     assert again[1:3] == ("http://ollama-server:11434/v1", "local-secret")
     assert again[3]["value"] == rows
-    assert all(u["choices"] == [chosen] and u["value"] == chosen for u in again[7:])
+    assert all(u["choices"] == choices("OpenAI", settings.openai_models(kind)) + choices("Ollama", [chosen]) and u["value"] == chosen for u in again[7:])
     reloaded = settings.load_service_settings(kind)
     assert reloaded["active"] == "Ollama"
     assert reloaded["profiles"]["OpenAI"]["api_key"] == "openai-secret"
@@ -118,7 +122,7 @@ def test_failed_ollama_fetch_preserves_checked_catalog(monkeypatch):
     monkeypatch.setattr(ui, "list_models", fail)
     failed = act(selected[0], "fetch")
     assert failed[3]["value"] == [[True, "chat"], [False, "embed"]]
-    assert all(u["choices"] == ["chat"] for u in failed[7:])
+    assert all(u["choices"] == choices("Ollama", ["chat"]) for u in failed[7:])
     assert failed[6] == "❌ offline"
 
 
@@ -127,7 +131,7 @@ def test_custom_json_controls_allowlist_and_invalid_json_fails_closed(tmp_path, 
     monkeypatch.setattr(settings, "OPENAI_MODELS_PATH", path)
     monkeypatch.setattr(ui, "check_model_connection", lambda *args: None)
     path.write_text(json.dumps({"llm": ["custom-mini"], "embedding": ["custom-embed"]}))
-    assert act(service(), "test")[7]["choices"] == ["custom-mini"]
+    assert act(service(), "test")[7]["choices"] == choices("OpenAI", ["custom-mini"])
     path.write_text("{}")
     failed = act(service(), "test")
     assert "設定檔無效" in failed[6]
@@ -150,8 +154,8 @@ def test_saved_project_cannot_bypass_openai_allowlist_or_connection(monkeypatch)
     assert loaded[8]["value"] is None
     assert loaded[20]["value"] == "gpt-4o-mini"
     assert loaded[9]["value"] is None
-    assert loaded[8]["choices"] == settings.openai_models("llm")
-    assert loaded[9]["choices"] == settings.openai_models("embedding")
+    assert loaded[8]["choices"] == choices("OpenAI", settings.openai_models("llm"))
+    assert loaded[9]["choices"] == choices("OpenAI", settings.openai_models("embedding"))
 
 
 def test_evaluation_cannot_restore_unapproved_models(monkeypatch):
@@ -196,7 +200,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
     async def run():
         inputs = ["OpenAI", None, "https://api.openai.com/v1", "test-key", {"headers": ["使用", "模型名稱"], "data": []}, *([None] * 5)]
         connected = (await app.process_api(test["id"], inputs, state=session))["data"]
-        assert connected[7]["choices"] == [["gpt-4.1-mini", "gpt-4.1-mini"], ["gpt-4o-mini", "gpt-4o-mini"]]
+        assert connected[7]["choices"] == [["OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"], ["OpenAI｜gpt-4o-mini", "gpt-4o-mini"]]
         inputs[4] = connected[3]["value"]
         inputs[5:] = [u["value"] for u in connected[7:]]
         inputs[0] = "Ollama"
@@ -208,7 +212,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
         inputs[4] = fetched[3]["value"]
         inputs[4]["data"][0][0] = True
         checked = (await app.process_api(edit["id"], inputs, state=session))["data"]
-        assert checked[7]["choices"] == [["chat-local", "chat-local"]]
+        assert checked[7]["choices"] == [["OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"], ["OpenAI｜gpt-4o-mini", "gpt-4o-mini"], ["Ollama｜chat-local", "chat-local"]]
         inputs[4] = checked[3]["value"]
         inputs[0] = "OpenAI"
         restored = (await app.process_api(switch["id"], inputs, state=session))["data"]
@@ -227,7 +231,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
         assert loaded[20]["value"] is None
         reload = event(button("重新讀取 .env")["id"], "click")
         reloaded = (await app.process_api(reload["id"], [], state=session))["data"]
-        assert reloaded[12]["choices"] == []
+        assert reloaded[12]["choices"] == [["Ollama｜chat-local", "chat-local"]]
     asyncio.run(run())
 
 
@@ -254,3 +258,51 @@ def test_invalid_json_after_successful_connection_revokes_models(tmp_path, monke
     failed = ui.service_action_for_ui("test", "OpenAI", connected[0], connected[1], connected[2], [], *(["mini"] * 5))
     assert "設定檔無效" in failed[6]
     assert failed[7]["choices"] == []
+
+
+def test_both_provider_models_remain_visible_and_route_to_their_own_service(monkeypatch):
+    monkeypatch.setattr(ui, "check_model_connection", lambda *args: None)
+    monkeypatch.setattr(ui, "list_models", lambda *args: ["local-chat", "local-embed"])
+    connected = act(service(), "test", key="openai-key")
+    ollama = act(connected[0], "switch", provider="Ollama")
+    ollama = act(ollama[0], "edit", base="http://ollama:11434/v1")
+    fetched = act(ollama[0], "fetch")
+    combined = act(
+        fetched[0], "edit",
+        rows=[[True, "local-chat"], [False, "local-embed"]],
+    )
+    assert combined[7]["choices"] == (
+        choices("OpenAI", ["gpt-4.1-mini", "gpt-4o-mini"])
+        + choices("Ollama", ["local-chat"])
+    )
+    assert settings.resolve_model_service(combined[0], "gpt-4o-mini") == (
+        "https://api.openai.com/v1", "openai-key", "gpt-4o-mini",
+    )
+    assert settings.resolve_model_service(combined[0], "local-chat") == (
+        "http://ollama:11434/v1", "", "local-chat",
+    )
+    assert ui.resolve_model_credentials_for_ui(
+        combined[0], "local-chat"
+    ) == ("http://ollama:11434/v1", "")
+
+
+def test_duplicate_model_name_uses_active_provider_credentials(monkeypatch):
+    monkeypatch.setattr(settings, "openai_models", lambda kind: ["same-model"])
+    state = service()
+    state["profiles"]["OpenAI"].update(connected=True, api_key="openai-key")
+    state["profiles"]["Ollama"].update(
+        base_url="http://ollama:11434/v1", rows=[[True, "same-model"]],
+    )
+    state["active"] = "OpenAI"
+    assert settings.resolve_model_service(state, "same-model")[:2] == (
+        "https://api.openai.com/v1", "openai-key",
+    )
+    state["active"] = "Ollama"
+    assert settings.resolve_model_service(state, "same-model")[:2] == (
+        "http://ollama:11434/v1", "",
+    )
+
+
+def test_unavailable_model_cannot_be_routed():
+    with pytest.raises(ValueError, match="目前不可用"):
+        settings.resolve_model_service(service(), "unknown")

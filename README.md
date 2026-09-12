@@ -28,7 +28,7 @@
 - 每次匯入前自動清空本工具建立的既有圖譜，再寫入本次抽取結果。
 - 從 PDF 自動建立指定數量的問題、標準答案與來源頁碼，支援手動編輯、保存及 JSON／CSV 匯入與 JSON 匯出，再一鍵執行 RAG 回答及模型判分。
 - 使用 Neo4j 官方 HybridCypherRetriever 執行向量與全文混合搜尋，並結合圖譜擴展及原文片段組成 GraphRAG 問答內容。
-- 模型與 Embedding 服務可分別切換 OpenAI／Ollama，並保留各自的連線設定與模型選擇。OpenAI 測試連線後使用限定模型；Ollama 取得清單後由使用者勾選。
+- 模型與 Embedding 服務可分別切換 OpenAI／Ollama，並保留各自的連線設定。後續模型選單會同時顯示可用的 OpenAI 模型與已勾選的 Ollama 模型，執行時自動使用該模型所屬服務。
 
 ## 實作原理
 
@@ -168,7 +168,7 @@ docker logs -f pdf-graphrag
 - **OpenAI**：按「測試模型服務連線」或「測試 Embedding 服務連線」。連線成功後，LLM 僅提供 `gpt-4.1-mini`、`gpt-4o-mini`，Embedding 僅提供 `text-embedding-3-small`、`text-embedding-3-large`。OpenAI 不顯示取得清單按鈕或勾選表格。連線測試確認 API 可存取，不會執行付費生成或驗證剩餘額度。
 - **Ollama**：預設網址為 `http://localhost:11434/v1`，金鑰可留空。按「獲得模型清單」或「獲得 Embedding 模型清單」，再勾選要使用的模型。兩張表格各自保存勾選，因為 Ollama 回傳的清單可能同時包含 LLM 與 Embedding 模型。模型名稱欄為唯讀；取消勾選目前使用的模型後，需在後續頁面重新選擇。
 
-兩種服務各自保存 OpenAI／Ollama 的網址、金鑰、模型選擇與 Ollama 勾選清單；設定寫入 `.env` 的 `MODEL_SERVICE_PROFILES` 與 `EMBEDDING_SERVICE_PROFILES`，切換或重新啟動後仍保留。重新啟動、重新讀取 `.env` 或修改 OpenAI 連線資料後，必須重新測試連線才能使用 OpenAI 模型。
+後續頁面的模型選單以 `OpenAI｜模型`、`Ollama｜模型` 標示來源，不受目前正在編輯哪一種服務影響；執行時會自動使用所選模型來源的網址與金鑰。同名模型同時存在於兩邊時，使用第 1 頁目前選取的服務。兩種服務各自保存 OpenAI／Ollama 的網址、金鑰、模型選擇與 Ollama 勾選清單；設定寫入 `.env` 的 `MODEL_SERVICE_PROFILES` 與 `EMBEDDING_SERVICE_PROFILES`，切換或重新啟動後仍保留。重新啟動、重新讀取 `.env` 或修改 OpenAI 連線資料後，必須重新測試連線才能使用 OpenAI 模型。
 
 OpenAI 白名單可修改 [`config/openai_models.json`](config/openai_models.json)，`llm` 與 `embedding` 分別為兩種服務允許的模型名稱陣列。修改後重新測試連線即可套用；空清單或無效 JSON 會顯示錯誤，不會開放其他模型。Docker 映像也包含此設定檔，可透過掛載覆蓋。
 

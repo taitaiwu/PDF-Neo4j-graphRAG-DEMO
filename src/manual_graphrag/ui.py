@@ -17,7 +17,8 @@ from .config import (
 from .env_store import load_env, save_env
 from .service_settings import (
     capture_service_settings, load_service_settings, openai_models,
-    restore_service_settings, save_service_settings, service_choices,
+    restore_service_settings, resolve_model_service, save_service_settings,
+    service_choice_items, service_choices,
 )
 from .evaluation_service import generate_evaluation_questions, judge_evaluation_answer
 from .graph_service import (
@@ -121,16 +122,27 @@ def selected_models_for_ui(rows: list[list[Any]] | None) -> list[str]:
     ))
 
 
+def resolve_model_credentials_for_ui(
+    state: dict[str, Any], model: str | None,
+) -> tuple[str, str]:
+    try:
+        base_url, api_key, _ = resolve_model_service(state, model)
+    except ValueError:
+        return "", ""
+    return base_url, api_key
+
+
 def render_service_for_ui(state: dict[str, Any]) -> tuple[Any, ...]:
     profile = state["profiles"][state["active"]]
     ollama = state["active"] == "Ollama"
     allowed = service_choices(state)
+    choice_items = service_choice_items(state)
     rows = profile["rows"] if ollama else [[True, model] for model in allowed]
     return (
         state, profile["base_url"], profile["api_key"],
         gr.update(value=rows, visible=ollama), gr.update(visible=not ollama),
         gr.update(visible=ollama), profile["status"],
-        *(gr.update(choices=allowed, value=model if model in allowed else None) for model in profile["models"]),
+        *(gr.update(choices=choice_items, value=model if model in allowed else None) for model in profile["models"]),
     )
 
 
@@ -197,9 +209,10 @@ def load_evaluation_with_services_for_ui(
 ) -> tuple[Any, ...]:
     values = list(load_evaluation_for_ui(project_id))
     allowed = service_choices(llm_state)
+    choice_items = service_choice_items(llm_state)
     for index in (3, 4):
         if not isinstance(values[index], dict):
-            values[index] = gr.update(choices=allowed, value=values[index] if values[index] in allowed else None)
+            values[index] = gr.update(choices=choice_items, value=values[index] if values[index] in allowed else None)
     return tuple(values)
 
 
@@ -1319,10 +1332,19 @@ def build_app() -> gr.Blocks:
     env = load_env()
     llm_settings = load_service_settings("llm", env)
     embedding_settings = load_service_settings("embedding", env)
-    llm_choices = service_choices(llm_settings)
-    embedding_choices = service_choices(embedding_settings)
+    llm_choices = service_choice_items(llm_settings)
+    embedding_choices = service_choice_items(embedding_settings)
+    llm_allowed = service_choices(llm_settings)
+    embedding_allowed = service_choices(embedding_settings)
     llm_profile = llm_settings["profiles"][llm_settings["active"]]
     embedding_profile = embedding_settings["profiles"][embedding_settings["active"]]
+    initial_llm_credentials = [
+        resolve_model_credentials_for_ui(llm_settings, model)
+        for model in llm_profile["models"]
+    ]
+    initial_embedding_credentials = resolve_model_credentials_for_ui(
+        embedding_settings, embedding_profile["models"][0]
+    )
     with gr.Blocks(title="PDF GraphRAG 測試工具", fill_width=True) as app:
         gr.Markdown(
             "# PDF GraphRAG 測試工具\n"
@@ -1454,7 +1476,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     graph_llm_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=llm_profile["models"][0] if llm_profile["models"][0] in llm_choices else None,
+                        value=llm_profile["models"][0] if llm_profile["models"][0] in llm_allowed else None,
                         allow_custom_value=False,
                         label="Schema 規劃 LLM",
                     )
@@ -1527,7 +1549,7 @@ def build_app() -> gr.Blocks:
                 )
                 extraction_llm_model = gr.Dropdown(
                     choices=llm_choices,
-                    value=llm_profile["models"][1] if llm_profile["models"][1] in llm_choices else None,
+                    value=llm_profile["models"][1] if llm_profile["models"][1] in llm_allowed else None,
                     allow_custom_value=False,
                     label="知識圖譜抽取 LLM",
                 )
@@ -1560,7 +1582,7 @@ def build_app() -> gr.Blocks:
                 )
                 graph_embedding_model = gr.Dropdown(
                     choices=embedding_choices,
-                    value=embedding_profile["models"][0] if embedding_profile["models"][0] in embedding_choices else None,
+                    value=embedding_profile["models"][0] if embedding_profile["models"][0] in embedding_allowed else None,
                     allow_custom_value=False,
                     label="Embedding 模型",
                 )
@@ -1582,7 +1604,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     evaluation_generation_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=llm_profile["models"][2] if llm_profile["models"][2] in llm_choices else None,
+                        value=llm_profile["models"][2] if llm_profile["models"][2] in llm_allowed else None,
                         allow_custom_value=False,
                         label="生題模型",
                     )
@@ -1593,7 +1615,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     evaluation_test_model = gr.Dropdown(
                         choices=llm_choices,
-                        value=llm_profile["models"][3] if llm_profile["models"][3] in llm_choices else None,
+                        value=llm_profile["models"][3] if llm_profile["models"][3] in llm_allowed else None,
                         allow_custom_value=False,
                         label="回答與評判模型",
                     )
@@ -1645,7 +1667,7 @@ def build_app() -> gr.Blocks:
             )
             answer_model = gr.Dropdown(
                 choices=llm_choices,
-                value=llm_profile["models"][4] if llm_profile["models"][4] in llm_choices else None,
+                value=llm_profile["models"][4] if llm_profile["models"][4] in llm_allowed else None,
                 allow_custom_value=False,
                 label="問答 LLM",
             )
@@ -1695,6 +1717,19 @@ def build_app() -> gr.Blocks:
                 interactive=False, wrap=True,
             )
 
+        schema_model_endpoint = gr.State(initial_llm_credentials[0][0])
+        schema_model_key = gr.State(initial_llm_credentials[0][1])
+        extraction_model_endpoint = gr.State(initial_llm_credentials[1][0])
+        extraction_model_key = gr.State(initial_llm_credentials[1][1])
+        generation_model_endpoint = gr.State(initial_llm_credentials[2][0])
+        generation_model_key = gr.State(initial_llm_credentials[2][1])
+        evaluation_model_endpoint = gr.State(initial_llm_credentials[3][0])
+        evaluation_model_key = gr.State(initial_llm_credentials[3][1])
+        answer_model_endpoint = gr.State(initial_llm_credentials[4][0])
+        answer_model_key = gr.State(initial_llm_credentials[4][1])
+        selected_embedding_endpoint = gr.State(initial_embedding_credentials[0])
+        selected_embedding_key = gr.State(initial_embedding_credentials[1])
+
         evaluation_tab.select(
             load_evaluation_with_services_for_ui, inputs=[project_selector, llm_service_state],
             outputs=[evaluation_state, evaluation_questions_table, evaluation_results_table,
@@ -1731,7 +1766,7 @@ def build_app() -> gr.Blocks:
         )
         generate_evaluation_button.click(
             generate_evaluation_for_ui,
-            inputs=[project_selector, model_endpoint, api_key, evaluation_generation_model,
+            inputs=[project_selector, generation_model_endpoint, generation_model_key, evaluation_generation_model,
                     evaluation_test_model, evaluation_question_count, evaluation_retrieval_mode,
                     evaluation_top_k, chunk_state],
             outputs=[evaluation_status, evaluation_questions_table,
@@ -1739,8 +1774,8 @@ def build_app() -> gr.Blocks:
         )
         run_evaluation_button.click(
             run_evaluation_for_ui,
-            inputs=[project_selector, model_endpoint, api_key,
-                    embedding_api_base, embedding_api_key,
+            inputs=[project_selector, evaluation_model_endpoint, evaluation_model_key,
+                    selected_embedding_endpoint, selected_embedding_key,
                     neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
                     evaluation_test_model, evaluation_retrieval_mode,
                     evaluation_top_k, evaluation_state],
@@ -1869,6 +1904,24 @@ def build_app() -> gr.Blocks:
             fetch_button.click(partial(service_action_for_ui, "fetch"), inputs=inputs, outputs=outputs, concurrency_id="service-settings")
             for component in [endpoint, key, table, *fields]:
                 component.input(partial(service_action_for_ui, "edit"), inputs=inputs, outputs=outputs, show_progress="hidden", concurrency_id="service-settings")
+        for field, endpoint_state, key_state in [
+            (graph_llm_model, schema_model_endpoint, schema_model_key),
+            (extraction_llm_model, extraction_model_endpoint, extraction_model_key),
+            (evaluation_generation_model, generation_model_endpoint, generation_model_key),
+            (evaluation_test_model, evaluation_model_endpoint, evaluation_model_key),
+            (answer_model, answer_model_endpoint, answer_model_key),
+        ]:
+            field.change(
+                resolve_model_credentials_for_ui,
+                inputs=[llm_service_state, field], outputs=[endpoint_state, key_state],
+                show_progress="hidden",
+            )
+        graph_embedding_model.change(
+            resolve_model_credentials_for_ui,
+            inputs=[embedding_service_state, graph_embedding_model],
+            outputs=[selected_embedding_endpoint, selected_embedding_key],
+            show_progress="hidden",
+        )
         env_inputs = [
             neo4j_uri,
             neo4j_database,
@@ -1956,8 +2009,8 @@ def build_app() -> gr.Blocks:
         plan_schema_button.click(
             plan_schema_for_ui,
             inputs=[
-                model_endpoint,
-                api_key,
+                schema_model_endpoint,
+                schema_model_key,
                 graph_llm_model,
                 graph_temperature,
                 schema_granularity,
@@ -1974,8 +2027,8 @@ def build_app() -> gr.Blocks:
         extraction_event = generate_graph_button.click(
             extract_graph_for_ui,
             inputs=[
-                model_endpoint,
-                api_key,
+                extraction_model_endpoint,
+                extraction_model_key,
                 extraction_llm_model,
                 graph_temperature,
                 extraction_max_concurrent_requests,
@@ -2006,8 +2059,8 @@ def build_app() -> gr.Blocks:
         import_event = import_graph_button.click(
             import_graph_for_ui,
             inputs=[
-                embedding_api_base,
-                embedding_api_key,
+                selected_embedding_endpoint,
+                selected_embedding_key,
                 neo4j_uri,
                 neo4j_database,
                 neo4j_username,
@@ -2025,10 +2078,10 @@ def build_app() -> gr.Blocks:
             answer_question_for_project_ui,
             inputs=[
                 project_selector,
-                model_endpoint,
-                api_key,
-                embedding_api_base,
-                embedding_api_key,
+                answer_model_endpoint,
+                answer_model_key,
+                selected_embedding_endpoint,
+                selected_embedding_key,
                 neo4j_uri,
                 neo4j_database,
                 neo4j_username,
