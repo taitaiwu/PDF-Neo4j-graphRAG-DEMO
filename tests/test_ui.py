@@ -1004,3 +1004,30 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
 
     assert loaded[3:5] == ("legacy-model", "legacy-model")
     assert loaded[6] == "關聯擴展檢索"
+
+
+def test_project_list_refreshes_on_page_load_focus_and_tab_select(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    app = build_app()
+    selector = next(
+        component for component in app.config["components"]
+        if component.get("props", {}).get("label") == "現有專案"
+    )
+    assert selector["props"]["choices"] == []
+    dependencies = [
+        dependency for dependency in app.config["dependencies"]
+        if str(dependency.get("api_name", "")).startswith("refresh_projects_for_ui")
+    ]
+    assert {
+        target[1] for dependency in dependencies for target in dependency["targets"]
+    } == {"load", "focus", "select"}
+    assert all(dependency["outputs"] == [selector["id"]] for dependency in dependencies)
+
+    project = ui.create_project("新增專案")
+    for dependency in dependencies:
+        update = app.fns[dependency["id"]].fn()
+        assert update["choices"] == [("新增專案", project["project_id"])]
+        assert "value" not in update
+
+    ui.delete_project(project["project_id"])
+    assert ui.refresh_projects_for_ui()["choices"] == []
