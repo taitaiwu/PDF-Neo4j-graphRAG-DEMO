@@ -319,6 +319,33 @@ def test_plan_graph_schema_stops_mid_run_without_running_remaining_batches(monke
     assert len(calls) < 5
 
 
+def test_plan_graph_schema_failure_does_not_run_queued_batches(monkeypatch) -> None:
+    monkeypatch.setattr(graph_service, "SCHEMA_CONTEXT_LIMIT", 10)
+    chunks = [TextChunk(number, "x" * 20, (number,)) for number in range(1, 6)]
+    calls: list[int] = []
+
+    def fake_chat(*args, **kwargs):
+        calls.append(1)
+        raise ValueError("模型逾時")
+
+    monkeypatch.setattr(graph_service, "_chat_json", fake_chat)
+
+    with pytest.raises(
+        ValueError,
+        match=r"Schema 規劃第 1 / 5 批失敗：模型逾時",
+    ):
+        graph_service.plan_graph_schema(
+            "http://models/v1",
+            "",
+            "llm",
+            chunks,
+            max_concurrent_requests=1,
+        )
+
+    assert calls == [1]
+
+
+
 def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> None:
     monkeypatch.setattr(graph_service, "EXTRACTION_BATCH_LIMIT", 45)
     chunks = [

@@ -477,13 +477,26 @@ def plan_graph_schema(
         return _compact_schema(candidate)
 
     analyzed = 0
-    with ThreadPoolExecutor(max_workers=max_concurrent_requests) as executor:
-        futures = {
-            executor.submit(plan_batch, index, batch): (index, batch)
-            for index, batch in enumerate(batches)
-        }
-        for future in as_completed(futures):
-            index, batch = futures[future]
+    executor = ThreadPoolExecutor(max_workers=max_concurrent_requests)
+    futures = {}
+    next_batch_index = 0
+
+    def submit_available_batches() -> None:
+        nonlocal next_batch_index
+        while (
+            next_batch_index < len(batches)
+            and len(futures) < max_concurrent_requests
+        ):
+            batch = batches[next_batch_index]
+            future = executor.submit(plan_batch, next_batch_index, batch)
+            futures[future] = (next_batch_index, batch)
+            next_batch_index += 1
+
+    submit_available_batches()
+    try:
+        while futures:
+            future = next(as_completed(tuple(futures)))
+            index, batch = futures.pop(future)
             try:
                 candidates[index] = future.result()
             except ValueError as exc:
@@ -497,6 +510,14 @@ def plan_graph_schema(
                     f"已完成 {sum(item is not None for item in candidates)} / "
                     f"{len(batches)} 批（已分析 {analyzed} / {len(chunks)} chunks）",
                 )
+            submit_available_batches()
+    except BaseException:
+        for future in futures:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
     candidates = [candidate for candidate in candidates if candidate is not None]
 
     merge_rounds = 0
