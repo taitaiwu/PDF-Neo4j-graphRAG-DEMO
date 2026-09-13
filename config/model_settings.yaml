@@ -20,13 +20,15 @@ services:
       Ollama:
         rows:
         - - true
-          - gemma4:12b
+          - gemma4:e4b
+        - - true
+          - granite4.2:3b
         models:
-        - null
-        - null
-        - null
-        - null
-        - null
+        - gemma4:e4b
+        - gemma4:e4b
+        - gemma4:e4b
+        - gpt-4.1-mini
+        - gpt-4.1-mini
   embedding:
     active: OpenAI
     profiles:
