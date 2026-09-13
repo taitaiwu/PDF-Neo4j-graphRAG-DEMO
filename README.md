@@ -9,7 +9,7 @@
 - [專案介紹](#專案介紹)
 - [實作原理](#實作原理)
 - [基本使用流程](#基本使用流程)
-- [Docker：陌生環境從零部署](#docker陌生環境從零部署)
+- [Docker：使用 Dockerfile 建立執行環境](#docker使用-dockerfile-建立執行環境)
 - [部署後如何啟動](#部署後如何啟動)
 - [常見問題](#常見問題)
 - [非 Docker 啟動方式](#非-docker-啟動方式)
@@ -68,33 +68,35 @@
 8. 「5. 問答測試」可進行單題提問；成功結果會自動加入「6. 歷史紀錄」。
 9. 所有設定、參數及處理結果會在目前專案中自動保存；每次進入「0. 專案設定」也會自動更新專案清單。
 
-專案資料位於 `data/projects/<project-id>/`。`project.json` 保存設定、抽取出的實體與關係、Neo4j 匯入狀態、自動測試集、測試結果與問答紀錄；載入專案時會還原第三頁的圖譜表格，`documents/` 保存 PDF 副本。Password 與 API Key 會以明文保存在本機專案檔，請勿提交或分享 `data/`。
+專案資料位於 `data/projects/<project-id>/`。`project.json` 保存非敏感設定、抽取出的實體與關係、Neo4j 匯入狀態、自動測試集、測試結果與問答紀錄；`documents/` 保存 PDF 副本。API endpoint、API Key 與 Neo4j 連線資料統一由 `.env` 管理，不會寫入 `project.json`。
 
 問答頁不要求在同一工作階段先建圖；只要指定的 Neo4j 中已有本專案建立的圖譜即可使用。
 
-## Docker：陌生環境從零部署
+## Docker：使用 Dockerfile 建立執行環境
 
-以下步驟適用於一台尚未下載本專案的新電腦。
+以下步驟會使用專案根目錄的 [`Dockerfile`](Dockerfile) 建立 Python 3.12、Gradio 與 GraphRAG 相依套件完整的執行映像。主機不需要另外建立 Python 虛擬環境。
 
-### 1. 安裝必要工具
+### 1. 安裝並啟動 Docker
 
-安裝 [Git](https://git-scm.com/downloads) 與 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Windows／macOS），Linux 則可安裝 Docker Engine。
+Windows／macOS 請安裝 [Docker Desktop](https://www.docker.com/products/docker-desktop/)，Linux 可安裝 Docker Engine；另外需要 Git 下載原始碼。
 
 ~~~bash
 git --version
 docker version
 ~~~
 
-docker version 應同時顯示 Client 與 Server；若只有 Client，請先啟動 Docker Desktop 或 Docker Engine。
+`docker version` 必須同時顯示 Client 與 Server。若只有 Client，請先啟動 Docker Desktop 或 Docker Engine。
 
-### 2. 下載專案
+### 2. 下載原始碼
 
 ~~~bash
 git clone https://github.com/wakaba0972/PDF-Neo4j-graphRAG-DEMO.git
 cd PDF-Neo4j-graphRAG-DEMO
 ~~~
 
-### 3. 建立設定檔與資料目錄
+後續的 `docker build` 與 `docker run` 都要在含有 `Dockerfile`、`requirements.txt`、`src/` 和 `config/` 的專案根目錄執行。
+
+### 3. 準備持久化設定與資料
 
 Linux／macOS：
 
@@ -110,7 +112,15 @@ Copy-Item .env.example .env
 New-Item -ItemType Directory -Force data
 ~~~
 
-編輯 .env，至少確認：
+容器會掛載以下三個主機路徑，重新建立容器後資料仍會保留：
+
+| 主機路徑 | 容器路徑 | 用途 |
+|---|---|---|
+| `.env` | `/app/.env` | Neo4j、OpenAI、Ollama、Voyage 的 endpoint、帳號與 API key |
+| `config/model_settings.yaml` | `/app/config/model_settings.yaml` | 服務來源、模型選擇、模型白名單與 Ollama 勾選狀態 |
+| `data/` | `/app/data/` | 專案 JSON、PDF 副本、測試題目與問答紀錄 |
+
+若 Neo4j 或 Ollama 執行在 Docker 主機上，請在 `.env` 使用 `host.docker.internal`，不能使用容器自己的 `localhost`：
 
 ~~~dotenv
 NEO4J_URI=bolt://host.docker.internal:7687
@@ -118,26 +128,31 @@ NEO4J_DATABASE=neo4j
 NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=your-password
 
-MODEL_OPENAI_API_BASE=https://api.openai.com/v1
-MODEL_OPENAI_API_KEY=your-openai-api-key
 MODEL_OLLAMA_API_BASE=http://host.docker.internal:11434/v1
 MODEL_OLLAMA_API_KEY=
-EMBEDDING_OPENAI_API_BASE=https://api.openai.com/v1
-EMBEDDING_OPENAI_API_KEY=your-openai-api-key
 EMBEDDING_OLLAMA_API_BASE=http://host.docker.internal:11434/v1
 EMBEDDING_OLLAMA_API_KEY=
-EMBEDDING_VOYAGE_API_BASE=https://api.voyageai.com/v1
-EMBEDDING_VOYAGE_API_KEY=your-voyage-api-key
 ~~~
 
-- Neo4j 或模型服務若運行於宿主機，容器內不能使用 localhost，請使用 host.docker.internal。
-- OpenAI、Ollama 與 Voyage 的 API Base URL／API Key 使用獨立欄位；模型服務與 Embedding 服務也各自保存連線。
-- 模型白名單、目前來源、模型選擇與 Ollama 勾選清單保存在 `config/model_settings.yaml`。
+只使用 OpenAI 或 Voyage 時，保留 `.env.example` 中對應的官方 API Base URL，並填入自己的 API key。不要將 `.env` 提交至 Git。
 
-### 4. 建置映像
+### 4. 使用 Dockerfile 建置映像
 
 ~~~bash
-docker build -t pdf-graphrag:latest .
+docker build --pull -t pdf-graphrag:latest .
+~~~
+
+此命令會依 Dockerfile 執行以下工作：
+
+1. 下載 `python:3.12-slim-bookworm` 基底映像。
+2. 安裝 `requirements.txt` 中的 Python 套件。
+3. 複製 `src/` 與預設 `config/`。
+4. 建立容器內的 `/app/data`，開放 Gradio 的 7860 port，並設定 HTTP health check。
+
+確認映像已建立：
+
+~~~bash
+docker image ls pdf-graphrag
 ~~~
 
 ### 5. 建立並啟動容器
@@ -156,28 +171,35 @@ docker run -d \
   pdf-graphrag:latest
 ~~~
 
-Windows PowerShell（單行）：
+Windows PowerShell：
 
 ~~~powershell
 docker run -d --name pdf-graphrag --restart unless-stopped -p 7860:7860 --add-host=host.docker.internal:host-gateway -v "$PWD/.env:/app/.env" -v "$PWD/config/model_settings.yaml:/app/config/model_settings.yaml" -v "$PWD/data:/app/data" pdf-graphrag:latest
 ~~~
 
-確認服務：
+參數用途：
+
+- `-p 7860:7860`：將主機的 7860 port 對應到 Gradio。
+- `--restart unless-stopped`：Docker 服務重新啟動後自動恢復容器。
+- `--add-host=host.docker.internal:host-gateway`：讓 Linux 容器能連到主機上的 Ollama／Neo4j。
+- 三個 `-v`：把設定與專案資料保存在主機，不隨容器刪除。
+
+### 6. 驗證環境
 
 ~~~bash
 docker ps --filter name=pdf-graphrag
 docker logs -f pdf-graphrag
 ~~~
 
-看到 Gradio 啟動訊息後，開啟 http://localhost:7860，先在「連線設定」測試 Neo4j，再分別選擇模型服務與 Embedding 服務的來源：
+按 `Ctrl+C` 只會離開日誌畫面，不會停止容器。也可查看 Dockerfile 設定的健康狀態：
 
-- **OpenAI**：按「測試模型服務連線」或「測試 Embedding 服務連線」。連線成功後，LLM 僅提供 `gpt-4.1-mini`、`gpt-4o-mini`，Embedding 僅提供 `text-embedding-3-small`、`text-embedding-3-large`。OpenAI 不顯示取得清單按鈕或勾選表格。連線測試確認 API 可存取，不會執行付費生成或驗證剩餘額度。
-- **Ollama**：預設網址為 `http://localhost:11434/v1`，金鑰可留空。按「獲得模型清單」或「獲得 Embedding 模型清單」，再勾選要使用的模型。兩張表格各自保存勾選，因為 Ollama 回傳的清單可能同時包含 LLM 與 Embedding 模型。模型名稱欄為唯讀；取消勾選目前使用的模型後，需在後續頁面重新選擇。
-- **Voyage**：只提供 Embedding，預設網址為 `https://api.voyageai.com/v1`。填入 API key 並測試成功後，可使用 YAML 中 `voyage_models` 列出的模型。
+~~~bash
+docker inspect --format '{{.State.Health.Status}}' pdf-graphrag
+~~~
 
-後續頁面的模型選單以 `OpenAI｜模型`、`Ollama｜模型` 標示來源，不受目前正在編輯哪一種服務影響；執行時會自動使用所選模型來源的網址與金鑰。同名模型同時存在於兩邊時，使用第 1 頁目前選取的服務。OpenAI／Ollama 的網址與金鑰分別寫入 `.env`；目前來源、模型選擇與 Ollama 勾選清單寫入 [`config/model_settings.yaml`](config/model_settings.yaml)，切換或重新啟動後仍會保留。重新啟動、重新讀取 `.env` 或修改 OpenAI 連線資料後，必須重新測試連線才能使用 OpenAI 模型。
+狀態成為 `healthy` 後，開啟 <http://localhost:7860>。若主機 7860 已被占用，可把啟動參數改成 `-p 8080:7860`，再開啟 <http://localhost:8080>。
 
-OpenAI 白名單在 `config/model_settings.yaml` 的 `openai_models.llm` 與 `openai_models.embedding`，Voyage 白名單在 `voyage_models`。修改後重新測試連線即可套用；空清單或無效 YAML 會顯示錯誤，不會開放其他模型。Docker 部署若要保留介面更新的模型選擇，請將此 YAML 檔一併掛載。
+進入介面後，在「1. 連線設定」測試 Neo4j、模型與 Embedding 服務。Ollama 請取得模型清單並勾選需要的模型；OpenAI／Voyage 則填入 API key 後測試連線。介面更新的連線資料與模型選擇會寫回已掛載的 `.env` 和 `config/model_settings.yaml`。
 
 ## 部署後如何啟動
 
@@ -208,7 +230,7 @@ docker stop pdf-graphrag
 
 ~~~bash
 git pull
-docker build -t pdf-graphrag:latest .
+docker build --pull -t pdf-graphrag:latest .
 docker stop pdf-graphrag
 docker rm pdf-graphrag
 ~~~
