@@ -21,7 +21,11 @@ from .service_settings import (
     preferred_service_model, provider_models, restore_service_settings, resolve_model_service, save_service_settings,
     service_choice_items, service_choices,
 )
-from .evaluation_service import generate_evaluation_questions, judge_evaluation_answer
+from .evaluation_service import (
+    generate_evaluation_questions,
+    judge_evaluation_answer,
+    questions_are_similar,
+)
 from .graph_service import (
     extract_graph,
     list_models,
@@ -732,21 +736,68 @@ def generate_evaluation_for_ui(
         document_chunks = list(chunks_by_document.values())
         if not document_chunks:
             raise ValueError("請先解析 PDF 並產生 chunks")
-        assigned_chunks = [
-            chunks_for_document
-            for chunks_for_document in document_chunks for _ in range(count)
-        ]
+        generated_by_document: dict[str, list[dict[str, Any]]] = {
+            document: [] for document in chunks_by_document
+        }
+        last_generation_error = ""
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            batches = list(executor.map(
-                lambda selected_chunks: generate_evaluation_questions(
-                    model_endpoint, api_key, generation_model, selected_chunks, 1
-                ),
-                assigned_chunks,
-            ))
-        questions = [
-            {**question, "number": index}
-            for index, batch in enumerate(batches, 1) for question in batch
+            for _round in range(5):
+                futures = []
+                for document, selected_chunks in chunks_by_document.items():
+                    accepted = generated_by_document[document]
+                    missing = count - len(accepted)
+                    if missing <= 0:
+                        continue
+                    excluded = [item["question"] for item in accepted]
+                    for _ in range(missing):
+                        futures.append((
+                            document,
+                            executor.submit(
+                                generate_evaluation_questions,
+                                model_endpoint,
+                                api_key,
+                                generation_model,
+                                selected_chunks,
+                                1,
+                                excluded,
+                            ),
+                        ))
+                for document, future in futures:
+                    try:
+                        batch = future.result()
+                    except ValueError as exc:
+                        last_generation_error = str(exc)
+                        continue
+                    accepted = generated_by_document[document]
+                    for question in batch:
+                        if len(accepted) >= count:
+                            break
+                        if any(
+                            questions_are_similar(question["question"], item["question"])
+                            for item in accepted
+                        ):
+                            continue
+                        accepted.append(question)
+                if all(
+                    len(generated_by_document[document]) >= count
+                    for document in chunks_by_document
+                ):
+                    break
+
+        incomplete = [
+            f"{document}（{len(generated_by_document[document])}/{count}）"
+            for document in chunks_by_document
+            if len(generated_by_document[document]) < count
         ]
+        if incomplete:
+            detail = f"；最後錯誤：{last_generation_error}" if last_generation_error else ""
+            raise ValueError(
+                "無法在去重後補足每份 PDF 的題目數：" + "、".join(incomplete) + detail
+            )
+        questions = []
+        for document in chunks_by_document:
+            for question in generated_by_document[document]:
+                questions.append({**question, "number": len(questions) + 1})
         evaluation = {
             "preferences": {"generation_model": generation_model, "test_model": test_model,
                             "question_count": int(question_count),

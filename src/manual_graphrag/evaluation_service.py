@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
+import re
 from typing import Any
 
 from .chunking import TextChunk
@@ -7,6 +9,20 @@ from .graph_service import _chat_json
 
 
 EVALUATION_CONTEXT_LIMIT = 30_000
+
+
+def _normalized_question(value: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", value.casefold())
+
+
+def questions_are_similar(first: str, second: str) -> bool:
+    left = _normalized_question(first)
+    right = _normalized_question(second)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return SequenceMatcher(None, left, right).ratio() >= 0.96
 
 
 def _evaluation_context(chunks: list[TextChunk]) -> tuple[str, set[int]]:
@@ -34,12 +50,18 @@ def generate_evaluation_questions(
     model: str,
     chunks: list[TextChunk],
     question_count: int,
+    excluded_questions: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     count = int(question_count)
     if not chunks:
         raise ValueError("請先解析 PDF 並產生 chunks")
     if not 1 <= count <= 100:
         raise ValueError("題目數量必須介於 1 到 100")
+
+    excluded = [
+        str(question).strip() for question in (excluded_questions or [])
+        if str(question).strip()
+    ]
 
     context, available_chunk_numbers = _evaluation_context(chunks)
     chunk_lookup = {chunk.number: chunk for chunk in chunks}
@@ -49,6 +71,7 @@ def generate_evaluation_questions(
         if not isinstance(questions, list) or len(questions) != count:
             raise ValueError(f"questions 必須剛好包含 {count} 題")
         normalized = []
+        accepted_questions = list(excluded)
         for index, item in enumerate(questions, start=1):
             if not isinstance(item, dict):
                 raise ValueError("每一題必須是 JSON 物件")
@@ -56,6 +79,9 @@ def generate_evaluation_questions(
             answer = str(item.get("expected_answer", "")).strip()
             if not question or not answer:
                 raise ValueError("每一題都必須包含 question 與 expected_answer")
+            if any(questions_are_similar(question, existing) for existing in accepted_questions):
+                raise ValueError(f"題目與既有題目重複或過度相似：{question}")
+            accepted_questions.append(question)
             pages = item.get("source_pages", [])
             if not isinstance(pages, list):
                 raise ValueError("source_pages 必須是陣列")
@@ -89,12 +115,19 @@ def generate_evaluation_questions(
             })
         return {"questions": normalized}
 
+    exclusion_instruction = ""
+    if excluded:
+        exclusion_instruction = (
+            "\n不得重複或改寫以下已建立題目：\n- " + "\n- ".join(excluded) + "\n"
+        )
+
     result = _chat_json(
         base_url,
         api_key,
         model,
         "你是文件問答評測資料設計師。只能根據提供的文件內容出題，並只輸出 JSON。",
         f"請建立剛好 {count} 道可由文件明確回答、彼此不重複且涵蓋不同內容的繁體中文問題。"
+        f"{exclusion_instruction}"
         "每題提供精確標準答案、來源頁碼，以及該題所依據的 CHUNK 編號"
         "（source_chunk_numbers，必須引用下方文件中標示的 CHUNK 編號）。輸出格式："
         '{"questions":[{"question":"...","expected_answer":"...","source_pages":[1],'

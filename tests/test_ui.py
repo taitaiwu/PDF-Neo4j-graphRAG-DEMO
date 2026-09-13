@@ -538,11 +538,13 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
 def test_generate_evaluation_distributes_questions_across_documents(monkeypatch) -> None:
     requested_documents = []
 
-    def fake_generate(_endpoint, _key, _model, chunks, count):
-        requested_documents.append(chunks[0].document)
+    def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None):
+        document = chunks[0].document
+        requested_documents.append(document)
+        sequence = requested_documents.count(document)
         return [{
             "number": 1,
-            "question": f"{chunks[0].document} question",
+            "question": f"{document} question {sequence}",
             "expected_answer": "answer",
             "source_pages": [1],
             "document": chunks[0].document,
@@ -567,6 +569,44 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
     ]
 
 
+def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None):
+        calls["count"] += 1
+        question = "相同問題？" if calls["count"] <= 2 else "不同問題？"
+        if excluded:
+            assert "相同問題？" in excluded
+        return [{
+            "number": 1,
+            "question": question,
+            "expected_answer": "答案",
+            "source_pages": [1],
+            "source_chunk_numbers": [1],
+            "document": chunks[0].document,
+        }]
+
+    monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(ui, "save_project", lambda *args: {})
+
+    status, _rows, state, _results = ui.generate_evaluation_for_ui(
+        "project",
+        "endpoint",
+        "key",
+        "generation-model",
+        "test-model",
+        2,
+        "基本檢索",
+        8,
+        [TextChunk(1, "內容", (1,), "manual.pdf")],
+        2,
+        3,
+    )
+
+    assert status.startswith("✅")
+    assert [item["question"] for item in state["questions"]] == ["相同問題？", "不同問題？"]
+
+    assert calls["count"] == 3
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "實際答案", []))
     real_executor = ui.ThreadPoolExecutor

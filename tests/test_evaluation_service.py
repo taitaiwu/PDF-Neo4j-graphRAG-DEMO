@@ -25,6 +25,54 @@ def test_generate_evaluation_questions_validates_and_numbers(monkeypatch) -> Non
     assert questions[0]["document"] == "manual.pdf"
 
 
+def test_generate_evaluation_questions_rejects_similar_questions(monkeypatch) -> None:
+    def fake_chat(*args, **kwargs):
+        return kwargs["validator"]({
+            "questions": [{
+                "question": "系統的最大容量是多少？",
+                "expected_answer": "100",
+                "source_pages": [1],
+                "source_chunk_numbers": [1],
+            }]
+        })
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+
+    with pytest.raises(ValueError, match="重複或過度相似"):
+        evaluation_service.generate_evaluation_questions(
+            "url",
+            "",
+            "model",
+            [TextChunk(1, "容量為 100", (1,), "manual.pdf")],
+            1,
+            ["系統的最大容量是多少"],
+        )
+
+
+def test_generate_evaluation_questions_tells_model_which_questions_to_avoid(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_chat(*args, **kwargs):
+        captured["prompt"] = args[4]
+        return kwargs["validator"]({
+            "questions": [{
+                "question": "另一個問題？",
+                "expected_answer": "答案",
+                "source_pages": [1],
+                "source_chunk_numbers": [1],
+            }]
+        })
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+    evaluation_service.generate_evaluation_questions(
+        "url", "", "model", [TextChunk(1, "文件", (1,))], 1, ["既有問題？"]
+    )
+
+    assert "既有問題？" in captured["prompt"]
+
+    assert "不得重複或改寫以下已建立題目" in captured["prompt"]
 def test_generate_evaluation_questions_rejects_missing_chunk_numbers(monkeypatch) -> None:
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({
