@@ -534,12 +534,13 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     assert results == []
 
 
-
 def test_generate_evaluation_distributes_questions_across_documents(monkeypatch) -> None:
     requested_documents = []
+    exclusions_by_document = {"a.pdf": [], "b.pdf": []}
 
     def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None):
         document = chunks[0].document
+        exclusions_by_document[document].append(list(_excluded or []))
         requested_documents.append(document)
         sequence = requested_documents.count(document)
         return [{
@@ -567,6 +568,8 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
     assert [item["document"] for item in state["questions"]] == [
         "a.pdf", "a.pdf", "b.pdf", "b.pdf",
     ]
+    assert exclusions_by_document["a.pdf"] == [[], ["a.pdf question 1"]]
+    assert exclusions_by_document["b.pdf"] == [[], ["b.pdf question 1"]]
 
 
 def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
@@ -605,8 +608,9 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
 
     assert status.startswith("✅")
     assert [item["question"] for item in state["questions"]] == ["相同問題？", "不同問題？"]
-
     assert calls["count"] == 3
+
+
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "實際答案", []))
     real_executor = ui.ThreadPoolExecutor

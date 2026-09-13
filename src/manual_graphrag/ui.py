@@ -729,74 +729,61 @@ def generate_evaluation_for_ui(
             raise ValueError("題目數量必須介於 1 到 100")
         concurrency = int(max_concurrent_requests)
         if concurrency < 1:
-            raise ValueError("生題最大並行請求數必須大於 0")
+            raise ValueError("同時生題文件數必須大於 0")
         chunks_by_document: dict[str, list[TextChunk]] = {}
         for chunk in chunks:
             chunks_by_document.setdefault(chunk.document, []).append(chunk)
         document_chunks = list(chunks_by_document.values())
         if not document_chunks:
             raise ValueError("請先解析 PDF 並產生 chunks")
-        generated_by_document: dict[str, list[dict[str, Any]]] = {
-            document: [] for document in chunks_by_document
-        }
-        last_generation_error = ""
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            for _round in range(5):
-                futures = []
-                for document, selected_chunks in chunks_by_document.items():
-                    accepted = generated_by_document[document]
-                    missing = count - len(accepted)
-                    if missing <= 0:
+        def generate_for_document(
+            document: str,
+            selected_chunks: list[TextChunk],
+        ) -> list[dict[str, Any]]:
+            accepted: list[dict[str, Any]] = []
+            last_error = ""
+            attempts = 0
+            max_attempts = count * 5
+            while len(accepted) < count and attempts < max_attempts:
+                attempts += 1
+                excluded = [item["question"] for item in accepted]
+                try:
+                    batch = generate_evaluation_questions(
+                        model_endpoint,
+                        api_key,
+                        generation_model,
+                        selected_chunks,
+                        1,
+                        excluded,
+                    )
+                except ValueError as exc:
+                    last_error = str(exc)
+                    continue
+                for question in batch:
+                    if any(
+                        questions_are_similar(question["question"], item["question"])
+                        for item in accepted
+                    ):
                         continue
-                    excluded = [item["question"] for item in accepted]
-                    for _ in range(missing):
-                        futures.append((
-                            document,
-                            executor.submit(
-                                generate_evaluation_questions,
-                                model_endpoint,
-                                api_key,
-                                generation_model,
-                                selected_chunks,
-                                1,
-                                excluded,
-                            ),
-                        ))
-                for document, future in futures:
-                    try:
-                        batch = future.result()
-                    except ValueError as exc:
-                        last_generation_error = str(exc)
-                        continue
-                    accepted = generated_by_document[document]
-                    for question in batch:
-                        if len(accepted) >= count:
-                            break
-                        if any(
-                            questions_are_similar(question["question"], item["question"])
-                            for item in accepted
-                        ):
-                            continue
-                        accepted.append(question)
-                if all(
-                    len(generated_by_document[document]) >= count
-                    for document in chunks_by_document
-                ):
+                    accepted.append(question)
                     break
+            if len(accepted) < count:
+                detail = f"；最後錯誤：{last_error}" if last_error else ""
+                raise ValueError(
+                    f"無法在去重後補足 {document} 的題目數"
+                    f"（{len(accepted)}/{count}）{detail}"
+                )
+            return accepted
 
-        incomplete = [
-            f"{document}（{len(generated_by_document[document])}/{count}）"
-            for document in chunks_by_document
-            if len(generated_by_document[document]) < count
-        ]
-        if incomplete:
-            detail = f"；最後錯誤：{last_generation_error}" if last_generation_error else ""
-            raise ValueError(
-                "無法在去重後補足每份 PDF 的題目數：" + "、".join(incomplete) + detail
-            )
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            document_results = list(executor.map(
+                lambda item: generate_for_document(item[0], item[1]),
+                chunks_by_document.items(),
+            ))
+
         questions = []
-        for document in chunks_by_document:
-            for question in generated_by_document[document]:
+        for document_questions in document_results:
+            for question in document_questions:
                 questions.append({**question, "number": len(questions) + 1})
         evaluation = {
             "preferences": {"generation_model": generation_model, "test_model": test_model,
@@ -1733,6 +1720,7 @@ def build_app() -> gr.Blocks:
             gr.Markdown(
                 "### 從 PDF 自動建立問答測試集\n"
                 "每份 PDF 建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
+                "生題最大並行請求數表示可同時處理的 PDF 數；同一份 PDF 永遠只會有一個生題請求。"
             )
             with gr.Group():
                 gr.Markdown("#### 生題設定")
@@ -1744,7 +1732,7 @@ def build_app() -> gr.Blocks:
                         label="生題模型",
                     )
                     evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="每份 PDF 題目數 N")
-                    evaluation_generation_max_concurrent_requests = gr.Number(value=3, minimum=1, precision=0, label="生題最大並行請求數")
+                    evaluation_generation_max_concurrent_requests = gr.Number(value=3, minimum=1, precision=0, label="生題最大並行請求數（跨 PDF）")
                 generate_evaluation_button = gr.Button("從 PDF 建立題目與答案", variant="primary")
             with gr.Group():
                 gr.Markdown("#### 測試模型設定")
