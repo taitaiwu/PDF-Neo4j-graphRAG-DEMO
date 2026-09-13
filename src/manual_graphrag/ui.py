@@ -417,7 +417,7 @@ def save_project_for_ui(
     project_id: str, documents: list[dict[str, Any]],
     chunks: list[TextChunk], graph_state: dict[str, Any],
     neo4j_uri: str, neo4j_database: str, neo4j_username: str, neo4j_password: str,
-    model_endpoint: str, api_key: str, graph_llm_model: str,
+    _model_endpoint: str, _api_key: str, graph_llm_model: str,
     graph_embedding_model: str, answer_model: str,
     chunk_size: int, chunk_overlap: int,
     graph_temperature: float,
@@ -432,7 +432,6 @@ def save_project_for_ui(
     settings = {
         "neo4j_uri": neo4j_uri, "neo4j_database": neo4j_database,
         "neo4j_username": neo4j_username, "neo4j_password": neo4j_password,
-        "model_endpoint": model_endpoint, "api_key": api_key,
         "graph_llm_model": graph_llm_model, "graph_embedding_model": graph_embedding_model,
         "answer_model": answer_model,
         "chunk_size": int(chunk_size), "chunk_overlap": int(chunk_overlap),
@@ -495,7 +494,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         project, f"✅ 已載入專案「{project['name']}」。",
         get("neo4j_uri", env["NEO4J_URI"]), get("neo4j_database", env["NEO4J_DATABASE"]),
         get("neo4j_username", env["NEO4J_USERNAME"]), get("neo4j_password", env["NEO4J_PASSWORD"]),
-        get("model_endpoint", llm_profile["base_url"]), get("api_key", llm_profile["api_key"]),
+        llm_profile["base_url"], llm_profile["api_key"],
         get("graph_llm_model", DEFAULT_LLM_MODEL), get("graph_embedding_model", embedding_profile["models"][0]),
         get("answer_model", DEFAULT_LLM_MODEL),
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
@@ -1398,7 +1397,7 @@ def build_app() -> gr.Blocks:
                 delete_project_button = gr.Button("刪除專案", variant="stop")
                 delete_project_completed = gr.State(False)
             project_status = gr.Markdown("尚未選擇專案；載入後，設定與處理結果都會自動保存。")
-            gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Password 與 API Key 為明文；請勿分享或提交該目錄。")
+            gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Neo4j Password 為明文；模型 API Key 僅保存在 `.env`。")
 
         with gr.Tab("1. 連線設定") as connection_tab:
             with gr.Row():

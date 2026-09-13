@@ -17,11 +17,12 @@ def test_project_round_trip_and_listing(tmp_path) -> None:
     project = create_project("設備手冊", tmp_path)
     saved = save_project(
         project["project_id"],
-        {"settings": {"api_key": "secret", "chunk_size": 1200}},
+        {"settings": {"api_key": "secret", "model_endpoint": "https://old.example/v1", "chunk_size": 1200}},
         root=tmp_path,
     )
 
-    assert saved["settings"]["api_key"] == "secret"
+    assert "api_key" not in saved["settings"]
+    assert "model_endpoint" not in saved["settings"]
     assert load_project(project["project_id"], tmp_path)["settings"]["chunk_size"] == 1200
     assert list_projects(tmp_path) == [("設備手冊", project["project_id"])]
 

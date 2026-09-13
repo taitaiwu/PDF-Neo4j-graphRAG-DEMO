@@ -9,8 +9,15 @@ from uuid import uuid4
 
 from .storage import read_json, write_json
 
-
 PROJECTS_DIR = Path("data/projects")
+PROJECT_CONNECTION_SETTINGS = {"model_endpoint", "api_key"}
+
+
+def _without_model_credentials(settings: Any) -> Any:
+    if not isinstance(settings, dict):
+        return settings
+    return {key: value for key, value in settings.items() if key not in PROJECT_CONNECTION_SETTINGS}
+
 
 
 def _project_id(name: str) -> str:
@@ -71,6 +78,7 @@ def load_project(project_id: str, root: str | Path = PROJECTS_DIR) -> dict[str, 
     if "documents_meta" not in project:
         legacy_preview = project.pop("preview_state", None)
         project["documents_meta"] = [legacy_preview] if legacy_preview else []
+    project["settings"] = _without_model_credentials(project.get("settings", {}))
     return project
 
 
@@ -116,6 +124,7 @@ def save_project(
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "documents": documents,
     }
+    updated["settings"] = _without_model_credentials(updated.get("settings", {}))
     write_json(project_dir / "project.json", updated)
     return updated
 

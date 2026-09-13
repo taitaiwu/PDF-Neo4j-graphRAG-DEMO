@@ -440,12 +440,52 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     assert loaded[11:13] == (1200, 100)
     assert loaded[24][0].text == "內容"
     stored_project = ui.load_project(created["project_id"])
+    assert "model_endpoint" not in stored_project["settings"]
+    assert "api_key" not in stored_project["settings"]
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
     assert loaded[33][0][:2] == ["設備", "DEVICE"]
     assert loaded[34][0][:3] == ["設備", "USES", "零件"]
     assert "1 個實體、1 筆關係" in loaded[35]
     assert "已匯入 Neo4j" in loaded[36]
+
+
+def test_load_project_ignores_legacy_model_credentials(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ui, "load_env", lambda: {
+        "MODEL_OPENAI_API_BASE": "https://current.example/v1",
+        "MODEL_OPENAI_API_KEY": "current-key",
+        "MODEL_OLLAMA_API_BASE": "http://localhost:11434/v1",
+        "MODEL_OLLAMA_API_KEY": "",
+        "EMBEDDING_OPENAI_API_BASE": "https://current.example/v1",
+        "EMBEDDING_OPENAI_API_KEY": "current-key",
+        "EMBEDDING_OLLAMA_API_BASE": "http://localhost:11434/v1",
+        "EMBEDDING_OLLAMA_API_KEY": "",
+        "EMBEDDING_VOYAGE_API_BASE": "https://api.voyageai.com/v1",
+        "EMBEDDING_VOYAGE_API_KEY": "",
+        "NEO4J_URI": "bolt://db",
+        "NEO4J_DATABASE": "neo4j",
+        "NEO4J_USERNAME": "user",
+        "NEO4J_PASSWORD": "password",
+    })
+    _, created, _ = ui.create_project_for_ui("Legacy")
+    project_path = tmp_path / "data" / "projects" / created["project_id"] / "project.json"
+    ui.write_json(project_path, {
+        **created,
+        "documents": [],
+        "documents_meta": [],
+        "settings": {
+            "model_endpoint": "https://legacy.example/v1",
+            "api_key": "legacy-key",
+        },
+    })
+
+    loaded = ui.load_project_for_ui(created["project_id"])
+
+    migrated = ui.load_project(created["project_id"])
+    assert loaded[6:8] == ("https://current.example/v1", "current-key")
+    assert "model_endpoint" not in migrated["settings"]
+    assert "api_key" not in migrated["settings"]
 
 
 def test_project_answer_appends_history(monkeypatch) -> None:
