@@ -733,8 +733,8 @@ def generate_evaluation_for_ui(
         if not document_chunks:
             raise ValueError("請先解析 PDF 並產生 chunks")
         assigned_chunks = [
-            document_chunks[index % len(document_chunks)]
-            for index in range(count)
+            chunks_for_document
+            for chunks_for_document in document_chunks for _ in range(count)
         ]
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             batches = list(executor.map(
@@ -758,7 +758,10 @@ def generate_evaluation_for_ui(
         save_project(project_id, {"evaluation": evaluation})
     except (OSError, TypeError, ValueError) as exc:
         return f"❌ {exc}", [], {}, []
-    return f"✅ 已從 PDF 建立 {len(questions)} 道題目與標準答案。", _evaluation_question_rows(questions), evaluation, []
+    return (
+        f"✅ 已從 {len(document_chunks)} 份 PDF 各建立 {count} 道題目，共 {len(questions)} 道。",
+        _evaluation_question_rows(questions), evaluation, [],
+    )
 
 
 def run_evaluation_for_ui(
@@ -820,11 +823,23 @@ def run_evaluation_for_ui(
         return f"❌ 測試已完成，但保存失敗：{exc}", _evaluation_result_rows(results), updated
     passed = sum(bool(item["passed"]) for item in results)
     total = len(results)
+    document_totals: dict[str, list[int]] = {}
+    for item in results:
+        document = str(item.get("document") or "未標示文件")
+        stats = document_totals.setdefault(document, [0, 0])
+        stats[0] += int(bool(item["passed"]))
+        stats[1] += 1
+    document_summary = "\n".join(
+        f"- {document}：答對 {stats[0]} 題 / {stats[1]} 題"
+        for document, stats in document_totals.items()
+    )
+
     failed = total - passed
     accuracy = passed / total * 100 if total else 0
     summary = (
-        f"## 測試完成｜答對 {passed} 題 / 共 {total} 題  "
+        f"## 測試完成｜總共答對 {passed} 題 / {total} 題  "
         f"\n答錯：{failed} 題｜正確率：{accuracy:.1f}%"
+        f"\n\n### 各 PDF 結果\n{document_summary}"
     )
     return summary, _evaluation_result_rows(results), updated
 
@@ -1666,7 +1681,7 @@ def build_app() -> gr.Blocks:
         with gr.Tab("4. 自動問答測試", interactive=False) as evaluation_tab:
             gr.Markdown(
                 "### 從 PDF 自動建立問答測試集\n"
-                "先建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
+                "每份 PDF 建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
             )
             with gr.Group():
                 gr.Markdown("#### 生題設定")
@@ -1677,7 +1692,7 @@ def build_app() -> gr.Blocks:
                         allow_custom_value=False,
                         label="生題模型",
                     )
-                    evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="題目數量 N")
+                    evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="每份 PDF 題目數 N")
                     evaluation_generation_max_concurrent_requests = gr.Number(value=3, minimum=1, precision=0, label="生題最大並行請求數")
                 generate_evaluation_button = gr.Button("從 PDF 建立題目與答案", variant="primary")
             with gr.Group():

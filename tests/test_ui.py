@@ -553,15 +553,20 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
 
     status, _rows, state, _results = ui.generate_evaluation_for_ui(
         "project", "endpoint", "key", "generation-model", "test-model",
-        5, "基本檢索", 8,
+        2, "基本檢索", 8,
         [TextChunk(1, "a", (1,), "a.pdf"), TextChunk(2, "b", (1,), "b.pdf")],
         3, 3,
     )
 
     assert status.startswith("✅")
-    assert requested_documents.count("a.pdf") == 3
+    assert "2 份 PDF 各建立 2 道題目，共 4 道" in status
+    assert requested_documents.count("a.pdf") == 2
     assert requested_documents.count("b.pdf") == 2
-    assert [item["document"] for item in state["questions"]] == requested_documents
+    assert [item["document"] for item in state["questions"]] == [
+        "a.pdf", "a.pdf", "b.pdf", "b.pdf",
+    ]
+
+
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "實際答案", []))
     real_executor = ui.ThreadPoolExecutor
@@ -575,7 +580,7 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
     evaluation = {"questions": [
-        {"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}
+        {"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1], "document": "manual.pdf"}
     ]}
 
     status, rows, updated = ui.run_evaluation_for_ui(
@@ -584,7 +589,8 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
         "model", "關聯擴展檢索", 8, evaluation, 2,
     )
 
-    assert "答對 1 題 / 共 1 題" in status
+    assert "總共答對 1 題 / 1 題" in status
+    assert "manual.pdf：答對 1 題 / 1 題" in status
     assert "答錯：0 題" in status
     assert "正確率：100.0%" in status
     assert rows[0][3:] == ["實際答案", "✅ 通過", "正確"]
