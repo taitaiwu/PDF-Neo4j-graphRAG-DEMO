@@ -196,13 +196,15 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
 
 
 
-def test_workflow_gate_requires_project_neo4j_llm_and_embedding() -> None:
+def test_workflow_gate_requires_project_neo4j_and_any_service() -> None:
     llm = settings.load_service_settings("llm")
     embedding = settings.load_service_settings("embedding")
     assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("", False, llm, embedding))
     assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("project", False, llm, embedding))
-    llm["profiles"]["OpenAI"]["connected"] = True
     assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("project", True, llm, embedding))
+    llm["profiles"]["OpenAI"]["connected"] = True
+    assert all(update["interactive"] is True for update in ui.workflow_tabs_for_ui("project", True, llm, embedding))
+    llm["profiles"]["OpenAI"]["connected"] = False
     embedding["profiles"]["OpenAI"]["connected"] = True
     assert all(update["interactive"] is True for update in ui.workflow_tabs_for_ui("project", True, llm, embedding))
 
@@ -226,6 +228,19 @@ def test_ollama_models_require_current_successful_fetch(tmp_path, monkeypatch) -
         *[field["value"] for field in fetched[7:]],
     )
     assert settings.service_choices(failed[0]) == []
+
+
+def test_render_service_hints_when_no_models_available() -> None:
+    state = settings.load_service_settings("llm")
+    result = ui.render_service_for_ui(state)
+    assert result[7]["choices"] == []
+    assert result[7]["info"] == ui.NO_MODEL_CHOICES_HINT
+
+    state["profiles"]["OpenAI"]["connected"] = True
+    result = ui.render_service_for_ui(state)
+    assert result[7]["choices"]
+    assert result[7]["info"] is None
+
 
 def test_delete_project_refreshes_list_after_server_delete(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
@@ -497,11 +512,17 @@ def test_project_answer_appends_history(monkeypatch) -> None:
         return {"questions": [record]}
     monkeypatch.setattr(ui, "append_question", fake_append)
     result = ui.answer_question_for_project_ui(
-        "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
+        "project",
+        "endpoint", "key", "embedding-endpoint", "embedding-key",
+        "bolt", "neo4j", "user", "pass",
         "answer-model", "問題", "關聯擴展檢索", 8,
     )
     assert captured["document"] == "manual.pdf"
     assert captured["sources"] == [["來源"]]
+    assert captured["question"] == "問題"
+    assert captured["answer_model"] == "answer-model"
+    assert captured["retrieval_mode"] == "關聯擴展檢索"
+    assert captured["top_k"] == 8
     assert result[3][0][1:3] == ["問題", "答案"]
 
 
@@ -609,6 +630,32 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
     assert status.startswith("✅")
     assert [item["question"] for item in state["questions"]] == ["相同問題？", "不同問題？"]
     assert calls["count"] == 3
+
+
+def test_generate_evaluation_detects_cross_document_duplicates(monkeypatch) -> None:
+    def fake_generate(_endpoint, _key, _model, chunks, _count, _excluded=None):
+        return [{
+            "number": 1,
+            "question": "相同問題？",
+            "expected_answer": "答案",
+            "source_pages": [1],
+            "source_chunk_numbers": [1],
+            "document": chunks[0].document,
+        }]
+
+    monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(ui, "save_project", lambda *args: {})
+
+    status, _rows, state, _results = ui.generate_evaluation_for_ui(
+        "project", "endpoint", "key", "generation-model", "test-model",
+        1, "基本檢索", 8,
+        [TextChunk(1, "a", (1,), "a.pdf"), TextChunk(2, "b", (1,), "b.pdf")],
+        1, 3,
+    )
+
+    assert status.startswith("❌")
+    assert "重複題目" in status
+    assert state == {}
 
 
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:

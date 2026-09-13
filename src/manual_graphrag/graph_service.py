@@ -19,6 +19,11 @@ EXTRACTION_BATCH_LIMIT = 12_000
 RATE_LIMIT_MAX_RETRIES = 6
 RATE_LIMIT_BASE_DELAY_SECONDS = 2.0
 RATE_LIMIT_MAX_DELAY_SECONDS = 30.0
+# Chat completions no longer cap output length (no max_tokens), so a slow local
+# model (e.g. Ollama on modest hardware) can legitimately take several minutes
+# to finish a single response; keep this well above that instead of the old
+# 120s, which was tuned for fast hosted APIs and cut off slow local ones.
+CHAT_COMPLETION_TIMEOUT_SECONDS = 600
 
 
 class RunCancelled(Exception):
@@ -116,7 +121,7 @@ def _post_json(
     url: str,
     payload: dict[str, Any],
     api_key: str,
-    timeout: int = 120,
+    timeout: int = CHAT_COMPLETION_TIMEOUT_SECONDS,
     on_retry: Callable[[int, float], None] | None = None,
     control: RunControl | None = None,
 ) -> dict[str, Any]:

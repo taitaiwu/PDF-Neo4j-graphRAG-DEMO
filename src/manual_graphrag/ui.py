@@ -57,6 +57,11 @@ from .storage import write_json
 
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+NO_MODEL_CHOICES_HINT = "⚠️ 尚無可用模型，請先到「1. 連線設定」測試連線或取得模型清單。"
+
+
+def _model_choice_info(choice_items: list[tuple[str, str]]) -> str | None:
+    return None if choice_items else NO_MODEL_CHOICES_HINT
 
 
 def connection_summary(
@@ -142,11 +147,15 @@ def render_service_for_ui(state: dict[str, Any]) -> tuple[Any, ...]:
     choice_items = service_choice_items(state)
     rows = profile["rows"] if ollama else [[True, model] for model in provider_models(state, state["active"])]
     fallback = preferred_service_model(state)
+    model_info = _model_choice_info(choice_items)
     return (
         state, profile["base_url"], profile["api_key"],
         gr.update(value=rows, visible=ollama), gr.update(visible=not ollama),
         gr.update(visible=ollama), profile["status"],
-        *(gr.update(choices=choice_items, value=model if model in allowed else fallback) for model in profile["models"]),
+        *(
+            gr.update(choices=choice_items, value=model if model in allowed else fallback, info=model_info)
+            for model in profile["models"]
+        ),
     )
 
 
@@ -219,9 +228,12 @@ def load_evaluation_with_services_for_ui(
     values = list(load_evaluation_for_ui(project_id))
     allowed = service_choices(llm_state)
     choice_items = service_choice_items(llm_state)
+    model_info = _model_choice_info(choice_items)
     for index in (3, 4):
         if not isinstance(values[index], dict):
-            values[index] = gr.update(choices=choice_items, value=values[index] if values[index] in allowed else None)
+            values[index] = gr.update(
+                choices=choice_items, value=values[index] if values[index] in allowed else None, info=model_info,
+            )
     return tuple(values)
 
 
@@ -288,8 +300,7 @@ def workflow_tabs_for_ui(
 
     enabled = bool(
         project_id and neo4j_connected
-        and has_available_service(llm_state)
-        and has_available_service(embedding_state)
+        and (has_available_service(llm_state) or has_available_service(embedding_state))
     )
     return tuple(gr.update(interactive=enabled) for _ in range(5))
 
@@ -532,9 +543,9 @@ def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ..
     try:
         current = load_project(project_id)
         record = {
-            "question": str(args[7]).strip(), "answer": answer,
-            "answer_model": str(args[6]), "retrieval_mode": str(args[8]),
-            "top_k": int(args[9]), "sources": sources,
+            "question": str(args[9]).strip(), "answer": answer,
+            "answer_model": str(args[8]), "retrieval_mode": str(args[10]),
+            "top_k": int(args[11]), "sources": sources,
             "document": (current.get("graph_state") or {}).get("document", ""),
         }
         project = append_question(project_id, record)
@@ -736,6 +747,7 @@ def generate_evaluation_for_ui(
         document_chunks = list(chunks_by_document.values())
         if not document_chunks:
             raise ValueError("請先解析 PDF 並產生 chunks")
+
         def generate_for_document(
             document: str,
             selected_chunks: list[TextChunk],
@@ -785,6 +797,17 @@ def generate_evaluation_for_ui(
         for document_questions in document_results:
             for question in document_questions:
                 questions.append({**question, "number": len(questions) + 1})
+
+        # Each PDF only excludes its own previous questions while generating in
+        # parallel, so a duplicate could still slip through across PDFs; catch
+        # that here instead of only trusting the per-document exclusion list.
+        for index, question in enumerate(questions):
+            for other in questions[index + 1:]:
+                if questions_are_similar(question["question"], other["question"]):
+                    raise ValueError(
+                        "跨 PDF 生題後仍偵測到重複題目，請重新產生題目："
+                        f"「{question['question']}」與「{other['question']}」"
+                    )
         evaluation = {
             "preferences": {"generation_model": generation_model, "test_model": test_model,
                             "question_count": int(question_count),
@@ -1462,6 +1485,8 @@ def build_app() -> gr.Blocks:
     embedding_settings = load_service_settings("embedding", env)
     llm_choices = service_choice_items(llm_settings)
     embedding_choices = service_choice_items(embedding_settings)
+    llm_model_info = _model_choice_info(llm_choices)
+    embedding_model_info = _model_choice_info(embedding_choices)
     embedding_allowed = service_choices(embedding_settings)
     llm_profile = llm_settings["profiles"][llm_settings["active"]]
     embedding_profile = embedding_settings["profiles"][embedding_settings["active"]]
@@ -1617,6 +1642,7 @@ def build_app() -> gr.Blocks:
                         value=preferred_llm,
                         allow_custom_value=False,
                         label="Schema 規劃 LLM",
+                        info=llm_model_info,
                     )
                     graph_temperature = gr.Slider(
                         0, 2, value=0, step=0.1, label="Temperature"
@@ -1674,6 +1700,7 @@ def build_app() -> gr.Blocks:
                     value=preferred_llm,
                     allow_custom_value=False,
                     label="知識圖譜抽取 LLM",
+                    info=llm_model_info,
                 )
                 extraction_max_concurrent_requests = gr.Number(
                     value=3,
@@ -1707,6 +1734,7 @@ def build_app() -> gr.Blocks:
                     value=embedding_profile["models"][0] if embedding_profile["models"][0] in embedding_allowed else None,
                     allow_custom_value=False,
                     label="Embedding 模型",
+                    info=embedding_model_info,
                 )
                 gr.Markdown(
                     "⚠️ 每次匯入都會先清空本工具在目前 Neo4j Database 中建立的圖譜，再寫入本次結果。"
@@ -1730,6 +1758,7 @@ def build_app() -> gr.Blocks:
                         value=preferred_llm,
                         allow_custom_value=False,
                         label="生題模型",
+                        info=llm_model_info,
                     )
                     evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="每份 PDF 題目數 N")
                     evaluation_generation_max_concurrent_requests = gr.Number(value=3, minimum=1, precision=0, label="生題最大並行請求數（跨 PDF）")
@@ -1742,6 +1771,7 @@ def build_app() -> gr.Blocks:
                         value=preferred_llm,
                         allow_custom_value=False,
                         label="回答與評判模型",
+                        info=llm_model_info,
                     )
                     evaluation_retrieval_mode = gr.Radio(["基本檢索", "關聯擴展檢索"], value="關聯擴展檢索", label="檢索模式")
                     evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
@@ -1795,6 +1825,7 @@ def build_app() -> gr.Blocks:
                 value=preferred_llm,
                 allow_custom_value=False,
                 label="問答 LLM",
+                info=llm_model_info,
             )
             question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
             with gr.Row():
