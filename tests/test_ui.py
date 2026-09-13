@@ -170,15 +170,15 @@ def test_pdf_upload_starts_with_valid_multi_document_controls() -> None:
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
-        "2. PDF 與參數", "3. 建圖", "4. 自動問答測試",
-        "5. 問答測試", "6. 歷史紀錄",
+        "2. PDF 與參數", "3. PDF 摘要", "4. 建圖",
+        "5. 自動問答測試", "6. 問答測試", "7. 歷史紀錄",
     }
     tabs = [
         component for component in app.config["components"]
         if component.get("props", {}).get("label") in protected_labels
     ]
 
-    assert len(tabs) == 5
+    assert len(tabs) == 6
     connection_tab = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("label") == "1. 連線設定"
@@ -197,7 +197,7 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
         if str(dependency.get("api_name", "")).startswith("workflow_tabs_for_ui")
     ]
     assert len(gate_dependencies) >= 5
-    assert all(len(dependency["outputs"]) == 5 for dependency in gate_dependencies)
+    assert all(len(dependency["outputs"]) == 6 for dependency in gate_dependencies)
 
 
 
@@ -304,9 +304,11 @@ def test_build_app_has_automatic_evaluation_page() -> None:
         )
         for dependency in app.config["dependencies"]
     )
-    assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
-    assert any(component.get("props", {}).get("label") == "5. 問答測試" for component in app.config["components"])
-    assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "3. PDF 摘要" for component in app.config["components"])
+    assert any(component.get("props", {}).get("headers") == ["文件", "摘要", "產品／型號", "主題", "關鍵詞"] for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "5. 自動問答測試" for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "6. 問答測試" for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "7. 歷史紀錄" for component in app.config["components"])
     components = app.config["components"]
     question_table_index = next(
         index for index, component in enumerate(components)
@@ -510,13 +512,41 @@ def test_project_answer_appends_history(monkeypatch) -> None:
     assert result[3][0][1:3] == ["問題", "答案"]
 
 
+def test_generate_document_summaries_for_ui_saves_and_displays_each_pdf(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        ui, "generate_document_summary",
+        lambda _endpoint, _key, _model, chunks: {
+            "document": chunks[0].document, "summary": f"{chunks[0].document} 摘要",
+            "product_names": ["型號 A"], "topics": ["設定"], "keywords": ["IP"],
+        },
+    )
+    monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {"questions": [{"question": "Q"}]}})
+    monkeypatch.setattr(ui, "save_project", lambda _project_id, payload: captured.update(payload) or {})
+
+    status, rows, state = ui.generate_document_summaries_for_ui(
+        "project", "endpoint", "key", "summary-model",
+        [TextChunk(1, "a", (1,), "a.pdf"), TextChunk(2, "b", (1,), "b.pdf")], 2,
+    )
+
+    assert status == "✅ 已建立並保存 2 份 PDF 摘要。"
+    assert [row[0] for row in rows] == ["a.pdf", "b.pdf"]
+    assert rows[0][1:] == ["a.pdf 摘要", "型號 A", "設定", "IP"]
+    assert state["questions"] == [{"question": "Q"}]
+    assert state["preferences"]["summary_model"] == "summary-model"
+    assert captured["evaluation"]["document_summaries"] == state["document_summaries"]
+
+
 def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     questions = [{"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}]
     monkeypatch.setattr(ui, "generate_evaluation_questions", lambda *args: questions)
     monkeypatch.setattr(
         ui, "generate_document_summary",
-        lambda *args: {"document": args[3][0].document, "summary": "摘要"},
+        lambda *args: (_ for _ in ()).throw(AssertionError("生題不應建立摘要")),
     )
+    monkeypatch.setattr(ui, "load_project", lambda *_: {
+        "evaluation": {"document_summaries": [{"document": "manual.pdf", "summary": "既有摘要"}]}
+    })
     captured = {}
     real_executor = ui.ThreadPoolExecutor
 
@@ -563,8 +593,11 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
     monkeypatch.setattr(
         ui, "generate_document_summary",
-        lambda *args: {"document": args[3][0].document, "summary": "摘要"},
+        lambda *args: (_ for _ in ()).throw(AssertionError("生題不應建立摘要")),
     )
+    monkeypatch.setattr(ui, "load_project", lambda *_: {
+        "evaluation": {"document_summaries": [{"document": "manual.pdf", "summary": "既有摘要"}]}
+    })
     monkeypatch.setattr(ui, "save_project", lambda *args: {})
 
     status, _rows, state, _results = ui.generate_evaluation_for_ui(
@@ -605,8 +638,11 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
     monkeypatch.setattr(
         ui, "generate_document_summary",
-        lambda *args: {"document": args[3][0].document, "summary": "摘要"},
+        lambda *args: (_ for _ in ()).throw(AssertionError("生題不應建立摘要")),
     )
+    monkeypatch.setattr(ui, "load_project", lambda *_: {
+        "evaluation": {"document_summaries": [{"document": "manual.pdf", "summary": "既有摘要"}]}
+    })
     monkeypatch.setattr(ui, "save_project", lambda *args: {})
 
     status, _rows, state, _results = ui.generate_evaluation_for_ui(

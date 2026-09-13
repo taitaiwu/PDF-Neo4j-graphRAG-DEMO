@@ -293,12 +293,12 @@ def workflow_tabs_for_ui(
         and has_available_service(llm_state)
         and has_available_service(embedding_state)
     )
-    return tuple(gr.update(interactive=enabled) for _ in range(5))
+    return tuple(gr.update(interactive=enabled) for _ in range(6))
 
 
 def lock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
     """Keep delete-project output compatibility; successful setup uses workflow_tabs_for_ui."""
-    return tuple(gr.update(interactive=False) for _ in range(5))
+    return tuple(gr.update(interactive=False) for _ in range(6))
 
 
 def delete_project_for_ui(
@@ -724,6 +724,67 @@ def save_evaluation_preferences_for_ui(
     return "✅ 自動測試設定已保存。"
 
 
+def _document_summary_rows(summaries: list[dict[str, Any]]) -> list[list[str]]:
+    return [[
+        str(item.get("document", "")), str(item.get("summary", "")),
+        "、".join(item.get("product_names") or []),
+        "、".join(item.get("topics") or []),
+        "、".join(item.get("keywords") or []),
+    ] for item in summaries]
+
+
+def load_document_summaries_for_ui(project_id: str) -> tuple[list[list[str]], str]:
+    if not project_id:
+        return [], "請先選擇專案。"
+    try:
+        evaluation = dict(load_project(project_id).get("evaluation") or {})
+    except (OSError, ValueError) as exc:
+        return [], f"❌ {exc}"
+    summaries = evaluation.get("document_summaries") or []
+    if not summaries:
+        return [], "尚未建立 PDF 摘要。"
+    return _document_summary_rows(summaries), f"✅ 已載入 {len(summaries)} 份 PDF 摘要。"
+
+
+def generate_document_summaries_for_ui(
+    project_id: str, model_endpoint: str, api_key: str, model: str,
+    chunks: list[TextChunk], max_concurrent_requests: int = 3,
+) -> tuple[str, list[list[str]], dict[str, Any]]:
+    if not project_id:
+        return "❌ 請先建立或載入專案。", [], {}
+    if not model:
+        return "❌ 請先選擇摘要模型。", [], {}
+    try:
+        concurrency = int(max_concurrent_requests)
+        if concurrency < 1:
+            raise ValueError("最大並行請求數必須大於 0")
+        chunks_by_document: dict[str, list[TextChunk]] = {}
+        for chunk in chunks:
+            chunks_by_document.setdefault(chunk.document, []).append(chunk)
+        if not chunks_by_document:
+            raise ValueError("請先解析 PDF 並產生 chunks")
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            summaries = list(executor.map(
+                lambda selected: generate_document_summary(
+                    model_endpoint, api_key, model, selected
+                ),
+                chunks_by_document.values(),
+            ))
+        project = load_project(project_id)
+        evaluation = dict(project.get("evaluation") or {})
+        preferences = dict(evaluation.get("preferences") or {})
+        preferences.update({
+            "summary_model": model,
+            "summary_max_concurrent_requests": concurrency,
+        })
+        evaluation.update({"preferences": preferences, "document_summaries": summaries})
+        save_project(project_id, {"evaluation": evaluation})
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ {exc}", [], {}
+    return (f"✅ 已建立並保存 {len(summaries)} 份 PDF 摘要。",
+            _document_summary_rows(summaries), evaluation)
+
+
 def generate_evaluation_for_ui(
     project_id: str, model_endpoint: str, api_key: str, generation_model: str,
     test_model: str, question_count: int, retrieval_mode: str, top_k: int,
@@ -750,10 +811,7 @@ def generate_evaluation_for_ui(
         def generate_for_document(
             document: str,
             selected_chunks: list[TextChunk],
-        ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-            summary = generate_document_summary(
-                model_endpoint, api_key, generation_model, selected_chunks
-            )
+        ) -> list[dict[str, Any]]:
             accepted: list[dict[str, Any]] = []
             last_error = ""
             attempts = 0
@@ -787,7 +845,7 @@ def generate_evaluation_for_ui(
                     f"無法在去重後補足 {document} 的題目數"
                     f"（{len(accepted)}/{count}）{detail}"
                 )
-            return summary, accepted
+            return accepted
 
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             document_results = list(executor.map(
@@ -796,18 +854,19 @@ def generate_evaluation_for_ui(
             ))
 
         questions = []
-        document_summaries = [result[0] for result in document_results]
-        for _, document_questions in document_results:
+        for document_questions in document_results:
             for question in document_questions:
                 questions.append({**question, "number": len(questions) + 1})
+        existing_evaluation = dict(load_project(project_id).get("evaluation") or {})
+        existing_preferences = dict(existing_evaluation.get("preferences") or {})
         evaluation = {
-            "preferences": {"generation_model": generation_model, "test_model": test_model,
+            **existing_evaluation,
+            "preferences": {**existing_preferences, "generation_model": generation_model, "test_model": test_model,
                             "question_count": int(question_count),
                             "retrieval_mode": retrieval_mode, "top_k": int(top_k),
                             "generation_max_concurrent_requests": concurrency,
                             "test_max_concurrent_requests": int(test_max_concurrent_requests)},
             "questions": questions, "results": [], "dirty": False,
-            "document_summaries": document_summaries,
         }
         save_project(project_id, {"evaluation": evaluation})
     except (OSError, TypeError, ValueError) as exc:
@@ -840,7 +899,7 @@ def run_evaluation_for_ui(
         return "❌ 測試最大並行請求數必須大於 0", [], evaluation
     document_summaries = evaluation.get("document_summaries") or []
     if not document_summaries:
-        return "❌ 尚未建立 PDF 路由摘要，請重新建立測試題目。", [], evaluation
+        return "❌ 尚未建立 PDF 路由摘要，請先到「3. PDF 摘要」建立摘要。", [], evaluation
 
     def evaluate(item: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -1655,7 +1714,28 @@ def build_app() -> gr.Blocks:
                         column_widths=[80, 160, 120, 100, 900],
                     )
 
-        with gr.Tab("3. 建圖", interactive=False) as graph_tab:
+        with gr.Tab("3. PDF 摘要", interactive=False) as summary_tab:
+            gr.Markdown(
+                "### 建立 PDF 路由摘要\n"
+                "為每份 PDF 建立可區分產品、型號與主題的摘要，供自動測試時由 LLM 選擇檢索文件。"
+            )
+            with gr.Row():
+                summary_model = gr.Dropdown(
+                    choices=llm_choices, value=preferred_llm, allow_custom_value=False,
+                    label="摘要模型",
+                )
+                summary_max_concurrent_requests = gr.Number(
+                    value=3, minimum=1, precision=0, label="摘要最大並行請求數"
+                )
+            generate_summaries_button = gr.Button("建立／重新建立全部 PDF 摘要", variant="primary")
+            summary_status = gr.Markdown("尚未建立 PDF 摘要。")
+            document_summaries_table = gr.Dataframe(
+                headers=["文件", "摘要", "產品／型號", "主題", "關鍵詞"],
+                datatype=["str", "str", "str", "str", "str"],
+                interactive=False, wrap=True,
+            )
+
+        with gr.Tab("4. 建圖", interactive=False) as graph_tab:
             gr.Markdown("### 規劃並抽取知識圖譜")
             with gr.Row():
                 pause_button = gr.Button("⏸ 暫停")
@@ -1775,7 +1855,7 @@ def build_app() -> gr.Blocks:
                 )
                 import_status = gr.Markdown("尚未執行 Embedding 與匯入。")
 
-        with gr.Tab("4. 自動問答測試", interactive=False) as evaluation_tab:
+        with gr.Tab("5. 自動問答測試", interactive=False) as evaluation_tab:
             gr.Markdown(
                 "### 從 PDF 自動建立問答測試集\n"
                 "每份 PDF 建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
@@ -1845,7 +1925,7 @@ def build_app() -> gr.Blocks:
                 interactive=False, wrap=True, elem_classes="evaluation-table",
             )
 
-        with gr.Tab("5. 問答測試", interactive=False) as qa_tab:
+        with gr.Tab("6. 問答測試", interactive=False) as qa_tab:
             gr.Markdown(
                 "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
             )
@@ -1893,7 +1973,7 @@ def build_app() -> gr.Blocks:
                 wrap=True,
             )
 
-        with gr.Tab("6. 歷史紀錄", interactive=False) as history_tab:
+        with gr.Tab("7. 歷史紀錄", interactive=False) as history_tab:
             gr.Markdown("目前專案的問答紀錄；成功問答後會自動追加並保存。")
             project_history_status = gr.Markdown()
             history_table = gr.Dataframe(
@@ -1905,6 +1985,8 @@ def build_app() -> gr.Blocks:
         schema_model_key = gr.State(initial_llm_credentials[0][1])
         extraction_model_endpoint = gr.State(initial_llm_credentials[1][0])
         extraction_model_key = gr.State(initial_llm_credentials[1][1])
+        summary_model_endpoint = gr.State(initial_llm_credentials[2][0])
+        summary_model_key = gr.State(initial_llm_credentials[2][1])
         generation_model_endpoint = gr.State(initial_llm_credentials[2][0])
         generation_model_key = gr.State(initial_llm_credentials[2][1])
         evaluation_model_endpoint = gr.State(initial_llm_credentials[3][0])
@@ -1913,6 +1995,17 @@ def build_app() -> gr.Blocks:
         answer_model_key = gr.State(initial_llm_credentials[4][1])
         selected_embedding_endpoint = gr.State(initial_embedding_credentials[0])
         selected_embedding_key = gr.State(initial_embedding_credentials[1])
+
+        summary_tab.select(
+            load_document_summaries_for_ui, inputs=project_selector,
+            outputs=[document_summaries_table, summary_status],
+        )
+        generate_summaries_button.click(
+            generate_document_summaries_for_ui,
+            inputs=[project_selector, summary_model_endpoint, summary_model_key,
+                    summary_model, chunk_state, summary_max_concurrent_requests],
+            outputs=[summary_status, document_summaries_table, evaluation_state],
+        )
 
         evaluation_tab.select(
             load_evaluation_with_services_for_ui, inputs=[project_selector, llm_service_state],
@@ -2026,12 +2119,12 @@ def build_app() -> gr.Blocks:
                      embedding_test_button, embedding_list_button, embedding_connection_status],
             show_progress="hidden",
         )
-        protected_tabs = [pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
+        protected_tabs = [pdf_tab, summary_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
         delete_project_event = delete_project_button.click(
             delete_project_for_ui,
             inputs=project_selector,
             outputs=[project_selector, project_state, project_status,
-                     pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab,
+                     pdf_tab, summary_tab, graph_tab, evaluation_tab, qa_tab, history_tab,
                      delete_project_completed],
             js="""(projectId) => {
                 if (!window.confirm('確定要刪除此專案嗎？專案設定、PDF、圖譜、題庫與紀錄都會永久刪除。')) {
@@ -2126,6 +2219,7 @@ def build_app() -> gr.Blocks:
                 )
         for field, endpoint_state, key_state in [
             (graph_llm_model, schema_model_endpoint, schema_model_key),
+            (summary_model, summary_model_endpoint, summary_model_key),
             (extraction_llm_model, extraction_model_endpoint, extraction_model_key),
             (evaluation_generation_model, generation_model_endpoint, generation_model_key),
             (evaluation_test_model, evaluation_model_endpoint, evaluation_model_key),
