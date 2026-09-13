@@ -720,15 +720,28 @@ def generate_evaluation_for_ui(
     if not generation_model:
         return "❌ 請先勾選並選擇生題模型。", [], {}, []
     try:
+        count = int(question_count)
+        if not 1 <= count <= 100:
+            raise ValueError("題目數量必須介於 1 到 100")
         concurrency = int(max_concurrent_requests)
         if concurrency < 1:
             raise ValueError("生題最大並行請求數必須大於 0")
+        chunks_by_document: dict[str, list[TextChunk]] = {}
+        for chunk in chunks:
+            chunks_by_document.setdefault(chunk.document, []).append(chunk)
+        document_chunks = list(chunks_by_document.values())
+        if not document_chunks:
+            raise ValueError("請先解析 PDF 並產生 chunks")
+        assigned_chunks = [
+            document_chunks[index % len(document_chunks)]
+            for index in range(count)
+        ]
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             batches = list(executor.map(
-                lambda _: generate_evaluation_questions(
-                    model_endpoint, api_key, generation_model, chunks, 1
+                lambda selected_chunks: generate_evaluation_questions(
+                    model_endpoint, api_key, generation_model, selected_chunks, 1
                 ),
-                range(int(question_count)),
+                assigned_chunks,
             ))
         questions = [
             {**question, "number": index}

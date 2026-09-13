@@ -534,6 +534,34 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     assert results == []
 
 
+
+def test_generate_evaluation_distributes_questions_across_documents(monkeypatch) -> None:
+    requested_documents = []
+
+    def fake_generate(_endpoint, _key, _model, chunks, count):
+        requested_documents.append(chunks[0].document)
+        return [{
+            "number": 1,
+            "question": f"{chunks[0].document} question",
+            "expected_answer": "answer",
+            "source_pages": [1],
+            "document": chunks[0].document,
+        }]
+
+    monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(ui, "save_project", lambda *args: {})
+
+    status, _rows, state, _results = ui.generate_evaluation_for_ui(
+        "project", "endpoint", "key", "generation-model", "test-model",
+        5, "基本檢索", 8,
+        [TextChunk(1, "a", (1,), "a.pdf"), TextChunk(2, "b", (1,), "b.pdf")],
+        3, 3,
+    )
+
+    assert status.startswith("✅")
+    assert requested_documents.count("a.pdf") == 3
+    assert requested_documents.count("b.pdf") == 2
+    assert [item["document"] for item in state["questions"]] == requested_documents
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "實際答案", []))
     real_executor = ui.ThreadPoolExecutor
