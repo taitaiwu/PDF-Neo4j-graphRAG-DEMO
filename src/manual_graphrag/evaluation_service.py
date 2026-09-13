@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+import json
 import re
 from typing import Any
 
@@ -81,6 +82,77 @@ def generate_document_summary(
         temperature=0,
         validator=validate,
     )
+
+
+def select_relevant_documents(
+    base_url: str,
+    api_key: str,
+    model: str,
+    question: str,
+    document_summaries: list[dict[str, Any]],
+    max_documents: int = 3,
+) -> dict[str, Any]:
+    if not question.strip():
+        raise ValueError("文件路由問題不可為空")
+    available = {
+        str(item.get("document", "")).strip()
+        for item in document_summaries
+        if str(item.get("document", "")).strip()
+    }
+    if not available:
+        raise ValueError("請先建立 PDF 路由摘要")
+    limit = min(max(int(max_documents), 1), len(available))
+
+    def validate(payload: dict[str, Any]) -> dict[str, Any]:
+        raw_documents = payload.get("documents")
+        reason = str(payload.get("reason", "")).strip()
+        if not isinstance(raw_documents, list) or not raw_documents:
+            raise ValueError("documents 必須是非空陣列")
+        documents = list(dict.fromkeys(
+            str(document).strip() for document in raw_documents
+            if str(document).strip()
+        ))
+        unknown = [document for document in documents if document not in available]
+        if unknown:
+            raise ValueError(f"文件路由包含不存在的文件：{unknown}")
+        if not 1 <= len(documents) <= limit:
+            raise ValueError(f"文件路由必須選擇 1 到 {limit} 份文件")
+        if not reason:
+            raise ValueError("文件路由必須包含 reason")
+        try:
+            confidence = float(payload.get("confidence", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("confidence 必須是數字") from exc
+        return {
+            "documents": documents,
+            "reason": reason,
+            "confidence": min(max(confidence, 0.0), 1.0),
+        }
+
+    summaries = [
+        {
+            "document": item.get("document", ""),
+            "summary": item.get("summary", ""),
+            "product_names": item.get("product_names", []),
+            "topics": item.get("topics", []),
+            "keywords": item.get("keywords", []),
+        }
+        for item in document_summaries
+    ]
+    return _chat_json(
+        base_url,
+        api_key,
+        model,
+        "你是多文件檢索路由器。只能根據問題與文件摘要選擇應搜尋的文件，並只輸出 JSON。",
+        f"問題：{question.strip()}\n最多選擇 {limit} 份文件。"
+        "問題指向單一產品時只選該文件；需要比較時才能選多份。"
+        "不得回傳清單以外的文件。輸出格式："
+        '{"documents":["..."],"reason":"...","confidence":0.0}。\n\n'
+        f"文件摘要：\n{json.dumps(summaries, ensure_ascii=False)}",
+        temperature=0,
+        validator=validate,
+    )
+
 
 
 

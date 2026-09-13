@@ -73,6 +73,56 @@ def test_generate_evaluation_questions_tells_model_which_questions_to_avoid(
     assert "既有問題？" in captured["prompt"]
 
     assert "不得重複或改寫以下已建立題目" in captured["prompt"]
+def test_select_relevant_documents_uses_only_summaries(monkeypatch) -> None:
+    captured = {}
+
+    def fake_chat(*args, **kwargs):
+        captured["prompt"] = args[4]
+        return kwargs["validator"]({
+            "documents": ["printer-a.pdf"],
+            "reason": "問題指定印表機 A",
+            "confidence": 0.9,
+        })
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+    result = evaluation_service.select_relevant_documents(
+        "url",
+        "",
+        "model",
+        "印表機 A 如何查詢 IP？",
+        [
+            {"document": "printer-a.pdf", "summary": "印表機 A 使用手冊"},
+            {"document": "printer-b.pdf", "summary": "印表機 B 使用手冊"},
+        ],
+    )
+
+    assert result["documents"] == ["printer-a.pdf"]
+    assert "printer-a.pdf" in captured["prompt"]
+    assert "printer-b.pdf" in captured["prompt"]
+
+
+def test_select_relevant_documents_rejects_unknown_document(monkeypatch) -> None:
+    monkeypatch.setattr(
+        evaluation_service,
+        "_chat_json",
+        lambda *args, **kwargs: kwargs["validator"]({
+            "documents": ["unknown.pdf"],
+            "reason": "錯誤選擇",
+            "confidence": 1,
+        }),
+    )
+
+    with pytest.raises(ValueError, match="不存在"):
+        evaluation_service.select_relevant_documents(
+            "url",
+            "",
+            "model",
+            "問題",
+            [{"document": "manual.pdf", "summary": "摘要"}],
+        )
+
+
+
 def test_generate_evaluation_questions_rejects_missing_chunk_numbers(monkeypatch) -> None:
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({
