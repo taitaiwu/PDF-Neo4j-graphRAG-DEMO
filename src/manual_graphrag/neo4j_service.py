@@ -142,9 +142,11 @@ def search_graph_evidence(
     retrieval_query = """
     WITH node, score
     WHERE node.run_id = $run_id
-      AND (size($document_names) = 0 OR any(
-        document IN coalesce(node.source_documents, [])
-        WHERE document IN $document_names
+      AND (size($document_names) = 0 OR (
+        size(coalesce(node.source_documents, [])) > 0 AND all(
+          document IN coalesce(node.source_documents, [])
+          WHERE document IN $document_names
+        )
       ))
     RETURN node {
         .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
@@ -210,9 +212,11 @@ def search_graph_evidence(
                         WHERE any(
                             number IN coalesce(chunk.source_chunk_numbers, [])
                             WHERE number IN $chunk_numbers
-                        ) AND (size($document_names) = 0 OR any(
-                            document IN coalesce(chunk.source_documents, [])
-                            WHERE document IN $document_names
+                        ) AND (size($document_names) = 0 OR (
+                            size(coalesce(chunk.source_documents, [])) > 0 AND all(
+                                document IN coalesce(chunk.source_documents, [])
+                                WHERE document IN $document_names
+                            )
                         ))
                         RETURN chunk {
                             .evidence_id, .kind, .name, .source, .target, .text,
@@ -243,9 +247,11 @@ def search_graph_evidence(
                     related_entities = session.run(
                         """
                         MATCH (entity:GraphEvidence {run_id: $run_id, kind: '實體'})
-                        WHERE (size($document_names) = 0 OR any(
-                            document IN coalesce(entity.source_documents, [])
-                            WHERE document IN $document_names
+                        WHERE (size($document_names) = 0 OR (
+                            size(coalesce(entity.source_documents, [])) > 0 AND all(
+                                document IN coalesce(entity.source_documents, [])
+                                WHERE document IN $document_names
+                            )
                         )) AND (
                             entity.name IN $names OR any(
                                 number IN coalesce(entity.source_chunk_numbers, [])
@@ -279,9 +285,11 @@ def search_graph_evidence(
                     related = session.run(
                         """
                         MATCH (relation:GraphEvidence {run_id: $run_id, kind: '關係'})
-                        WHERE (size($document_names) = 0 OR any(
-                            document IN coalesce(relation.source_documents, [])
-                            WHERE document IN $document_names
+                        WHERE (size($document_names) = 0 OR (
+                            size(coalesce(relation.source_documents, [])) > 0 AND all(
+                                document IN coalesce(relation.source_documents, [])
+                                WHERE document IN $document_names
+                            )
                         )) AND (
                             relation.source IN $names OR relation.target IN $names OR any(
                                 number IN coalesce(relation.source_chunk_numbers, [])

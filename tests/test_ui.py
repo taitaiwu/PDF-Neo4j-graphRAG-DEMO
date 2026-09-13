@@ -150,16 +150,21 @@ def test_project_page_uses_automatic_refresh_and_save() -> None:
     )
 
 
-def test_pdf_page_range_has_valid_values_before_upload() -> None:
+def test_pdf_upload_starts_with_valid_multi_document_controls() -> None:
     app = build_app()
     fields = {
         component.get("props", {}).get("label"): component
         for component in app.config["components"]
     }
 
-    assert fields["解析起始頁"]["props"]["value"] == 1
-    assert fields["解析結束頁（上傳後自動設為最後一頁）"]["props"]["value"] == 1
-    assert fields["解析結束頁（上傳後自動設為最後一頁）"]["props"]["minimum"] == 1
+    upload = fields["PDF 使用手冊（可一次選取多個檔案）"]["props"]
+    assert upload["file_count"] == "multiple"
+    assert fields["選擇要移除的 PDF（可多選）"]["props"]["choices"] == []
+    assert any(
+        component.get("props", {}).get("headers")
+        == ["選取", "文件", "頁碼範圍", "Chunk 數"]
+        for component in app.config["components"]
+    )
 
 
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
@@ -318,7 +323,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     result_table_index = next(
         index for index, component in enumerate(components)
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "實際答案", "結果", "評判理由"]
+        == ["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "路由理由", "實際答案", "答案結果", "評判理由"]
     )
     assert question_table_index < metrics_box_index < result_title_index < result_table_index
 
@@ -625,6 +630,10 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
 
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "實際答案", []))
+    monkeypatch.setattr(
+        ui, "select_relevant_documents",
+        lambda *args: {"documents": ["manual.pdf"], "reason": "符合", "confidence": 0.9},
+    )
     real_executor = ui.ThreadPoolExecutor
 
     def recording_executor(max_workers):
@@ -635,9 +644,13 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
-    evaluation = {"questions": [
-        {"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1], "document": "manual.pdf"}
-    ]}
+    evaluation = {
+        "questions": [{
+            "number": 1, "question": "Q", "expected_answer": "A",
+            "source_pages": [1], "document": "manual.pdf",
+        }],
+        "document_summaries": [{"document": "manual.pdf", "summary": "手冊摘要"}],
+    }
 
     status, rows, updated = ui.run_evaluation_for_ui(
         "project", "endpoint", "key", "embed-endpoint", "embed-key",
@@ -646,11 +659,16 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     )
 
     assert "總共答對 1 題 / 1 題" in status
-    assert "manual.pdf：答對 1 題 / 1 題" in status
+    assert "manual.pdf：路由正確 1 / 1；答案正確 1 / 1" in status
+    assert "文件路由正確：1 / 1" in status
     assert "答錯：0 題" in status
-    assert "正確率：100.0%" in status
-    assert rows[0][3:] == ["實際答案", "✅ 通過", "正確"]
+    assert "答案正確率：100.0%" in status
+    assert rows[0][3:] == [
+        "manual.pdf", "manual.pdf", "✅ 正確", "符合",
+        "實際答案", "✅ 通過", "正確",
+    ]
     assert captured["test_workers"] == 2
+    assert updated["results"][0]["routing_correct"] is True
     assert updated["results"][0]["passed"] is True
     assert captured["evaluation"] == updated
 
@@ -663,11 +681,19 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
         return "✅ 完成", "實際答案", []
 
     monkeypatch.setattr(ui, "answer_question_for_ui", fake_answer_question_for_ui)
+    monkeypatch.setattr(
+        ui, "select_relevant_documents",
+        lambda *args: {"documents": ["manual.pdf"], "reason": "符合", "confidence": 0.9},
+    )
     monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *args: {"passed": True, "reason": "正確"})
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: {})
-    evaluation = {"questions": [
-        {"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}
-    ]}
+    evaluation = {
+        "questions": [{
+            "number": 1, "question": "Q", "expected_answer": "A",
+            "source_pages": [1], "document": "manual.pdf",
+        }],
+        "document_summaries": [{"document": "manual.pdf", "summary": "手冊摘要"}],
+    }
 
     ui.run_evaluation_for_ui(
         "project", "endpoint", "key", "embed-endpoint", "embed-key",
@@ -678,8 +704,46 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
     assert captured["args"] == (
         "endpoint", "key", "embed-endpoint", "embed-key",
         "bolt", "neo4j", "user", "pass",
-        "model", "Q", "關聯擴展檢索", 8,
+        "model", "Q", "關聯擴展檢索", 8, ["manual.pdf"],
     )
+
+
+def test_run_evaluation_does_not_fallback_when_document_routing_fails(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        ui,
+        "select_relevant_documents",
+        lambda *args: (_ for _ in ()).throw(ValueError("無法選擇")),
+    )
+    monkeypatch.setattr(
+        ui,
+        "answer_question_for_ui",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("路由失敗時不得搜尋全部文件")
+        ),
+    )
+    monkeypatch.setattr(ui, "save_project", lambda *args: {})
+    evaluation = {
+        "questions": [{
+            "number": 1,
+            "question": "問題",
+            "expected_answer": "答案",
+            "source_pages": [1],
+            "document": "manual.pdf",
+        }],
+        "document_summaries": [{"document": "manual.pdf", "summary": "摘要"}],
+    }
+
+    status, _rows, updated = ui.run_evaluation_for_ui(
+        "project", "endpoint", "key", "embed-endpoint", "embed-key",
+        "bolt", "neo4j", "user", "pass", "model", "基本檢索", 8, evaluation,
+    )
+
+    assert "文件路由正確：0 / 1" in status
+    assert updated["results"][0]["selected_documents"] == []
+
+    assert updated["results"][0]["reason"].startswith("文件路由失敗")
 
 
 def test_edit_questions_auto_save_and_clear_results(monkeypatch) -> None:
@@ -1213,7 +1277,7 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
     monkeypatch.setattr(
         ui,
         "answer_graph_question",
-        lambda *args: {"answer": "請重新啟動。", "evidence": args[-1]},
+        lambda *args: {"answer": "請重新啟動。", "evidence": args[-2]},
     )
 
     status, answer, rows = ui.answer_question_for_ui(

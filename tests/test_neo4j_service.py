@@ -386,6 +386,7 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
     assert "$run_id" in initialization["retrieval_query"]
     assert "$document_names" in initialization["retrieval_query"]
     arguments = FakeOfficialRetriever.search_arguments
+    assert "all(" in initialization["retrieval_query"]
     assert arguments["query_text"] == r"E01 \+\(重試\)"
     assert arguments["query_vector"] == [0.1]
     assert arguments["top_k"] == 3

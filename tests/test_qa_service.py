@@ -22,9 +22,12 @@ def test_answer_graph_question_omits_max_tokens(monkeypatch) -> None:
         "問題",
         "基本檢索",
         [{"text": "證據"}],
+        ["manual.pdf"],
     )
 
     assert result["answer"] == "答案"
     assert captured["url"] == "http://models/v1/chat/completions"
     assert captured["api_key"] == "secret"
     assert "max_tokens" not in captured["payload"]
+    assert "只允許使用以下文件" in captured["payload"]["messages"][0]["content"]
+    assert "manual.pdf" in captured["payload"]["messages"][0]["content"]

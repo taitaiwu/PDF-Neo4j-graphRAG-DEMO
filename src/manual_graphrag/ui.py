@@ -26,6 +26,7 @@ from .evaluation_service import (
     generate_document_summary,
     judge_evaluation_answer,
     questions_are_similar,
+    select_relevant_documents,
 )
 from .graph_service import (
     extract_graph,
@@ -657,9 +658,18 @@ def export_evaluation_questions_for_ui(
 
 
 def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]:
-    return [[item["number"], item["question"], item["expected_answer"],
-             item.get("actual_answer", ""), "✅ 通過" if item.get("passed") else "❌ 未通過",
-             item.get("reason", "")] for item in results]
+    return [[
+        item["number"],
+        item["question"],
+        item["expected_answer"],
+        item.get("document", ""),
+        "、".join(item.get("selected_documents") or []),
+        "✅ 正確" if item.get("routing_correct") else "❌ 錯誤",
+        item.get("routing_reason", ""),
+        item.get("actual_answer", ""),
+        "✅ 通過" if item.get("passed") else "❌ 未通過",
+        item.get("reason", ""),
+    ] for item in results]
 
 
 def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
@@ -828,12 +838,38 @@ def run_evaluation_for_ui(
     concurrency = int(max_concurrent_requests)
     if concurrency < 1:
         return "❌ 測試最大並行請求數必須大於 0", [], evaluation
+    document_summaries = evaluation.get("document_summaries") or []
+    if not document_summaries:
+        return "❌ 尚未建立 PDF 路由摘要，請重新建立測試題目。", [], evaluation
 
     def evaluate(item: dict[str, Any]) -> dict[str, Any]:
+        try:
+            routing = select_relevant_documents(
+                model_endpoint,
+                api_key,
+                model,
+                item["question"],
+                document_summaries,
+            )
+        except ValueError as exc:
+            return {
+                **item,
+                "selected_documents": [],
+                "routing_reason": f"文件路由失敗：{exc}",
+                "routing_confidence": 0.0,
+                "routing_correct": False,
+                "actual_answer": "",
+                "passed": False,
+                "reason": f"文件路由失敗：{exc}",
+            }
+        selected_documents = routing["documents"]
+        expected_document = str(item.get("document") or "")
+        routing_correct = expected_document in selected_documents
         status, actual, _ = answer_question_for_ui(
             model_endpoint, api_key, embedding_api_base, embedding_api_key,
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             model, item["question"], retrieval_mode, int(top_k),
+            selected_documents,
         )
         if status.startswith("✅"):
             try:
@@ -845,7 +881,15 @@ def run_evaluation_for_ui(
                 judgment = {"passed": False, "reason": f"評判失敗：{exc}"}
         else:
             judgment = {"passed": False, "reason": status}
-        return {**item, "actual_answer": actual, **judgment}
+        return {
+            **item,
+            "selected_documents": selected_documents,
+            "routing_reason": routing["reason"],
+            "routing_confidence": routing["confidence"],
+            "routing_correct": routing_correct,
+            "actual_answer": actual,
+            **judgment,
+        }
 
     results: list[dict[str, Any] | None] = [None] * len(questions)
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -866,15 +910,21 @@ def run_evaluation_for_ui(
     except (OSError, ValueError) as exc:
         return f"❌ 測試已完成，但保存失敗：{exc}", _evaluation_result_rows(results), updated
     passed = sum(bool(item["passed"]) for item in results)
+    routing_passed = sum(bool(item["routing_correct"]) for item in results)
+    complete_passed = sum(
+        bool(item["routing_correct"] and item["passed"]) for item in results
+    )
     total = len(results)
     document_totals: dict[str, list[int]] = {}
     for item in results:
         document = str(item.get("document") or "未標示文件")
-        stats = document_totals.setdefault(document, [0, 0])
-        stats[0] += int(bool(item["passed"]))
-        stats[1] += 1
+        stats = document_totals.setdefault(document, [0, 0, 0])
+        stats[0] += int(bool(item["routing_correct"]))
+        stats[1] += int(bool(item["passed"]))
+        stats[2] += 1
     document_summary = "\n".join(
-        f"- {document}：答對 {stats[0]} 題 / {stats[1]} 題"
+        f"- {document}：路由正確 {stats[0]} / {stats[2]}；"
+        f"答案正確 {stats[1]} / {stats[2]}"
         for document, stats in document_totals.items()
     )
 
@@ -882,7 +932,9 @@ def run_evaluation_for_ui(
     accuracy = passed / total * 100 if total else 0
     summary = (
         f"## 測試完成｜總共答對 {passed} 題 / {total} 題  "
-        f"\n答錯：{failed} 題｜正確率：{accuracy:.1f}%"
+        f"\n文件路由正確：{routing_passed} / {total}｜"
+        f"路由且答案正確：{complete_passed} / {total}  "
+        f"\n答錯：{failed} 題｜答案正確率：{accuracy:.1f}%"
         f"\n\n### 各 PDF 結果\n{document_summary}"
     )
     return summary, _evaluation_result_rows(results), updated
@@ -1403,6 +1455,7 @@ def answer_question_for_ui(
     question: str,
     retrieval_mode: str,
     top_k: int,
+    document_names: list[str] | None = None,
 ) -> tuple[str, str, list[list[object]]]:
     if not answer_model:
         return "❌ 請先勾選並選擇問答 LLM。", "", []
@@ -1419,10 +1472,10 @@ def answer_question_for_ui(
         evidence = search_graph_evidence(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             graph_state["run_id"], question.strip(), question_vector,
-            retrieval_mode, int(top_k),
+            retrieval_mode, int(top_k), document_names,
         )
         result = answer_graph_question(
-            model_endpoint, api_key, answer_model, question, retrieval_mode, evidence
+            model_endpoint, api_key, answer_model, question, retrieval_mode, evidence, document_names
         )
     except ValueError as exc:
         return f"❌ {exc}", "", []
@@ -1788,7 +1841,7 @@ def build_app() -> gr.Blocks:
                 )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
-                headers=["編號", "問題", "標準答案", "實際答案", "結果", "評判理由"],
+                headers=["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "路由理由", "實際答案", "答案結果", "評判理由"],
                 interactive=False, wrap=True, elem_classes="evaluation-table",
             )
 
