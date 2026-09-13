@@ -509,11 +509,18 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     questions = [{"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}]
     monkeypatch.setattr(ui, "generate_evaluation_questions", lambda *args: questions)
     captured = {}
+    real_executor = ui.ThreadPoolExecutor
+
+    def recording_executor(max_workers):
+        captured["generation_workers"] = max_workers
+        return real_executor(max_workers=max_workers)
+
+    monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
 
     status, rows, state, results = ui.generate_evaluation_for_ui(
         "project", "endpoint", "key", "generation-model", "test-model", 1, "關聯擴展檢索", 8,
-        [TextChunk(1, "text", (1,))],
+        [TextChunk(1, "text", (1,))], 2, 5,
     )
 
     assert status.startswith("✅")
@@ -521,13 +528,23 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     assert state["questions"] == questions
     assert state["preferences"]["generation_model"] == "generation-model"
     assert captured["evaluation"]["questions"] == questions
+    assert state["preferences"]["generation_max_concurrent_requests"] == 2
+    assert captured["generation_workers"] == 2
+    assert state["preferences"]["test_max_concurrent_requests"] == 5
     assert results == []
 
 
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "實際答案", []))
+    real_executor = ui.ThreadPoolExecutor
+
+    def recording_executor(max_workers):
+        captured["test_workers"] = max_workers
+        return real_executor(max_workers=max_workers)
+
     monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *args: {"passed": True, "reason": "正確"})
     captured = {}
+    monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
     evaluation = {"questions": [
         {"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}
@@ -536,13 +553,14 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     status, rows, updated = ui.run_evaluation_for_ui(
         "project", "endpoint", "key", "embed-endpoint", "embed-key",
         "bolt", "neo4j", "user", "pass",
-        "model", "關聯擴展檢索", 8, evaluation,
+        "model", "關聯擴展檢索", 8, evaluation, 2,
     )
 
     assert "答對 1 題 / 共 1 題" in status
     assert "答錯：0 題" in status
     assert "正確率：100.0%" in status
     assert rows[0][3:] == ["實際答案", "✅ 通過", "正確"]
+    assert captured["test_workers"] == 2
     assert updated["results"][0]["passed"] is True
     assert captured["evaluation"] == updated
 
@@ -1129,7 +1147,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
 
     status = ui.save_evaluation_preferences_for_ui(
-        "project", "generation-model", "test-model", 12, "基本檢索", 6
+        "project", "generation-model", "test-model", 12, "基本檢索", 6, 4, 5
     )
 
     assert status.startswith("✅")
@@ -1139,6 +1157,8 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
         "question_count": 12,
         "retrieval_mode": "基本檢索",
         "top_k": 6,
+        "generation_max_concurrent_requests": 4,
+        "test_max_concurrent_requests": 5,
     }
 
 
@@ -1149,6 +1169,8 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
 
     loaded = ui.load_evaluation_for_ui("project")
 
+    assert loaded[8] == 3
+    assert loaded[9] == 3
     assert loaded[3:5] == ("legacy-model", "legacy-model")
     assert loaded[6] == "關聯擴展檢索"
 
