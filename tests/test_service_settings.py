@@ -198,6 +198,21 @@ def test_evaluation_cannot_restore_unapproved_models(monkeypatch):
     assert loaded[4]["value"] == "gpt-4o-mini"
 
 
+def test_load_migrates_five_llm_roles_with_summary_model(tmp_path, monkeypatch):
+    document = settings._default_document()
+    for profile in document["services"]["llm"]["profiles"].values():
+        profile["models"] = ["legacy-model"] * 5
+    path = tmp_path / "model_settings.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    monkeypatch.setattr(settings, "MODEL_SETTINGS_PATH", path)
+
+    loaded = settings.load_service_settings("llm", dict(DEFAULTS))
+
+    assert settings.MODEL_COUNTS["llm"] == 6
+    assert loaded["profiles"]["OpenAI"]["models"] == ["legacy-model"] * 6
+    assert loaded["profiles"]["Ollama"]["models"] == ["legacy-model"] * 6
+
+
 def test_profile_load_rejects_invalid_yaml_without_exposing_keys(tmp_path, monkeypatch):
     path = tmp_path / "model_settings.yaml"
     path.write_text("services:\n  llm:\n    secret: sensitive\n", encoding="utf-8")
@@ -228,7 +243,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
     fetch = event(button("獲得模型清單")["id"], "click")
     edit = event(component("LLM 模型清單")["id"], "input")
     async def run():
-        inputs = ["OpenAI", None, "https://api.openai.com/v1", "test-key", {"headers": ["使用", "模型名稱"], "data": []}, *([None] * 5)]
+        inputs = ["OpenAI", None, "https://api.openai.com/v1", "test-key", {"headers": ["使用", "模型名稱"], "data": []}, *([None] * settings.MODEL_COUNTS["llm"])]
         connected = (await app.process_api(test["id"], inputs, state=session))["data"]
         assert connected[7]["choices"] == [["OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"], ["OpenAI｜gpt-4o-mini", "gpt-4o-mini"]]
         assert all(field["value"] == "gpt-4.1-mini" for field in connected[7:])
@@ -254,8 +269,8 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
             "model_endpoint": "https://api.openai.com/v1", "api_key": "test-key",
             "graph_llm_model": "gpt-4o-mini", "extraction_llm_model": "outside-list",
         }})
-        refresh = event(component("現有專案")["id"], "focus")
-        await app.process_api(refresh["id"], [], state=session)
+        refresh = event(component("0. 專案設定")["id"], "select")
+        await app.process_api(refresh["id"], [None], state=session)
         load = event(button("載入專案")["id"], "click")
         loaded = (await app.process_api(load["id"], [project["project_id"], None, None], state=session))["data"]
         assert loaded[8]["value"] == "gpt-4o-mini"
@@ -273,10 +288,10 @@ def test_reload_restores_both_profiles_and_revokes_openai_connection(monkeypatch
     loaded = ui.reload_env_with_services_for_ui()
     assert loaded[4] == "OpenAI"
     assert loaded[7] == "llm-key"
-    assert loaded[17] == "OpenAI"
-    assert loaded[20] == "embedding-key"
+    assert loaded[18] == "OpenAI"
+    assert loaded[21] == "embedding-key"
     assert loaded[12]["choices"] == []
-    assert loaded[25]["choices"] == []
+    assert loaded[26]["choices"] == []
 
 
 def test_invalid_yaml_after_successful_connection_revokes_models(tmp_path, monkeypatch):

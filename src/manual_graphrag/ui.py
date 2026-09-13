@@ -1985,8 +1985,8 @@ def build_app() -> gr.Blocks:
         schema_model_key = gr.State(initial_llm_credentials[0][1])
         extraction_model_endpoint = gr.State(initial_llm_credentials[1][0])
         extraction_model_key = gr.State(initial_llm_credentials[1][1])
-        summary_model_endpoint = gr.State(initial_llm_credentials[2][0])
-        summary_model_key = gr.State(initial_llm_credentials[2][1])
+        summary_model_endpoint = gr.State(initial_llm_credentials[5][0])
+        summary_model_key = gr.State(initial_llm_credentials[5][1])
         generation_model_endpoint = gr.State(initial_llm_credentials[2][0])
         generation_model_key = gr.State(initial_llm_credentials[2][1])
         evaluation_model_endpoint = gr.State(initial_llm_credentials[3][0])
@@ -2187,7 +2187,7 @@ def build_app() -> gr.Blocks:
             )
         llm_model_fields = [
             graph_llm_model, extraction_llm_model, evaluation_generation_model,
-            evaluation_test_model, answer_model,
+            evaluation_test_model, answer_model, summary_model,
         ]
         llm_service_outputs = [
             llm_service_state, model_endpoint, api_key, llm_models_table,
