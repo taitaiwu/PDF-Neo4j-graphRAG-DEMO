@@ -133,11 +133,19 @@ def search_graph_evidence(
     embedding: list[float],
     retrieval_mode: str,
     top_k: int,
+    document_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    selected_documents = list(dict.fromkeys(
+        str(name).strip() for name in (document_names or []) if str(name).strip()
+    ))
     target_vector_index = vector_index_name(len(embedding))
     retrieval_query = """
     WITH node, score
     WHERE node.run_id = $run_id
+      AND (size($document_names) = 0 OR any(
+        document IN coalesce(node.source_documents, [])
+        WHERE document IN $document_names
+      ))
     RETURN node {
         .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
         .source_chunk_numbers, .source_documents
@@ -167,7 +175,10 @@ def search_graph_evidence(
                 query_vector=embedding,
                 top_k=candidate_count,
                 effective_search_ratio=3,
-                query_params={"run_id": run_id},
+                query_params={
+                    "run_id": run_id,
+                    "document_names": selected_documents,
+                },
                 ranker="naive",
             )
             selected = [
@@ -199,7 +210,10 @@ def search_graph_evidence(
                         WHERE any(
                             number IN coalesce(chunk.source_chunk_numbers, [])
                             WHERE number IN $chunk_numbers
-                        )
+                        ) AND (size($document_names) = 0 OR any(
+                            document IN coalesce(chunk.source_documents, [])
+                            WHERE document IN $document_names
+                        ))
                         RETURN chunk {
                             .evidence_id, .kind, .name, .source, .target, .text,
                             .source_pages, .source_chunk_numbers, .source_documents
@@ -207,6 +221,7 @@ def search_graph_evidence(
                         """,
                         run_id=run_id,
                         chunk_numbers=graph_chunk_numbers,
+                        document_names=selected_documents,
                     ).data()
                     source_chunks = [
                         _expanded_evidence(record["evidence"])
@@ -228,9 +243,14 @@ def search_graph_evidence(
                     related_entities = session.run(
                         """
                         MATCH (entity:GraphEvidence {run_id: $run_id, kind: '實體'})
-                        WHERE entity.name IN $names OR any(
-                            number IN coalesce(entity.source_chunk_numbers, [])
-                            WHERE number IN $chunk_numbers
+                        WHERE (size($document_names) = 0 OR any(
+                            document IN coalesce(entity.source_documents, [])
+                            WHERE document IN $document_names
+                        )) AND (
+                            entity.name IN $names OR any(
+                                number IN coalesce(entity.source_chunk_numbers, [])
+                                WHERE number IN $chunk_numbers
+                            )
                         )
                         RETURN entity {
                             .evidence_id, .kind, .name, .source, .target, .text,
@@ -239,6 +259,7 @@ def search_graph_evidence(
                         LIMIT $top_k
                         """,
                         run_id=run_id,
+                        document_names=selected_documents,
                         names=names,
                         chunk_numbers=chunk_numbers,
                         top_k=int(top_k),
@@ -258,9 +279,14 @@ def search_graph_evidence(
                     related = session.run(
                         """
                         MATCH (relation:GraphEvidence {run_id: $run_id, kind: '關係'})
-                        WHERE relation.source IN $names OR relation.target IN $names OR any(
-                            number IN coalesce(relation.source_chunk_numbers, [])
-                            WHERE number IN $chunk_numbers
+                        WHERE (size($document_names) = 0 OR any(
+                            document IN coalesce(relation.source_documents, [])
+                            WHERE document IN $document_names
+                        )) AND (
+                            relation.source IN $names OR relation.target IN $names OR any(
+                                number IN coalesce(relation.source_chunk_numbers, [])
+                                WHERE number IN $chunk_numbers
+                            )
                         )
                         RETURN relation {
                             .evidence_id, .kind, .name, .source, .target, .text,
@@ -269,6 +295,7 @@ def search_graph_evidence(
                         LIMIT $top_k
                         """,
                         run_id=run_id,
+                        document_names=selected_documents,
                         names=expanded_names,
                         chunk_numbers=chunk_numbers,
                         top_k=int(top_k),

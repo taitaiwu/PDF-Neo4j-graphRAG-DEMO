@@ -373,7 +373,7 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
 
     results = neo4j_service.search_graph_evidence(
         "bolt://db", "neo4j", "user", "password", "run-1",
-        "E01 +(重試)", [0.1], "基本檢索", 3,
+        "E01 +(重試)", [0.1], "基本檢索", 3, ["printer-a.pdf"],
     )
 
     assert [item["evidence_id"] for item in results] == [
@@ -384,10 +384,14 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
     assert initialization["fulltext_index_name"] == "graph_evidence_fulltext"
     assert initialization["neo4j_database"] == "neo4j"
     assert "$run_id" in initialization["retrieval_query"]
+    assert "$document_names" in initialization["retrieval_query"]
     arguments = FakeOfficialRetriever.search_arguments
     assert arguments["query_text"] == r"E01 \+\(重試\)"
     assert arguments["query_vector"] == [0.1]
     assert arguments["top_k"] == 3
     assert arguments["effective_search_ratio"] == 3
-    assert arguments["query_params"] == {"run_id": "run-1"}
+    assert arguments["query_params"] == {
+        "run_id": "run-1",
+        "document_names": ["printer-a.pdf"],
+    }
     assert arguments["ranker"] == "naive"
