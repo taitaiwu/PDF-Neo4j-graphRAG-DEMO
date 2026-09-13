@@ -8,16 +8,17 @@ def test_generate_evaluation_questions_validates_and_numbers(monkeypatch) -> Non
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({
             "questions": [
-                {"question": "manual.pdf 的問題一？", "expected_answer": "答案一", "source_pages": [2],
+                {"question": "CX17 系列的問題一？", "expected_answer": "答案一", "source_pages": [2],
                  "source_chunk_numbers": [1]},
-                {"question": "manual.pdf 的問題二？", "expected_answer": "答案二", "source_pages": [3],
+                {"question": "CX17 系列的問題二？", "expected_answer": "答案二", "source_pages": [3],
                  "source_chunk_numbers": [1]},
             ]
         })
 
     monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
     questions = evaluation_service.generate_evaluation_questions(
-        "http://models", "key", "model", [TextChunk(1, "文件", (2, 3), "manual.pdf")], 2
+        "http://models", "key", "model", [TextChunk(1, "文件", (2, 3), "manual.pdf")], 2, [],
+        {"primary_identifier": "CX17 系列", "identifiers": ["Windows 7"]},
     )
 
     assert [item["number"] for item in questions] == [1, 2]
@@ -146,7 +147,8 @@ def test_generate_document_summary_returns_routing_metadata(monkeypatch) -> None
         captured["prompt"] = args[4]
         return kwargs["validator"]({
             "summary": "印表機 A 的網路設定與列印手冊",
-            "identifiers": ["印表機 A", "印表機 A"],
+            "primary_identifier": "Epson AcuLaser CX17 系列",
+            "identifiers": ["Epson AcuLaser CX17", "CX17NF", "CX17WF", "額外一", "額外二"],
             "topics": ["網路設定"],
             "keywords": ["IP 位址"],
         })
@@ -163,11 +165,13 @@ def test_generate_document_summary_returns_routing_metadata(monkeypatch) -> None
     assert result == {
         "document": "printer-a.pdf",
         "summary": "印表機 A 的網路設定與列印手冊",
-        "identifiers": ["印表機 A"],
+        "primary_identifier": "Epson AcuLaser CX17 系列",
+        "identifiers": ["Epson AcuLaser CX17 系列", "Epson AcuLaser CX17", "CX17NF", "CX17WF", "額外一"],
         "topics": ["網路設定"],
         "keywords": ["IP 位址"],
     }
     assert "printer-a.pdf" in captured["prompt"]
+    assert "排除出版商" in captured["prompt"]
 
 
 def test_generate_evaluation_questions_joins_multiple_source_documents(monkeypatch) -> None:

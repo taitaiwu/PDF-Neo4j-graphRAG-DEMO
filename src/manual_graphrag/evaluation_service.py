@@ -60,7 +60,11 @@ def generate_document_summary(
         summary = str(payload.get("summary", "")).strip()
         if not summary:
             raise ValueError("文件摘要不得為空")
-        normalized: dict[str, Any] = {"document": document, "summary": summary}
+        primary_identifier = str(payload.get("primary_identifier", "")).strip()
+        normalized: dict[str, Any] = {
+            "document": document, "summary": summary,
+            "primary_identifier": primary_identifier,
+        }
         for field in ("identifiers", "topics", "keywords"):
             values = payload.get(field, [])
             if not isinstance(values, list):
@@ -68,6 +72,12 @@ def generate_document_summary(
             normalized[field] = list(dict.fromkeys(
                 str(value).strip() for value in values if str(value).strip()
             ))
+        if primary_identifier:
+            normalized["identifiers"] = list(dict.fromkeys(
+                [primary_identifier, *normalized["identifiers"]]
+            ))[:5]
+        else:
+            normalized["identifiers"] = normalized["identifiers"][:5]
         return normalized
 
     return _chat_json(
@@ -75,9 +85,12 @@ def generate_document_summary(
         api_key,
         model,
         "你是文件分類與路由摘要助手。只能根據文件內容整理摘要，並只輸出 JSON。",
-        "請建立供後續問題路由使用的繁體中文短摘要，辨識可區分來源的文件識別資訊、主要主題與關鍵詞。文件識別資訊可包含設備或產品名稱與型號、系統或軟體名稱與版本、組織、規範名稱、研究對象或其他文件專屬名稱。"
+        "請建立供後續問題路由使用的繁體中文短摘要。文件識別資訊只可包含文件主要描述對象的正式名稱、型號、系統名稱、規範名稱、研究對象或其他唯一名稱。"
+        "primary_identifier 請優先使用能涵蓋整份文件的共同名稱或系列名稱。identifiers 最多列 5 項。"
+        "排除出版商、作者、版權所有者、文件編號、作業系統、支援平台、一般欄位名稱、版本欄位、通用術語，以及僅在內文附帶提及的名稱。"
+        "判斷標準是：把名稱放入問題後，是否能讓讀者辨認該問題適用的主要文件對象；若不能就不得收錄。找不到時 primary_identifier 使用空字串且 identifiers 回傳空陣列。"
         "摘要應能區分內容相似但來源不同的文件。輸出格式："
-        '{"summary":"...","identifiers":["..."],"topics":["..."],"keywords":["..."]}。\n\n'
+        '{"summary":"...","primary_identifier":"...","identifiers":["..."],"topics":["..."],"keywords":["..."]}。\n\n'
         f"文件名稱：{document}\n文件內容：\n{context}",
         temperature=0,
         validator=validate,
@@ -133,6 +146,7 @@ def select_relevant_documents(
         {
             "document": item.get("document", ""),
             "summary": item.get("summary", ""),
+            "primary_identifier": item.get("primary_identifier", ""),
             "identifiers": item.get("identifiers", item.get("product_names", [])),
             "topics": item.get("topics", []),
             "keywords": item.get("keywords", []),
@@ -176,11 +190,13 @@ def generate_evaluation_questions(
         if str(question).strip()
     ]
     summary = document_summary or {}
-    identifiers = list(dict.fromkeys(
+    primary_identifier = str(summary.get("primary_identifier", "")).strip()
+    listed_identifiers = list(dict.fromkeys(
         str(value).strip()
         for value in summary.get("identifiers", summary.get("product_names", []))
         if str(value).strip()
     ))
+    identifiers = [primary_identifier] if primary_identifier else listed_identifiers[:1]
     if not identifiers:
         identifiers = [chunks[0].document] if chunks[0].document else []
 
