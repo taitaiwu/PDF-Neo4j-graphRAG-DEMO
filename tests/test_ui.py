@@ -508,6 +508,10 @@ def test_project_answer_appends_history(monkeypatch) -> None:
 def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     questions = [{"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}]
     monkeypatch.setattr(ui, "generate_evaluation_questions", lambda *args: questions)
+    monkeypatch.setattr(
+        ui, "generate_document_summary",
+        lambda *args: {"document": args[3][0].document, "summary": "摘要"},
+    )
     captured = {}
     real_executor = ui.ThreadPoolExecutor
 
@@ -552,6 +556,10 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
         }]
 
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(
+        ui, "generate_document_summary",
+        lambda *args: {"document": args[3][0].document, "summary": "摘要"},
+    )
     monkeypatch.setattr(ui, "save_project", lambda *args: {})
 
     status, _rows, state, _results = ui.generate_evaluation_for_ui(
@@ -590,6 +598,10 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
         }]
 
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(
+        ui, "generate_document_summary",
+        lambda *args: {"document": args[3][0].document, "summary": "摘要"},
+    )
     monkeypatch.setattr(ui, "save_project", lambda *args: {})
 
     status, _rows, state, _results = ui.generate_evaluation_for_ui(

@@ -23,6 +23,7 @@ from .service_settings import (
 )
 from .evaluation_service import (
     generate_evaluation_questions,
+    generate_document_summary,
     judge_evaluation_answer,
     questions_are_similar,
 )
@@ -739,7 +740,10 @@ def generate_evaluation_for_ui(
         def generate_for_document(
             document: str,
             selected_chunks: list[TextChunk],
-        ) -> list[dict[str, Any]]:
+        ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+            summary = generate_document_summary(
+                model_endpoint, api_key, generation_model, selected_chunks
+            )
             accepted: list[dict[str, Any]] = []
             last_error = ""
             attempts = 0
@@ -773,7 +777,7 @@ def generate_evaluation_for_ui(
                     f"無法在去重後補足 {document} 的題目數"
                     f"（{len(accepted)}/{count}）{detail}"
                 )
-            return accepted
+            return summary, accepted
 
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             document_results = list(executor.map(
@@ -782,7 +786,8 @@ def generate_evaluation_for_ui(
             ))
 
         questions = []
-        for document_questions in document_results:
+        document_summaries = [result[0] for result in document_results]
+        for _, document_questions in document_results:
             for question in document_questions:
                 questions.append({**question, "number": len(questions) + 1})
         evaluation = {
@@ -792,6 +797,7 @@ def generate_evaluation_for_ui(
                             "generation_max_concurrent_requests": concurrency,
                             "test_max_concurrent_requests": int(test_max_concurrent_requests)},
             "questions": questions, "results": [], "dirty": False,
+            "document_summaries": document_summaries,
         }
         save_project(project_id, {"evaluation": evaluation})
     except (OSError, TypeError, ValueError) as exc:

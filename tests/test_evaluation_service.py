@@ -88,6 +88,37 @@ def test_generate_evaluation_questions_rejects_missing_chunk_numbers(monkeypatch
         )
 
 
+def test_generate_document_summary_returns_routing_metadata(monkeypatch) -> None:
+    captured = {}
+
+    def fake_chat(*args, **kwargs):
+        captured["prompt"] = args[4]
+        return kwargs["validator"]({
+            "summary": "印表機 A 的網路設定與列印手冊",
+            "product_names": ["印表機 A", "印表機 A"],
+            "topics": ["網路設定"],
+            "keywords": ["IP 位址"],
+        })
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+
+    result = evaluation_service.generate_document_summary(
+        "url",
+        "",
+        "model",
+        [TextChunk(1, "如何查詢 IP 位址", (1,), "printer-a.pdf")],
+    )
+
+    assert result == {
+        "document": "printer-a.pdf",
+        "summary": "印表機 A 的網路設定與列印手冊",
+        "product_names": ["印表機 A"],
+        "topics": ["網路設定"],
+        "keywords": ["IP 位址"],
+    }
+    assert "printer-a.pdf" in captured["prompt"]
+
+
 def test_generate_evaluation_questions_joins_multiple_source_documents(monkeypatch) -> None:
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({

@@ -44,6 +44,46 @@ def _evaluation_context(chunks: list[TextChunk]) -> tuple[str, set[int]]:
     return context, {chunk.number for chunk in sampled}
 
 
+def generate_document_summary(
+    base_url: str,
+    api_key: str,
+    model: str,
+    chunks: list[TextChunk],
+) -> dict[str, Any]:
+    if not chunks:
+        raise ValueError("無法為空文件建立摘要")
+    context, _ = _evaluation_context(chunks)
+    document = chunks[0].document or "未命名文件"
+
+    def validate(payload: dict[str, Any]) -> dict[str, Any]:
+        summary = str(payload.get("summary", "")).strip()
+        if not summary:
+            raise ValueError("文件摘要不得為空")
+        normalized: dict[str, Any] = {"document": document, "summary": summary}
+        for field in ("product_names", "topics", "keywords"):
+            values = payload.get(field, [])
+            if not isinstance(values, list):
+                raise ValueError(f"{field} 必須是陣列")
+            normalized[field] = list(dict.fromkeys(
+                str(value).strip() for value in values if str(value).strip()
+            ))
+        return normalized
+
+    return _chat_json(
+        base_url,
+        api_key,
+        model,
+        "你是文件分類與路由摘要助手。只能根據文件內容整理摘要，並只輸出 JSON。",
+        "請建立供後續問題路由使用的繁體中文短摘要，辨識產品名稱、型號、主要主題與關鍵詞。"
+        "摘要應能區分內容相似但產品不同的文件。輸出格式："
+        '{"summary":"...","product_names":["..."],"topics":["..."],"keywords":["..."]}。\n\n'
+        f"文件名稱：{document}\n文件內容：\n{context}",
+        temperature=0,
+        validator=validate,
+    )
+
+
+
 def generate_evaluation_questions(
     base_url: str,
     api_key: str,
