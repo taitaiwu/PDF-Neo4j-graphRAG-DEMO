@@ -51,7 +51,6 @@ from .qa_service import answer_graph_question, check_embedding_connection, embed
 from .storage import write_json
 
 
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 
 
@@ -1044,7 +1043,6 @@ def plan_schema_for_ui(
             llm_model,
             planning_chunks,
             float(temperature),
-            DEFAULT_MAX_OUTPUT_TOKENS,
             lambda value, description: progress(value, desc=description),
             schema_granularity,
             int(max_concurrent_requests),
@@ -1099,7 +1097,6 @@ def extract_graph_for_ui(
             chunks,
             schema,
             float(temperature),
-            DEFAULT_MAX_OUTPUT_TOKENS,
             int(max_concurrent_requests),
             lambda value, description: progress(value, desc=description),
             control=run_control,
@@ -1141,7 +1138,6 @@ def extract_graph_for_ui(
         "document": document_name,
         "llm_model": llm_model,
         "temperature": float(temperature),
-        "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
         "max_concurrent_requests": int(max_concurrent_requests),
         "schema": schema,
         "entities": extraction.entities,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from .chunking import TextChunk
@@ -102,7 +101,6 @@ def generate_evaluation_questions(
         '"source_chunk_numbers":[1]}]}。\n\n'
         f"文件：\n{context}",
         temperature=0.2,
-        max_output_tokens=max(2048, count * 300),
         validator=validate,
     )
     return result["questions"]

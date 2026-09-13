@@ -44,7 +44,7 @@ def test_plan_graph_schema_parses_fenced_json_and_uses_chunks(monkeypatch) -> No
     chunks = [TextChunk(1, "設備 A 使用設備 B", (2,))]
 
     plan = graph_service.plan_graph_schema(
-        "http://localhost:11434/v1", "secret", "model-a", chunks, 0.4, 777
+        "http://localhost:11434/v1", "secret", "model-a", chunks, 0.4
     )
 
     assert plan.schema == SCHEMA
@@ -406,7 +406,7 @@ def test_plan_graph_schema_requires_chunks() -> None:
 
 def test_chat_json_rejects_invalid_generation_options() -> None:
     with pytest.raises(ValueError, match="temperature"):
-        graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 2.1, 100)
+        graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 2.1)
 
 
 def _rate_limit_error(retry_after: str | None = None) -> urllib.error.HTTPError:
@@ -559,7 +559,7 @@ def test_chat_json_retries_invalid_output_once(monkeypatch) -> None:
     monkeypatch.setattr(graph_service, "_post_json", fake_post)
 
     result = graph_service._chat_json(
-        "http://models/v1", "", "llm", "system", "user", 0.7, 2048
+        "http://models/v1", "", "llm", "system", "user", 0.7
     )
 
     assert result == SCHEMA
@@ -589,7 +589,6 @@ def test_chat_json_retries_schema_that_fails_structure_validation(monkeypatch) -
         "system",
         "user",
         0.7,
-        2048,
         graph_service.validate_schema,
     )
 
@@ -615,7 +614,6 @@ def test_chat_json_reports_schema_validation_error_after_retry(monkeypatch) -> N
             "system",
             "user",
             0,
-            2048,
             graph_service.validate_schema,
         )
 
@@ -633,6 +631,4 @@ def test_chat_json_reports_token_truncation_after_retry(monkeypatch) -> None:
     )
 
     with pytest.raises(ValueError, match="提高 Ollama context length"):
-        graph_service._chat_json(
-            "http://models/v1", "", "llm", "system", "user", 0, 100
-        )
+        graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 0)

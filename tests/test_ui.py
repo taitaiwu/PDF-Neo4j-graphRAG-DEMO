@@ -990,7 +990,7 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
     assert relationships[0][:3] == ["設備 A", "USES", "設備 B"]
     assert state["document"] == "manual.pdf"
     assert state["temperature"] == 0.2
-    assert state["max_output_tokens"] == ui.DEFAULT_MAX_OUTPUT_TOKENS
+    assert "max_output_tokens" not in state
     assert state["max_concurrent_requests"] == 3
     assert state["chunks"][0]["text"] == "text"
     assert state["neo4j_imported"] is False

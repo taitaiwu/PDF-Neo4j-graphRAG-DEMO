@@ -242,7 +242,6 @@ def _chat_json(
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0,
-    max_output_tokens: int = 2048,
     validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     on_retry: Callable[[int, float], None] | None = None,
     control: RunControl | None = None,
@@ -417,7 +416,6 @@ def plan_graph_schema(
     llm_model: str,
     chunks: list[TextChunk],
     temperature: float = 0,
-    max_output_tokens: int = 2048,
     progress_callback: Callable[[float | None, str], None] | None = None,
     schema_granularity: str = "平衡",
     max_concurrent_requests: int = 3,
@@ -472,7 +470,6 @@ def plan_graph_schema(
             "\"source_types\":[\"...\"],\"target_types\":[\"...\"]}]}。\n\n"
             f"文件 chunks：\n{context}",
             temperature,
-            max_output_tokens,
             validate_schema,
             on_retry=report_retry,
             control=control,
@@ -539,7 +536,6 @@ def plan_graph_schema(
                 "輸出格式必須維持 entity_types 與 relationship_types。\n\n"
                 f"候選 Schema：\n{json.dumps(group, ensure_ascii=False)}",
                 temperature,
-                max_output_tokens,
                 validate_schema,
                 on_retry=report_retry,
                 control=control,
@@ -595,7 +591,6 @@ def extract_graph(
     chunks: list[TextChunk],
     schema: dict[str, Any],
     temperature: float = 0,
-    max_output_tokens: int = 2048,
     max_concurrent_requests: int = 3,
     progress_callback: Callable[[float | None, str], None] | None = None,
     control: RunControl | None = None,
@@ -648,7 +643,6 @@ def extract_graph(
             "\"type\":\"...\",\"description\":\"...\",\"source_chunk_numbers\":[1]}]}。\n\n"
             f"schema：\n{json.dumps(schema, ensure_ascii=False)}\n\n文件：\n{context}",
             temperature,
-            max_output_tokens,
             on_retry=report_retry,
             control=control,
         )

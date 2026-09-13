@@ -10,7 +10,6 @@ class BuildConfig:
     chunk_size: int = 1500
     chunk_overlap: int = 200
     temperature: float = 0.0
-    max_output_tokens: int = 2048
 
     def __post_init__(self) -> None:
         if not self.build_model.strip():
@@ -23,8 +22,6 @@ class BuildConfig:
             raise ValueError("chunk_overlap 必須大於等於 0 且小於 chunk_size")
         if not 0 <= self.temperature <= 2:
             raise ValueError("temperature 必須介於 0 到 2")
-        if self.max_output_tokens < 1:
-            raise ValueError("最大輸出 tokens 必須大於 0")
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
