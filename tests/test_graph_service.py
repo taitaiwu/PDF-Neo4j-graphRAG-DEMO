@@ -55,7 +55,7 @@ def test_plan_graph_schema_parses_fenced_json_and_uses_chunks(monkeypatch) -> No
     assert captured["url"] == "http://localhost:11434/v1/chat/completions"
     assert captured["api_key"] == "secret"
     assert captured["payload"]["temperature"] == 0.4
-    assert captured["payload"]["max_tokens"] == 777
+    assert "max_tokens" not in captured["payload"]
     assert "[CHUNK 1; PAGES 2]" in captured["payload"]["messages"][1]["content"]
 
 
@@ -407,8 +407,6 @@ def test_plan_graph_schema_requires_chunks() -> None:
 def test_chat_json_rejects_invalid_generation_options() -> None:
     with pytest.raises(ValueError, match="temperature"):
         graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 2.1, 100)
-    with pytest.raises(ValueError, match="最大輸出 tokens"):
-        graph_service._chat_json("http://models/v1", "", "llm", "system", "user", 0, 0)
 
 
 def _rate_limit_error(retry_after: str | None = None) -> urllib.error.HTTPError:
@@ -634,7 +632,7 @@ def test_chat_json_reports_token_truncation_after_retry(monkeypatch) -> None:
         },
     )
 
-    with pytest.raises(ValueError, match="提高最大輸出 tokens"):
+    with pytest.raises(ValueError, match="提高 Ollama context length"):
         graph_service._chat_json(
             "http://models/v1", "", "llm", "system", "user", 0, 100
         )

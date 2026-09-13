@@ -249,8 +249,6 @@ def _chat_json(
 ) -> dict[str, Any]:
     if not 0 <= temperature <= 2:
         raise ValueError("temperature 必須介於 0 到 2")
-    if max_output_tokens < 1:
-        raise ValueError("最大輸出 tokens 必須大於 0")
     if not model.strip():
         raise ValueError("請選擇 LLM 模型")
 
@@ -266,7 +264,6 @@ def _chat_json(
             {
                 "model": model.strip(),
                 "temperature": request_temperature,
-                "max_tokens": int(max_output_tokens),
                 "messages": request_messages,
             },
             api_key,
@@ -305,8 +302,8 @@ def _chat_json(
                 "max_tokens",
             }:
                 raise ValueError(
-                    "模型 JSON 連續兩次無法通過解析或結構驗證，且輸出可能被截斷；"
-                    "請提高最大輸出 tokens 或減少 Schema 類型數量"
+                    "模型 JSON 連續兩次無法通過解析或結構驗證，且模型因長度限制截斷；"
+                    "請提高 Ollama context length 或減少 Schema 類型數量"
                 ) from exc
             raise ValueError(
                 f"模型 JSON 連續兩次無法通過解析或結構驗證：{exc}"

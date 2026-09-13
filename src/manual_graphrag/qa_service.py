@@ -56,7 +56,6 @@ def answer_graph_question(
         {
             "model": answer_model.strip(),
             "temperature": 0,
-            "max_tokens": 2048,
             "messages": [
                 {
                     "role": "system",
