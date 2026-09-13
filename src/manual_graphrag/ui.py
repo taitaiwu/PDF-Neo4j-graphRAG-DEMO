@@ -16,7 +16,7 @@ from .config import (
 )
 from .env_store import load_env, save_env
 from .service_settings import (
-    capture_service_settings, configured_models, load_service_settings, openai_models,
+    capture_service_settings, configured_models, load_service_settings,
     preferred_service_model, provider_models, restore_service_settings, resolve_model_service, save_service_settings,
     service_choice_items, service_choices,
 )
@@ -329,8 +329,13 @@ def create_project_for_ui(name: str) -> tuple[dict[str, Any], dict[str, Any], st
     return gr.update(choices=_project_choices(), value=project["project_id"]), project, f"✅ 已建立專案「{project['name']}」。"
 
 
-def refresh_projects_for_ui() -> dict[str, Any]:
-    return gr.update(choices=_project_choices())
+def refresh_projects_for_ui(project: dict[str, Any] | None = None) -> dict[str, Any]:
+    choices = _project_choices()
+    available_ids = {project_id for _, project_id in choices}
+    selected_id = str((project or {}).get("project_id") or "")
+    return gr.update(
+        choices=choices, value=selected_id if selected_id in available_ids else None
+    )
 
 
 def reset_new_project_pdf_status_for_ui() -> str:
@@ -1354,7 +1359,6 @@ def build_app() -> gr.Blocks:
     embedding_settings = load_service_settings("embedding", env)
     llm_choices = service_choice_items(llm_settings)
     embedding_choices = service_choice_items(embedding_settings)
-    llm_allowed = service_choices(llm_settings)
     embedding_allowed = service_choices(embedding_settings)
     llm_profile = llm_settings["profiles"][llm_settings["active"]]
     embedding_profile = embedding_settings["profiles"][embedding_settings["active"]]
@@ -1399,7 +1403,7 @@ def build_app() -> gr.Blocks:
             project_status = gr.Markdown("尚未選擇專案；載入後，設定與處理結果都會自動保存。")
             gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Neo4j Password 為明文；模型 API Key 僅保存在 `.env`。")
 
-        with gr.Tab("1. 連線設定") as connection_tab:
+        with gr.Tab("1. 連線設定"):
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Neo4j")
@@ -1824,8 +1828,8 @@ def build_app() -> gr.Blocks:
             chunk_table, page_status, history_table,
             entity_table, relationship_table, build_status, import_status,
         ]
-        project_tab.select(refresh_projects_for_ui, outputs=project_selector)
-        app.load(refresh_projects_for_ui, outputs=project_selector)
+        project_tab.select(refresh_projects_for_ui, inputs=project_state, outputs=project_selector)
+        app.load(refresh_projects_for_ui, inputs=project_state, outputs=project_selector)
         create_project_event = create_project_button.click(
             create_project_for_ui, inputs=new_project_name,
             outputs=[project_selector, project_state, project_status],

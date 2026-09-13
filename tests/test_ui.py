@@ -1168,6 +1168,7 @@ def test_project_list_refreshes_on_page_load_and_tab_select_without_focus_rerend
     triggers = {
         target[1] for dependency in dependencies for target in dependency["targets"]
     }
+    assert all(len(dependency["inputs"]) == 1 for dependency in dependencies)
     assert triggers == {"load", "select"}
     assert "focus" not in triggers
     assert all(dependency["outputs"] == [selector["id"]] for dependency in dependencies)
@@ -1176,10 +1177,16 @@ def test_project_list_refreshes_on_page_load_and_tab_select_without_focus_rerend
     for dependency in dependencies:
         update = app.fns[dependency["id"]].fn()
         assert update["choices"] == [("新增專案", project["project_id"])]
-        assert "value" not in update
+        assert update["value"] is None
+
+    selected = ui.refresh_projects_for_ui(project)
+    assert selected["choices"] == [("新增專案", project["project_id"])]
+    assert selected["value"] == project["project_id"]
 
     ui.delete_project(project["project_id"])
-    assert ui.refresh_projects_for_ui()["choices"] == []
+    deleted = ui.refresh_projects_for_ui(project)
+    assert deleted["choices"] == []
+    assert deleted["value"] is None
 
 
 def test_unselected_models_report_actionable_errors_without_network() -> None:
