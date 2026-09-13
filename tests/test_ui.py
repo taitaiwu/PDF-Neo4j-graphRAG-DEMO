@@ -305,7 +305,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
         for dependency in app.config["dependencies"]
     )
     assert any(component.get("props", {}).get("label") == "3. PDF 摘要" for component in app.config["components"])
-    assert any(component.get("props", {}).get("headers") == ["文件", "摘要", "產品／型號", "主題", "關鍵詞"] for component in app.config["components"])
+    assert any(component.get("props", {}).get("headers") == ["文件", "摘要", "文件識別資訊", "主題", "關鍵詞"] for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "5. 自動問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "6. 問答測試" for component in app.config["components"])
     assert any(component.get("props", {}).get("label") == "7. 歷史紀錄" for component in app.config["components"])
@@ -518,7 +518,7 @@ def test_generate_document_summaries_for_ui_saves_and_displays_each_pdf(monkeypa
         ui, "generate_document_summary",
         lambda _endpoint, _key, _model, chunks: {
             "document": chunks[0].document, "summary": f"{chunks[0].document} 摘要",
-            "product_names": ["型號 A"], "topics": ["設定"], "keywords": ["IP"],
+            "identifiers": ["型號 A"], "topics": ["設定"], "keywords": ["IP"],
         },
     )
     monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {"questions": [{"question": "Q"}]}})
@@ -577,7 +577,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
     requested_documents = []
     exclusions_by_document = {"a.pdf": [], "b.pdf": []}
 
-    def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None):
+    def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None, _summary=None):
         document = chunks[0].document
         exclusions_by_document[document].append(list(_excluded or []))
         requested_documents.append(document)
@@ -621,7 +621,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
 def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
     calls = {"count": 0}
 
-    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None):
+    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None, _summary=None):
         calls["count"] += 1
         question = "相同問題？" if calls["count"] <= 2 else "不同問題？"
         if excluded:

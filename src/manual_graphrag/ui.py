@@ -727,7 +727,7 @@ def save_evaluation_preferences_for_ui(
 def _document_summary_rows(summaries: list[dict[str, Any]]) -> list[list[str]]:
     return [[
         str(item.get("document", "")), str(item.get("summary", "")),
-        "、".join(item.get("product_names") or []),
+        "、".join(item.get("identifiers", item.get("product_names", [])) or []),
         "、".join(item.get("topics") or []),
         "、".join(item.get("keywords") or []),
     ] for item in summaries]
@@ -808,6 +808,11 @@ def generate_evaluation_for_ui(
         document_chunks = list(chunks_by_document.values())
         if not document_chunks:
             raise ValueError("請先解析 PDF 並產生 chunks")
+        existing_evaluation = dict(load_project(project_id).get("evaluation") or {})
+        summaries_by_document = {
+            str(item.get("document", "")): item
+            for item in existing_evaluation.get("document_summaries", [])
+        }
         def generate_for_document(
             document: str,
             selected_chunks: list[TextChunk],
@@ -827,6 +832,7 @@ def generate_evaluation_for_ui(
                         selected_chunks,
                         1,
                         excluded,
+                        summaries_by_document.get(document),
                     )
                 except ValueError as exc:
                     last_error = str(exc)
@@ -857,7 +863,6 @@ def generate_evaluation_for_ui(
         for document_questions in document_results:
             for question in document_questions:
                 questions.append({**question, "number": len(questions) + 1})
-        existing_evaluation = dict(load_project(project_id).get("evaluation") or {})
         existing_preferences = dict(existing_evaluation.get("preferences") or {})
         evaluation = {
             **existing_evaluation,
@@ -1717,7 +1722,7 @@ def build_app() -> gr.Blocks:
         with gr.Tab("3. PDF 摘要", interactive=False) as summary_tab:
             gr.Markdown(
                 "### 建立 PDF 路由摘要\n"
-                "為每份 PDF 建立可區分產品、型號與主題的摘要，供自動測試時由 LLM 選擇檢索文件。"
+                "為每份 PDF 建立可區分來源之識別資訊與主題的摘要，供自動測試時由 LLM 選擇檢索文件。"
             )
             with gr.Row():
                 summary_model = gr.Dropdown(
@@ -1730,7 +1735,7 @@ def build_app() -> gr.Blocks:
             generate_summaries_button = gr.Button("建立／重新建立全部 PDF 摘要", variant="primary")
             summary_status = gr.Markdown("尚未建立 PDF 摘要。")
             document_summaries_table = gr.Dataframe(
-                headers=["文件", "摘要", "產品／型號", "主題", "關鍵詞"],
+                headers=["文件", "摘要", "文件識別資訊", "主題", "關鍵詞"],
                 datatype=["str", "str", "str", "str", "str"],
                 interactive=False, wrap=True,
             )

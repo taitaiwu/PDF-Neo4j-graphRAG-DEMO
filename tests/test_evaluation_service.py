@@ -8,9 +8,9 @@ def test_generate_evaluation_questions_validates_and_numbers(monkeypatch) -> Non
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({
             "questions": [
-                {"question": "問題一？", "expected_answer": "答案一", "source_pages": [2],
+                {"question": "manual.pdf 的問題一？", "expected_answer": "答案一", "source_pages": [2],
                  "source_chunk_numbers": [1]},
-                {"question": "問題二？", "expected_answer": "答案二", "source_pages": [3],
+                {"question": "manual.pdf 的問題二？", "expected_answer": "答案二", "source_pages": [3],
                  "source_chunk_numbers": [1]},
             ]
         })
@@ -46,6 +46,7 @@ def test_generate_evaluation_questions_rejects_similar_questions(monkeypatch) ->
             [TextChunk(1, "容量為 100", (1,), "manual.pdf")],
             1,
             ["系統的最大容量是多少"],
+            {"identifiers": ["系統"]},
         )
 
 
@@ -127,7 +128,7 @@ def test_generate_evaluation_questions_rejects_missing_chunk_numbers(monkeypatch
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({
             "questions": [
-                {"question": "問題一？", "expected_answer": "答案一", "source_pages": [2]},
+                {"question": "manual.pdf 的問題一？", "expected_answer": "答案一", "source_pages": [2]},
             ]
         })
 
@@ -145,7 +146,7 @@ def test_generate_document_summary_returns_routing_metadata(monkeypatch) -> None
         captured["prompt"] = args[4]
         return kwargs["validator"]({
             "summary": "印表機 A 的網路設定與列印手冊",
-            "product_names": ["印表機 A", "印表機 A"],
+            "identifiers": ["印表機 A", "印表機 A"],
             "topics": ["網路設定"],
             "keywords": ["IP 位址"],
         })
@@ -162,7 +163,7 @@ def test_generate_document_summary_returns_routing_metadata(monkeypatch) -> None
     assert result == {
         "document": "printer-a.pdf",
         "summary": "印表機 A 的網路設定與列印手冊",
-        "product_names": ["印表機 A"],
+        "identifiers": ["印表機 A"],
         "topics": ["網路設定"],
         "keywords": ["IP 位址"],
     }
@@ -173,7 +174,7 @@ def test_generate_evaluation_questions_joins_multiple_source_documents(monkeypat
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({
             "questions": [
-                {"question": "問題一？", "expected_answer": "答案一", "source_pages": [1],
+                {"question": "a.pdf 的問題一？", "expected_answer": "答案一", "source_pages": [1],
                  "source_chunk_numbers": [1, 2]},
             ]
         })
