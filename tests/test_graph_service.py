@@ -486,6 +486,107 @@ def test_post_json_uses_extended_chat_timeout(monkeypatch) -> None:
     assert captured["timeout"] == graph_service.CHAT_COMPLETION_TIMEOUT_SECONDS == 600
 
 
+def test_identifies_only_configured_ollama_chat_url(monkeypatch) -> None:
+    monkeypatch.setattr(
+        graph_service,
+        "load_env",
+        lambda: {"MODEL_OLLAMA_API_BASE": "http://ollama:11434/v1"},
+    )
+
+    assert graph_service._is_ollama_chat_url(
+        "http://ollama:11434/v1/chat/completions"
+    )
+    assert not graph_service._is_ollama_chat_url(
+        "http://ollama:11434/v1/embeddings"
+    )
+    assert not graph_service._is_ollama_chat_url(
+        "http://openai/v1/chat/completions"
+    )
+
+
+def test_post_json_collects_ollama_chat_stream(monkeypatch) -> None:
+    captured = {}
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant", "content": "{\"ok\":"}, "finish_reason": None}]},
+        {"choices": [{"delta": {"content": "true}"}, "finish_reason": "stop"}]},
+    ]
+    stream = "".join(
+        f"data: {json.dumps(chunk)}\n\n" for chunk in chunks
+    ) + "data: [DONE]\n\n"
+
+    def fake_urlopen(request, timeout=None):
+        captured["payload"] = json.loads(request.data)
+        captured["accept"] = request.headers.get("Accept")
+        return io.BytesIO(stream.encode("utf-8"))
+
+    monkeypatch.setattr(graph_service, "_is_ollama_chat_url", lambda _url: True)
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    response = graph_service._post_json(
+        "http://ollama:11434/v1/chat/completions", {}, ""
+    )
+
+    assert captured == {
+        "payload": {"stream": True},
+        "accept": "text/event-stream",
+    }
+    assert graph_service._chat_response_content(response) == (
+        "{\"ok\":true}", "stop"
+    )
+
+
+def test_post_json_keeps_non_ollama_requests_non_streaming(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["payload"] = json.loads(request.data)
+        return io.BytesIO(b"{\"ok\": true}")
+
+    monkeypatch.setattr(graph_service, "_is_ollama_chat_url", lambda _url: False)
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    assert graph_service._post_json(
+        "http://openai/v1/chat/completions", {}, ""
+    ) == {"ok": True}
+    assert captured["payload"] == {}
+
+
+def test_post_json_retries_ollama_stream_without_completion(monkeypatch) -> None:
+    calls = {"count": 0}
+    sleeps = []
+
+    def event(content, finish_reason=None):
+        return (
+            "data: "
+            + json.dumps({
+                "choices": [{
+                    "delta": {"content": content},
+                    "finish_reason": finish_reason,
+                }]
+            })
+            + "\n\n"
+        ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return io.BytesIO(event("殘缺"))
+        return io.BytesIO(event("完整", "stop"))
+
+    monkeypatch.setattr(graph_service, "_is_ollama_chat_url", lambda _url: True)
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        graph_service.time, "sleep", lambda seconds: sleeps.append(seconds)
+    )
+
+    response = graph_service._post_json(
+        "http://ollama:11434/v1/chat/completions", {}, ""
+    )
+
+    assert graph_service._chat_response_content(response) == ("完整", "stop")
+    assert calls["count"] == 2
+    assert sleeps == [graph_service.NETWORK_RETRY_BASE_DELAY_SECONDS]
+
 
 def test_post_json_raises_after_exhausting_rate_limit_retries(monkeypatch) -> None:
     calls = {"count": 0}

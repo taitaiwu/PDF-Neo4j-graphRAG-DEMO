@@ -30,6 +30,7 @@
 - 從每份 PDF 自動建立指定數量的問題、標準答案、來源頁碼與來源 chunk；可選擇跨 PDF 並行生題，並支援手動編輯、自動保存、JSON／CSV 匯入與 JSON 匯出，再一鍵執行 RAG 回答及模型判分。
 - 使用 Neo4j 官方 HybridCypherRetriever 執行向量與全文混合搜尋，可選擇以本機 Reranker 重排擴大召回的候選，再結合圖譜擴展及原文片段組成 GraphRAG 問答內容。
 - 模型服務可切換 OpenAI／Ollama，Embedding 服務可切換 OpenAI／Ollama／Voyage，並保留各自的連線設定。後續模型選單會顯示已驗證的 OpenAI、Ollama 與 Voyage 模型，執行時自動使用該模型所屬服務。
+- 使用 Ollama LLM 時，所有 Chat Completions 請求會自動啟用內部串流收集；系統持續接收 SSE 片段，完成後再交給既有 JSON 驗證或回答流程。未完整結束的串流會丟棄並整次重試，OpenAI 與 Embedding 請求維持非串流。
 
 ## 實作原理
 

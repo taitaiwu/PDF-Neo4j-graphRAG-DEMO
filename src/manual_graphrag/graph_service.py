@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .chunking import TextChunk
+from .env_store import load_env
 
 SCHEMA_CONTEXT_LIMIT = 30_000
 SCHEMA_MERGE_LIMIT = 12_000
@@ -115,6 +116,55 @@ def _rate_limit_retry_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
     return min(RATE_LIMIT_BASE_DELAY_SECONDS * (2**attempt), RATE_LIMIT_MAX_DELAY_SECONDS)
 
 
+def _is_ollama_chat_url(url: str) -> bool:
+    ollama_base_url = load_env().get("MODEL_OLLAMA_API_BASE", "").strip()
+    return bool(
+        ollama_base_url
+        and url.rstrip("/") == _api_url(ollama_base_url, "chat/completions").rstrip("/")
+    )
+
+
+def _read_streamed_chat_response(response: Any) -> dict[str, Any]:
+    content_parts: list[str] = []
+    finish_reason = ""
+    received_event = False
+    completed = False
+    for raw_line in response:
+        try:
+            line = raw_line.decode("utf-8").strip()
+        except UnicodeDecodeError as exc:
+            raise ValueError("模型串流回傳包含無效文字編碼") from exc
+        if not line or line.startswith(":") or not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            completed = True
+            break
+        try:
+            event = json.loads(data)
+            choice = event["choices"][0]
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            raise ValueError("模型串流回傳格式不正確") from exc
+        received_event = True
+        delta = choice.get("delta") or {}
+        part = delta.get("content")
+        if isinstance(part, str):
+            content_parts.append(part)
+        if choice.get("finish_reason"):
+            finish_reason = str(choice["finish_reason"])
+            completed = True
+    if not received_event:
+        raise ValueError("模型串流沒有回傳任何內容")
+    if not completed:
+        raise ConnectionError("模型串流在完成前中斷")
+    return {
+        "choices": [{
+            "message": {"content": "".join(content_parts)},
+            "finish_reason": finish_reason,
+        }]
+    }
+
+
 def _post_json(
     url: str,
     payload: dict[str, Any],
@@ -123,7 +173,12 @@ def _post_json(
     on_retry: Callable[[int, float], None] | None = None,
     control: RunControl | None = None,
 ) -> dict[str, Any]:
+    stream = _is_ollama_chat_url(url)
+    if stream:
+        payload = {**payload, "stream": True}
     headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+    if stream:
+        headers["Accept"] = "text/event-stream"
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -137,7 +192,10 @@ def _post_json(
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                result = json.loads(response.read().decode("utf-8"))
+                result = (
+                    _read_streamed_chat_response(response)
+                    if stream else json.loads(response.read().decode("utf-8"))
+                )
             break
         except urllib.error.HTTPError as exc:
             if exc.code == 429 and rate_limit_retries < RATE_LIMIT_MAX_RETRIES:
