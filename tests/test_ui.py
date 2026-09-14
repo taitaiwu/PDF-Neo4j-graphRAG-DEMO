@@ -1536,6 +1536,37 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
     }
 
 
+def test_load_evaluation_restores_saved_summary(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "load_project", lambda project_id: {
+        "evaluation": {
+            "questions": [{"number": 1, "question": "Q", "expected_answer": "A"}],
+            "results": [
+                {
+                    "number": 1, "question": "Q1", "expected_answer": "A1",
+                    "document": "manual.pdf", "selected_documents": ["manual.pdf"],
+                    "routing_correct": True, "actual_answer": "A1", "passed": True,
+                    "reason": "正確", "recall_at_5": True, "reciprocal_rank": 0.5,
+                },
+                {
+                    "number": 2, "question": "Q2", "expected_answer": "A2",
+                    "document": "manual.pdf", "selected_documents": ["manual.pdf"],
+                    "routing_correct": True, "actual_answer": "", "passed": False,
+                    "reason": "錯誤", "recall_at_5": False, "reciprocal_rank": 0.0,
+                },
+            ],
+        }
+    })
+
+    loaded = ui.load_evaluation_for_ui("project")
+
+    assert "已載入測試結果" in loaded[-1]
+    assert "答案正確率：50.0%" in loaded[-1]
+    assert "Recall@5：50.0%" in loaded[-1]
+    assert "MRR：0.250" in loaded[-1]
+    assert len(loaded[2]) == 2
+
+
+
 def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     monkeypatch.setattr(ui, "load_project", lambda project_id: {
         "evaluation": {"preferences": {"model": "legacy-model", "retrieval_mode": "GraphRAG"}}

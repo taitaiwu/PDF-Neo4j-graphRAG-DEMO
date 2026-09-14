@@ -705,6 +705,42 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
     ] for item in results]
 
 
+def _evaluation_summary(results: list[dict[str, Any]], *, loaded: bool = False) -> str:
+    passed = sum(bool(item.get("passed")) for item in results)
+    routing_passed = sum(bool(item.get("routing_correct")) for item in results)
+    complete_passed = sum(
+        bool(item.get("routing_correct") and item.get("passed")) for item in results
+    )
+    total = len(results)
+    recall_at_5 = sum(bool(item.get("recall_at_5")) for item in results) / total
+    mrr = sum(float(item.get("reciprocal_rank", 0)) for item in results) / total
+
+    document_totals: dict[str, list[int]] = {}
+    for item in results:
+        document = str(item.get("document") or "未標示文件")
+        stats = document_totals.setdefault(document, [0, 0, 0])
+        stats[0] += int(bool(item.get("routing_correct")))
+        stats[1] += int(bool(item.get("passed")))
+        stats[2] += 1
+    document_summary = "\n".join(
+        f"- {document}：路由正確 {stats[0]} / {stats[2]}；"
+        f"答案正確 {stats[1]} / {stats[2]}"
+        for document, stats in document_totals.items()
+    )
+
+    heading = "已載入測試結果" if loaded else "測試完成"
+    failed = total - passed
+    accuracy = passed / total * 100
+    return (
+        f"## {heading}｜總共答對 {passed} 題 / {total} 題  "
+        f"\n文件路由正確：{routing_passed} / {total}｜"
+        f"路由且答案正確：{complete_passed} / {total}  "
+        f"\n答錯：{failed} 題｜答案正確率：{accuracy:.1f}%"
+        f"\n\n### 各 PDF 結果\n{document_summary}"
+        f"  \nRecall@5：{recall_at_5:.1%}｜MRR：{mrr:.3f}"
+    )
+
+
 def _source_values_for_document(display: str, documents: str, document: str) -> set[int]:
     for line in str(display).splitlines():
         prefix, separator, values = line.partition("：")
@@ -733,6 +769,7 @@ def _retrieval_rank(question: dict[str, Any], rows: list[list[object]]) -> int |
             return rank
     return None
 
+
 def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     if not project_id:
         return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
@@ -754,7 +791,8 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         preferences.get("allow_parallel_generation", False),
         preferences.get("use_reranker", True),
         preferences.get("test_max_concurrent_requests", 3),
-        f"已載入 {len(questions)} 道題目與 {len(results)} 筆測試結果。",
+        (_evaluation_summary(results, loaded=True) if results else
+         f"已載入 {len(questions)} 道題目與 0 筆測試結果。"),
     )
 
 
@@ -1053,42 +1091,8 @@ def run_evaluation_for_ui(
         save_project(project_id, {"evaluation": updated})
     except (OSError, ValueError) as exc:
         return f"❌ 測試已完成，但保存失敗：{exc}", _evaluation_result_rows(results), updated
-    passed = sum(bool(item["passed"]) for item in results)
-    routing_passed = sum(bool(item["routing_correct"]) for item in results)
-    complete_passed = sum(
-        bool(item["routing_correct"] and item["passed"]) for item in results
-    )
-    total = len(results)
-    recall_at_5 = (
-        sum(bool(item.get("recall_at_5")) for item in results) / total
-        if total else 0
-    )
-    mrr = sum(float(item.get("reciprocal_rank", 0)) for item in results) / total if total else 0
+    return _evaluation_summary(results), _evaluation_result_rows(results), updated
 
-    document_totals: dict[str, list[int]] = {}
-    for item in results:
-        document = str(item.get("document") or "未標示文件")
-        stats = document_totals.setdefault(document, [0, 0, 0])
-        stats[0] += int(bool(item["routing_correct"]))
-        stats[1] += int(bool(item["passed"]))
-        stats[2] += 1
-    document_summary = "\n".join(
-        f"- {document}：路由正確 {stats[0]} / {stats[2]}；"
-        f"答案正確 {stats[1]} / {stats[2]}"
-        for document, stats in document_totals.items()
-    )
-
-    failed = total - passed
-    accuracy = passed / total * 100 if total else 0
-    summary = (
-        f"## 測試完成｜總共答對 {passed} 題 / {total} 題  "
-        f"\n文件路由正確：{routing_passed} / {total}｜"
-        f"路由且答案正確：{complete_passed} / {total}  "
-        f"\n答錯：{failed} 題｜答案正確率：{accuracy:.1f}%"
-        f"\n\n### 各 PDF 結果\n{document_summary}"
-        f"  \nRecall@5：{recall_at_5:.1%}｜MRR：{mrr:.3f}"
-    )
-    return summary, _evaluation_result_rows(results), updated
 
 def _add_single_document(
     file_path: str,
