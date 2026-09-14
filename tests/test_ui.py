@@ -266,6 +266,19 @@ def test_ollama_models_require_current_successful_fetch(tmp_path, monkeypatch) -
     )
     assert settings.service_choices(failed[0]) == []
 
+def test_render_service_hints_when_no_models_available() -> None:
+    state = settings.load_service_settings("llm")
+    result = ui.render_service_for_ui(state)
+    assert result[7]["choices"] == []
+    assert result[7]["info"] == ui.NO_MODEL_CHOICES_HINT
+
+    state["profiles"]["OpenAI"]["connected"] = True
+    result = ui.render_service_for_ui(state)
+    assert result[7]["choices"]
+    assert result[7]["info"] is None
+
+
+
 def test_delete_project_refreshes_list_after_server_delete(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("刪除測試")
