@@ -538,11 +538,17 @@ def test_project_answer_appends_history(monkeypatch) -> None:
         return {"questions": [record]}
     monkeypatch.setattr(ui, "append_question", fake_append)
     result = ui.answer_question_for_project_ui(
-        "project", "endpoint", "key", "bolt", "neo4j", "user", "pass",
-        "answer-model", "問題", "關聯擴展檢索", 8,
+        "project",
+        "endpoint", "key", "embedding-endpoint", "embedding-key",
+        "bolt", "neo4j", "user", "pass",
+        "answer-model", "問題", "關聯擴展檢索", 8, None, True,
     )
     assert captured["document"] == "manual.pdf"
     assert captured["sources"] == [["來源"]]
+    assert captured["question"] == "問題"
+    assert captured["answer_model"] == "answer-model"
+    assert captured["retrieval_mode"] == "關聯擴展檢索"
+    assert captured["top_k"] == 8
     assert result[3][0][1:3] == ["問題", "答案"]
 
 

@@ -568,9 +568,9 @@ def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ..
     try:
         current = load_project(project_id)
         record = {
-            "question": str(args[7]).strip(), "answer": answer,
-            "answer_model": str(args[6]), "retrieval_mode": str(args[8]),
-            "top_k": int(args[9]), "sources": sources,
+            "question": str(args[9]).strip(), "answer": answer,
+            "answer_model": str(args[8]), "retrieval_mode": str(args[10]),
+            "top_k": int(args[11]), "sources": sources,
             "document": (current.get("graph_state") or {}).get("document", ""),
         }
         project = append_question(project_id, record)
