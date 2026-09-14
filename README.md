@@ -31,6 +31,7 @@
 - 使用 Neo4j 官方 HybridCypherRetriever 執行向量與全文混合搜尋，可選擇以本機 Reranker 重排擴大召回的候選，再結合圖譜擴展及原文片段組成 GraphRAG 問答內容。
 - 模型服務可切換 OpenAI／Ollama，Embedding 服務可切換 OpenAI／Ollama／Voyage，並保留各自的連線設定。後續模型選單會顯示已驗證的 OpenAI、Ollama 與 Voyage 模型，執行時自動使用該模型所屬服務。
 - 使用 Ollama LLM 時，所有 Chat Completions 請求會自動啟用內部串流收集；系統持續接收 SSE 片段，完成後再交給既有 JSON 驗證或回答流程。未完整結束的串流會丟棄並整次重試，OpenAI 與 Embedding 請求維持非串流。
+- 介面中的摘要、Schema 規劃、知識圖譜抽取與自動測試最大並行請求數均會提示：使用 Ollama 時建議設為 1，以降低小模型同時處理多個生成請求造成逾時或輸出品質下降的機率。
 
 ## 實作原理
 

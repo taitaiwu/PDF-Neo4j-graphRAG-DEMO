@@ -74,6 +74,7 @@ from .service_settings import (
 from .storage import write_json
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+OLLAMA_CONCURRENCY_HINT = "使用 Ollama 時建議設為 1。"
 
 
 def connection_summary(
@@ -1846,7 +1847,8 @@ def build_app() -> gr.Blocks:
                     label="摘要模型",
                 )
                 summary_max_concurrent_requests = gr.Number(
-                    value=3, minimum=1, precision=0, label="摘要最大並行請求數"
+                    value=3, minimum=1, precision=0, label="摘要最大並行請求數",
+                    info=OLLAMA_CONCURRENCY_HINT,
                 )
             generate_summaries_button = gr.Button("建立／重新建立全部 PDF 摘要", variant="primary")
             summary_status = gr.Markdown("尚未建立 PDF 摘要。")
@@ -1888,7 +1890,8 @@ def build_app() -> gr.Blocks:
                         label="Schema 粒度",
                     )
                     max_concurrent_requests = gr.Number(
-                        value=3, minimum=1, precision=0, label="最大並行請求數"
+                        value=3, minimum=1, precision=0, label="最大並行請求數",
+                        info=OLLAMA_CONCURRENCY_HINT,
                     )
                 with gr.Row():
                     schema_sampling_mode = gr.Radio(
@@ -1940,6 +1943,7 @@ def build_app() -> gr.Blocks:
                     minimum=1,
                     precision=0,
                     label="最大並行請求數",
+                    info=OLLAMA_CONCURRENCY_HINT,
                 )
                 generate_graph_button = gr.Button(
                     "確認 Schema 並抽取", variant="primary"
@@ -2010,7 +2014,11 @@ def build_app() -> gr.Blocks:
                     evaluation_use_reranker = gr.Checkbox(
                         value=True, label="使用 Reranker"
                     )
-                    evaluation_test_max_concurrent_requests = gr.Number(value=3, minimum=1, precision=0, label="測試最大並行請求數")
+                    evaluation_test_max_concurrent_requests = gr.Number(
+                        value=3, minimum=1, precision=0,
+                        label="測試最大並行請求數",
+                        info=OLLAMA_CONCURRENCY_HINT,
+                    )
                 run_evaluation_button = gr.Button("一鍵測試", variant="primary")
             with gr.Row():
                 evaluation_import_file = gr.File(

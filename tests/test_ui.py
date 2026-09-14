@@ -182,6 +182,21 @@ def test_evaluation_generation_uses_parallel_checkbox() -> None:
     assert "生題最大並行請求數（跨 PDF）" not in fields
 
 
+def test_all_concurrency_inputs_show_ollama_recommendation() -> None:
+    app = build_app()
+    concurrency_inputs = [
+        component for component in app.config["components"]
+        if "最大並行請求數" in str(component.get("props", {}).get("label", ""))
+    ]
+
+    assert len(concurrency_inputs) == 4
+    assert all(
+        component["props"].get("info") == ui.OLLAMA_CONCURRENCY_HINT
+        for component in concurrency_inputs
+    )
+
+
+
 def test_evaluation_results_table_uses_smaller_font_class() -> None:
     app = build_app()
     results_table = next(
