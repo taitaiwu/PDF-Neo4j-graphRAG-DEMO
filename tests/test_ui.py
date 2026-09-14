@@ -182,6 +182,25 @@ def test_evaluation_generation_uses_parallel_checkbox() -> None:
     assert "生題最大並行請求數（跨 PDF）" not in fields
 
 
+def test_evaluation_results_table_uses_smaller_font_class() -> None:
+    app = build_app()
+    results_table = next(
+        component
+        for component in app.config["components"]
+        if component.get("props", {}).get("headers")
+        == ["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "路由理由", "實際答案", "答案結果", "評判理由"]
+    )
+    html_styles = "\n".join(
+        str(component.get("props", {}).get("value", ""))
+        for component in app.config["components"]
+        if component.get("type") == "html"
+    )
+
+    assert "evaluation-results-table" in results_table["props"]["elem_classes"]
+    assert ".evaluation-results-table table" in html_styles
+    assert "font-size: 14px !important" in html_styles
+
+
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {

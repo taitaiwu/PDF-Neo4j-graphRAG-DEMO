@@ -1932,6 +1932,9 @@ def build_app() -> gr.Blocks:
                 .evaluation-metrics {font-size: 24px !important; line-height: 1.7 !important;}
                 .evaluation-table table {font-size: 18px !important;}
                 .evaluation-table td, .evaluation-table th {padding: 10px !important;}
+                .evaluation-results-table table,
+                .evaluation-results-table td,
+                .evaluation-results-table th {font-size: 14px !important;}
                 </style>""",
                 padding=False,
             )
@@ -1949,7 +1952,8 @@ def build_app() -> gr.Blocks:
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
                 headers=["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "路由理由", "實際答案", "答案結果", "評判理由"],
-                interactive=False, wrap=True, elem_classes="evaluation-table",
+                interactive=False, wrap=True,
+                elem_classes=["evaluation-table", "evaluation-results-table"],
             )
 
         with gr.Tab("6. 問答測試", interactive=False) as qa_tab:
