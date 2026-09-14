@@ -1,3 +1,4 @@
+import http.client
 import io
 import json
 import urllib.error
@@ -6,7 +7,6 @@ import pytest
 
 from manual_graphrag import graph_service
 from manual_graphrag.chunking import TextChunk
-
 
 SCHEMA = {
     "entity_types": [{"name": "DEVICE", "description": "設備"}],
@@ -480,6 +480,46 @@ def test_post_json_raises_after_exhausting_rate_limit_retries(monkeypatch) -> No
         graph_service._post_json("http://models/v1/chat/completions", {"a": 1}, "key")
 
     assert calls["count"] == graph_service.RATE_LIMIT_MAX_RETRIES + 1
+
+
+def test_post_json_retries_incomplete_response_then_succeeds(monkeypatch) -> None:
+    calls = {"count": 0}
+    sleeps = []
+
+    def fake_urlopen(request, timeout=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise http.client.IncompleteRead(b'{"partial":', 10)
+        return io.BytesIO(json.dumps({"ok": True}).encode("utf-8"))
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(graph_service.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = graph_service._post_json(
+        "http://models/v1/chat/completions", {"a": 1}, "key"
+    )
+
+    assert result == {"ok": True}
+    assert calls["count"] == 2
+    assert sleeps == [0.5]
+
+
+def test_post_json_reports_incomplete_response_after_retries(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    def fake_urlopen(request, timeout=None):
+        calls["count"] += 1
+        raise http.client.IncompleteRead(b"partial", 10)
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(graph_service.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(ValueError, match="回應中斷.*重試 2 次"):
+        graph_service._post_json(
+            "http://models/v1/chat/completions", {"a": 1}, "key"
+        )
+
+    assert calls["count"] == graph_service.NETWORK_MAX_RETRIES + 1
 
 
 def test_list_models_returns_sorted_unique_ids(monkeypatch) -> None:

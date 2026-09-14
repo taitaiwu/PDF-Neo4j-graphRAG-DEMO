@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from .chunking import TextChunk
-
 
 SCHEMA_CONTEXT_LIMIT = 30_000
 SCHEMA_MERGE_LIMIT = 12_000
@@ -19,6 +19,8 @@ EXTRACTION_BATCH_LIMIT = 12_000
 RATE_LIMIT_MAX_RETRIES = 6
 RATE_LIMIT_BASE_DELAY_SECONDS = 2.0
 RATE_LIMIT_MAX_DELAY_SECONDS = 30.0
+NETWORK_MAX_RETRIES = 2
+NETWORK_RETRY_BASE_DELAY_SECONDS = 0.5
 
 
 class RunCancelled(Exception):
@@ -125,7 +127,9 @@ def _post_json(
         headers["Authorization"] = f"Bearer {api_key.strip()}"
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
-    for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+    rate_limit_retries = 0
+    network_retries = 0
+    while True:
         if control:
             control.check()
             control.wait_if_paused()
@@ -135,11 +139,12 @@ def _post_json(
                 result = json.loads(response.read().decode("utf-8"))
             break
         except urllib.error.HTTPError as exc:
-            if exc.code == 429 and attempt < RATE_LIMIT_MAX_RETRIES:
-                delay = _rate_limit_retry_delay(exc, attempt)
+            if exc.code == 429 and rate_limit_retries < RATE_LIMIT_MAX_RETRIES:
+                delay = _rate_limit_retry_delay(exc, rate_limit_retries)
+                rate_limit_retries += 1
                 exc.close()
                 if on_retry:
-                    on_retry(attempt + 1, delay)
+                    on_retry(rate_limit_retries, delay)
                 if control:
                     control.sleep(delay)
                 else:
@@ -147,8 +152,25 @@ def _post_json(
                 continue
             detail = exc.read().decode("utf-8", errors="replace")[:500]
             raise ValueError(f"模型 API 回傳 HTTP {exc.code}：{detail}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise ValueError(f"無法連線模型 API：{exc}") from exc
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            http.client.IncompleteRead,
+            ConnectionError,
+        ) as exc:
+            if network_retries < NETWORK_MAX_RETRIES:
+                delay = NETWORK_RETRY_BASE_DELAY_SECONDS * (2**network_retries)
+                network_retries += 1
+                if on_retry:
+                    on_retry(network_retries, delay)
+                if control:
+                    control.sleep(delay)
+                else:
+                    time.sleep(delay)
+                continue
+            raise ValueError(
+                f"模型 API 連線或回應中斷，重試 {NETWORK_MAX_RETRIES} 次後仍失敗：{exc}"
+            ) from exc
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("模型 API 回傳的不是有效 JSON") from exc
     if not isinstance(result, dict):
