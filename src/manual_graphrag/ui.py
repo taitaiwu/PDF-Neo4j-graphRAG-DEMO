@@ -418,19 +418,38 @@ def _display_retrieval_mode(value: str | None) -> str:
     }.get(value or "", value or "關聯擴展檢索")
 
 
+def _source_display(item: dict[str, Any]) -> tuple[str, str, str]:
+    references = item.get("source_references") or []
+    if not references:
+        return (
+            ", ".join(map(str, item.get("source_chunk_numbers", []))),
+            ", ".join(map(str, item.get("source_pages", []))),
+            "、".join(item.get("source_documents", [])),
+        )
+    chunk_lines = []
+    page_lines = []
+    documents = []
+    for reference in references:
+        document = str(reference.get("document") or "未標示文件")
+        documents.append(document)
+        chunk_lines.append(
+            f"{document}：{', '.join(map(str, reference.get('chunk_numbers', [])))}"
+        )
+        page_lines.append(
+            f"{document}：{', '.join(map(str, reference.get('pages', [])))}"
+        )
+    return "\n".join(chunk_lines), "\n".join(page_lines), "\n".join(documents)
+
+
 def _graph_rows(graph: dict[str, Any]) -> tuple[list[list[object]], list[list[object]]]:
     entities = [[
         item.get("name", ""), item.get("type", ""), item.get("description", ""),
-        ", ".join(map(str, item.get("source_chunk_numbers", []))),
-        ", ".join(map(str, item.get("source_pages", []))),
-        "、".join(item.get("source_documents", [])),
+        *_source_display(item),
     ] for item in graph.get("entities", [])]
     relationships = [[
         item.get("source", ""), item.get("type", ""), item.get("target", ""),
         item.get("description", ""),
-        ", ".join(map(str, item.get("source_chunk_numbers", []))),
-        ", ".join(map(str, item.get("source_pages", []))),
-        "、".join(item.get("source_documents", [])),
+        *_source_display(item),
     ] for item in graph.get("relationships", [])]
     return entities, relationships
 
@@ -1362,9 +1381,7 @@ def extract_graph_for_ui(
             item["name"],
             item["type"],
             item["description"],
-            ", ".join(map(str, item["source_chunk_numbers"])),
-            ", ".join(map(str, item["source_pages"])),
-            "、".join(item.get("source_documents", [])),
+            *_source_display(item),
         ]
         for item in extraction.entities
     ]
@@ -1374,9 +1391,7 @@ def extract_graph_for_ui(
             item["type"],
             item["target"],
             item["description"],
-            ", ".join(map(str, item["source_chunk_numbers"])),
-            ", ".join(map(str, item["source_pages"])),
-            "、".join(item.get("source_documents", [])),
+            *_source_display(item),
         ]
         for item in extraction.relationships
     ]
@@ -1428,6 +1443,22 @@ def _build_graph_evidence(
     relationships: list[dict[str, Any]],
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    def source_variants(item: dict[str, Any]) -> list[dict[str, Any]]:
+        references = item.get("source_references") or []
+        if not references:
+            return [{
+                "source_pages": item.get("source_pages", []),
+                "source_chunk_numbers": item.get("source_chunk_numbers", []),
+                "source_documents": item.get("source_documents", []),
+                "source_references": [],
+            }]
+        return [{
+            "source_pages": reference.get("pages", []),
+            "source_chunk_numbers": reference.get("chunk_numbers", []),
+            "source_documents": [reference.get("document", "")],
+            "source_references": [reference],
+        } for reference in references]
+
     evidence = []
     for item in chunks:
         number = int(item.get("number", 0))
@@ -1439,30 +1470,34 @@ def _build_graph_evidence(
             "source_pages": item.get("pages", []),
             "source_chunk_numbers": [number],
             "source_documents": [document] if document else [],
+            "source_references": [{
+                "document": document,
+                "chunk_numbers": [number],
+                "pages": item.get("pages", []),
+            }],
         })
     for index, item in enumerate(entities):
-        evidence.append({
-            "evidence_id": f"entity-{index}", "kind": "實體",
-            "name": item.get("name", ""), "source": "", "target": "",
-            "text": "實體：{}；類型：{}；說明：{}".format(
-                item.get("name", ""), item.get("type", ""), item.get("description", "")
-            ),
-            "source_pages": item.get("source_pages", []),
-            "source_chunk_numbers": item.get("source_chunk_numbers", []),
-            "source_documents": item.get("source_documents", []),
-        })
+        for source_index, sources in enumerate(source_variants(item)):
+            evidence.append({
+                "evidence_id": f"entity-{index}-{source_index}", "kind": "實體",
+                "name": item.get("name", ""), "source": "", "target": "",
+                "text": "實體：{}；類型：{}；說明：{}".format(
+                    item.get("name", ""), item.get("type", ""), item.get("description", "")
+                ),
+                **sources,
+            })
     for index, item in enumerate(relationships):
-        evidence.append({
-            "evidence_id": f"relationship-{index}", "kind": "關係", "name": "",
-            "source": item.get("source", ""), "target": item.get("target", ""),
-            "text": "關係：{} -[{}]-> {}；說明：{}".format(
-                item.get("source", ""), item.get("type", ""),
-                item.get("target", ""), item.get("description", "")
-            ),
-            "source_pages": item.get("source_pages", []),
-            "source_chunk_numbers": item.get("source_chunk_numbers", []),
-            "source_documents": item.get("source_documents", []),
-        })
+        for source_index, sources in enumerate(source_variants(item)):
+            evidence.append({
+                "evidence_id": f"relationship-{index}-{source_index}",
+                "kind": "關係", "name": "",
+                "source": item.get("source", ""), "target": item.get("target", ""),
+                "text": "關係：{} -[{}]-> {}；說明：{}".format(
+                    item.get("source", ""), item.get("type", ""),
+                    item.get("target", ""), item.get("description", "")
+                ),
+                **sources,
+            })
     return evidence
 
 
@@ -1569,9 +1604,9 @@ def answer_question_for_ui(
             item["text"],
             ", ".join(item.get("matched_by", [])),
             f"{item.get('fusion_score', 0.0):.4f}",
-            ", ".join(map(str, item.get("source_pages", []))),
-            ", ".join(map(str, item.get("source_chunk_numbers", []))),
-            "、".join(item.get("source_documents") or []),
+            _source_display(item)[1],
+            _source_display(item)[0],
+            _source_display(item)[2],
         ]
         for item in result["evidence"]
     ]

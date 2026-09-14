@@ -408,6 +408,10 @@ def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> No
     assert extraction.entities[0]["source_chunk_numbers"] == [1, 2]
     assert extraction.entities[0]["source_pages"] == [1, 2]
     assert extraction.entities[0]["source_documents"] == ["manual-a.pdf", "manual-b.pdf"]
+    assert extraction.entities[0]["source_references"] == [
+        {"document": "manual-a.pdf", "chunk_numbers": [1], "pages": [1]},
+        {"document": "manual-b.pdf", "chunk_numbers": [2], "pages": [2]},
+    ]
     assert extraction.relationships == [
         {
             "source": "設備 A",
@@ -417,6 +421,9 @@ def test_extract_graph_batches_deduplicates_and_keeps_sources(monkeypatch) -> No
             "source_chunk_numbers": [2],
             "source_pages": [2],
             "source_documents": ["manual-b.pdf"],
+            "source_references": [
+                {"document": "manual-b.pdf", "chunk_numbers": [2], "pages": [2]}
+            ],
         }
     ]
 

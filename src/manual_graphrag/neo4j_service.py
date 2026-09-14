@@ -53,6 +53,18 @@ def _expanded_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _restore_source_references(item: dict[str, Any]) -> dict[str, Any]:
+    raw = item.pop("source_references_json", None)
+    if raw and not item.get("source_references"):
+        try:
+            references = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            references = []
+        if isinstance(references, list):
+            item["source_references"] = references
+    return item
+
+
 def check_neo4j_connection(
     uri: str, database: str, username: str, password: str
 ) -> None:
@@ -92,7 +104,7 @@ def load_latest_graph(
     OPTIONAL MATCH (entity:ExtractedEntity)-[:IN_DOCUMENT]->(document)
     WITH document, collect(DISTINCT entity {
         .name, .type, .description, .source_chunk_numbers, .source_pages,
-        .source_documents
+        .source_documents, .source_references_json
     }) AS entities
     OPTIONAL MATCH (source:ExtractedEntity)-[relation:EXTRACTED_RELATION]->(target:ExtractedEntity)
     WHERE relation.run_id = document.run_id
@@ -102,7 +114,8 @@ def load_latest_graph(
            document.vector_index_name AS vector_index_name, entities,
            collect(DISTINCT relation {
                source: source.name, target: target.name, .type, .description,
-               .source_chunk_numbers, .source_pages, .source_documents
+               .source_chunk_numbers, .source_pages, .source_documents,
+               .source_references_json
            }) AS relationships
     """
     try:
@@ -118,8 +131,16 @@ def load_latest_graph(
         raise ValueError("Neo4j 中沒有可供問答的 GraphDocument")
     result = dict(record)
     result["neo4j_imported"] = True
-    result["entities"] = [item for item in result.get("entities", []) if item]
-    result["relationships"] = [item for item in result.get("relationships", []) if item]
+    result["entities"] = [
+        _restore_source_references(item)
+        for item in result.get("entities", [])
+        if item
+    ]
+    result["relationships"] = [
+        _restore_source_references(item)
+        for item in result.get("relationships", [])
+        if item
+    ]
     return result
 
 
@@ -150,7 +171,7 @@ def search_graph_evidence(
       ))
     RETURN node {
         .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
-        .source_chunk_numbers, .source_documents
+        .source_chunk_numbers, .source_documents, .source_references_json
     } AS evidence, score
     """
     try:
@@ -220,7 +241,8 @@ def search_graph_evidence(
                         ))
                         RETURN chunk {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers, .source_documents
+                            .source_pages, .source_chunk_numbers, .source_documents,
+                            .source_references_json
                         } AS evidence
                         """,
                         run_id=run_id,
@@ -260,7 +282,8 @@ def search_graph_evidence(
                         )
                         RETURN entity {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers, .source_documents
+                            .source_pages, .source_chunk_numbers, .source_documents,
+                            .source_references_json
                         } AS evidence
                         LIMIT $top_k
                         """,
@@ -298,7 +321,8 @@ def search_graph_evidence(
                         )
                         RETURN relation {
                             .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers, .source_documents
+                            .source_pages, .source_chunk_numbers, .source_documents,
+                            .source_references_json
                         } AS evidence
                         LIMIT $top_k
                         """,
@@ -331,7 +355,7 @@ def search_graph_evidence(
             f"Neo4j 官方混合檢索失敗：{detail} "
             "請使用目前的 Embedding 模型重新執行「Embedding 並匯入 Neo4j」。"
         ) from exc
-    return selected
+    return [_restore_source_references(item) for item in selected]
 
 
 def import_extraction(
@@ -427,6 +451,20 @@ def _write_graph(
     embedding_dimensions: int,
     vector_index: str,
 ) -> dict[str, int]:
+    def with_source_references(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                **item,
+                "source_references_json": json.dumps(
+                    item.get("source_references", []), ensure_ascii=False
+                ),
+            }
+            for item in items
+        ]
+
+    entities = with_source_references(entities)
+    relationships = with_source_references(relationships)
+    evidence = with_source_references(evidence)
     transaction.run(
         """
         MATCH (node)
@@ -466,7 +504,8 @@ def _write_graph(
         SET entity.description = item.description,
             entity.source_chunk_numbers = item.source_chunk_numbers,
             entity.source_pages = item.source_pages,
-            entity.source_documents = item.source_documents
+            entity.source_documents = item.source_documents,
+            entity.source_references_json = item.source_references_json
         MERGE (entity)-[:IN_DOCUMENT]->(document)
         RETURN count(entity) AS count
         """,
@@ -486,7 +525,8 @@ def _write_graph(
         SET relation.description = item.description,
             relation.source_chunk_numbers = item.source_chunk_numbers,
             relation.source_pages = item.source_pages,
-            relation.source_documents = item.source_documents
+            relation.source_documents = item.source_documents,
+            relation.source_references_json = item.source_references_json
         RETURN count(relation) AS count
         """,
         run_id=run_id,
@@ -502,6 +542,7 @@ def _write_graph(
             evidence.text = item.text, evidence.source_pages = item.source_pages,
             evidence.source_chunk_numbers = item.source_chunk_numbers,
             evidence.source_documents = item.source_documents,
+            evidence.source_references_json = item.source_references_json,
             evidence.embedding = item.embedding
         MERGE (evidence)-[:IN_DOCUMENT]->(document)
         """,

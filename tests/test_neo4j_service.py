@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from manual_graphrag import neo4j_service
@@ -155,13 +157,33 @@ def test_import_extraction_writes_document_entities_and_relationships(monkeypatc
     assert "GraphDocument" in transaction.calls[1][0]
     assert transaction.calls[1][1]["embedding_dimensions"] == 1
     assert transaction.calls[1][1]["vector_index_name"] == "graph_evidence_embedding_1"
-    assert transaction.calls[2][1]["entities"] is entities
-    assert transaction.calls[3][1]["relationships"] is relationships
+    assert transaction.calls[2][1]["entities"][0]["name"] == entities[0]["name"]
+    assert transaction.calls[3][1]["relationships"][0]["type"] == relationships[0]["type"]
     assert "EXTRACTED_RELATION" in transaction.calls[3][0]
     assert "GraphEvidence" in transaction.calls[4][0]
     assert "entity.source_documents" in transaction.calls[2][0]
     assert "relation.source_documents" in transaction.calls[3][0]
     assert "evidence.source_documents" in transaction.calls[4][0]
+    assert "source_references_json" in transaction.calls[2][0]
+    assert transaction.calls[2][1]["entities"][0]["source_references_json"] == "[]"
+
+
+def test_restore_source_references_from_neo4j_json() -> None:
+    item = {
+        "source_documents": ["a.pdf", "b.pdf"],
+        "source_references_json": json.dumps([
+            {"document": "a.pdf", "chunk_numbers": [1], "pages": [3]},
+            {"document": "b.pdf", "chunk_numbers": [8], "pages": [2]},
+        ]),
+    }
+
+    restored = neo4j_service._restore_source_references(item)
+
+    assert restored["source_references"] == [
+        {"document": "a.pdf", "chunk_numbers": [1], "pages": [3]},
+        {"document": "b.pdf", "chunk_numbers": [8], "pages": [2]},
+    ]
+    assert "source_references_json" not in restored
 
 
 @pytest.mark.parametrize(

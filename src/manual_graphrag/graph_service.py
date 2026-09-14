@@ -742,6 +742,7 @@ def extract_graph(
                     "source_chunk_numbers": [],
                     "source_pages": [],
                     "source_documents": [],
+                    "source_references": [],
                 },
             )
             _merge_sources(current, numbers, chunk_lookup)
@@ -770,6 +771,7 @@ def extract_graph(
                     "source_chunk_numbers": [],
                     "source_pages": [],
                     "source_documents": [],
+                    "source_references": [],
                 },
             )
             _merge_sources(current, numbers, chunk_lookup)
@@ -807,3 +809,19 @@ def _merge_sources(
         document = chunk_lookup[number].document
         if document and document not in item["source_documents"]:
             item["source_documents"].append(document)
+        reference = next(
+            (
+                value
+                for value in item["source_references"]
+                if value["document"] == document
+            ),
+            None,
+        )
+        if reference is None:
+            reference = {"document": document, "chunk_numbers": [], "pages": []}
+            item["source_references"].append(reference)
+        if number not in reference["chunk_numbers"]:
+            reference["chunk_numbers"].append(number)
+        for page in chunk_lookup[number].pages:
+            if page not in reference["pages"]:
+                reference["pages"].append(page)

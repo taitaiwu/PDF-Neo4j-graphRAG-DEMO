@@ -1278,6 +1278,11 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
                 "description": "設備",
                 "source_chunk_numbers": [1],
                 "source_pages": [3],
+                "source_documents": ["a.pdf", "b.pdf"],
+                "source_references": [
+                    {"document": "a.pdf", "chunk_numbers": [1], "pages": [3]},
+                    {"document": "b.pdf", "chunk_numbers": [8], "pages": [2]},
+                ],
             }
         ],
         relationships=[
@@ -1317,6 +1322,9 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
 
     assert status.startswith("✅ 已處理 1 個 chunk")
     assert entities[0][:2] == ["設備 A", "DEVICE"]
+    assert entities[0][3:] == [
+        "a.pdf：1\nb.pdf：8", "a.pdf：3\nb.pdf：2", "a.pdf\nb.pdf"
+    ]
     assert relationships[0][:3] == ["設備 A", "USES", "設備 B"]
     assert state["document"] == "manual.pdf"
     assert state["temperature"] == 0.2
@@ -1325,6 +1333,33 @@ def test_extract_graph_for_ui_formats_tables_and_state(monkeypatch) -> None:
     assert state["chunks"][0]["text"] == "text"
     assert state["neo4j_imported"] is False
     assert "進行 Embedding 並匯入 Neo4j" in status
+
+
+def test_graph_evidence_separates_merged_sources_by_pdf() -> None:
+    references = [
+        {"document": "a.pdf", "chunk_numbers": [1], "pages": [3]},
+        {"document": "b.pdf", "chunk_numbers": [8], "pages": [2]},
+    ]
+    evidence = ui._build_graph_evidence(
+        [{
+            "name": "共用設備", "type": "DEVICE", "description": "設備",
+            "source_references": references,
+        }],
+        [{
+            "source": "共用設備", "type": "USES", "target": "配件",
+            "description": "使用", "source_references": references,
+        }],
+        [],
+    )
+
+    assert len(evidence) == 4
+    assert [item["source_documents"] for item in evidence] == [
+        ["a.pdf"], ["b.pdf"], ["a.pdf"], ["b.pdf"]
+    ]
+    assert [item["source_chunk_numbers"] for item in evidence] == [
+        [1], [8], [1], [8]
+    ]
+    assert all(len(item["source_references"]) == 1 for item in evidence)
 
 
 def test_extract_graph_for_ui_rejects_invalid_schema() -> None:
