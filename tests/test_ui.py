@@ -1452,8 +1452,9 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
     monkeypatch.setattr(ui, "embedding_vectors", lambda *args: [[0.1]])
     captured = {}
 
-    def fake_search(*args):
+    def fake_search(*args, **kwargs):
         captured["args"] = args
+        captured["kwargs"] = kwargs
         return [{
             "evidence_id": "chunk-1",
             "kind": "原文",
@@ -1481,8 +1482,9 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
     assert status.startswith("✅ 基本檢索")
     assert answer == "請重新啟動。"
     assert captured["args"][5] == "E01 怎麼處理？"
+    assert captured["kwargs"]["candidate_top_k"] == 24
     assert rows == [[
-        "原文", "E01 排除方式", "official-hybrid",
+        "原文", "E01 排除方式", "official-hybrid, local-reranker",
         "0.0300", "3", "2", "",
     ]]
 

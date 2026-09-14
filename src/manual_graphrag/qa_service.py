@@ -1,9 +1,55 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .graph_service import _api_url, _chat_response_content, _post_json
+
+RERANK_CANDIDATE_MULTIPLIER = 3
+RERANK_MAX_CANDIDATES = 50
+
+
+def _search_terms(text: str) -> set[str]:
+    normalized = " ".join(text.casefold().split())
+    words = set(re.findall(r"[a-z0-9_\-]+", normalized))
+    chinese = "".join(re.findall(r"[\u3400-\u9fff]", normalized))
+    chinese_bigrams = {
+        chinese[index:index + 2]
+        for index in range(max(len(chinese) - 1, 0))
+    }
+    return words | chinese_bigrams
+
+
+def rerank_evidence(
+    question: str,
+    evidence: list[dict[str, Any]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Locally rerank hybrid candidates without sending document text elsewhere."""
+    limit = max(int(top_k), 1)
+    question_terms = _search_terms(question)
+    ranked = []
+    for original_rank, item in enumerate(evidence):
+        evidence_terms = _search_terms(str(item.get("text", "")))
+        overlap = len(question_terms & evidence_terms) / max(len(question_terms), 1)
+        original_score = float(item.get("fusion_score", item.get("score", 0.0)) or 0.0)
+        exact_bonus = sum(
+            1 for term in question_terms
+            if len(term) >= 3 and term in str(item.get("text", "")).casefold()
+        )
+        kind_bonus = 0.05 if item.get("kind") == "原文" else 0.0
+        rerank_score = overlap * 2 + exact_bonus * 0.25 + original_score + kind_bonus
+        reranked = {
+            **item,
+            "rerank_score": rerank_score,
+            "matched_by": list(dict.fromkeys([
+                *(item.get("matched_by") or []), "local-reranker"
+            ])),
+        }
+        ranked.append((rerank_score, original_rank, reranked))
+    ranked.sort(key=lambda value: (-value[0], value[1]))
+    return [item for _, _, item in ranked[:limit]]
 
 
 def embedding_vectors(base_url: str, api_key: str, model: str, texts: list[str]) -> list[list[float]]:

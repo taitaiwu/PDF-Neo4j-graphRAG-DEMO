@@ -51,9 +51,12 @@ from .project_store import (
     save_project,
 )
 from .qa_service import (
+    RERANK_CANDIDATE_MULTIPLIER,
+    RERANK_MAX_CANDIDATES,
     answer_graph_question,
     check_embedding_connection,
     embedding_vectors,
+    rerank_evidence,
 )
 from .service_settings import (
     capture_service_settings,
@@ -1591,7 +1594,12 @@ def answer_question_for_ui(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             graph_state["run_id"], question.strip(), question_vector,
             retrieval_mode, int(top_k), document_names,
+            candidate_top_k=min(
+                int(top_k) * RERANK_CANDIDATE_MULTIPLIER,
+                RERANK_MAX_CANDIDATES,
+            ),
         )
+        evidence = rerank_evidence(question, evidence, int(top_k))
         result = answer_graph_question(
             model_endpoint, api_key, answer_model, question, retrieval_mode, evidence, document_names
         )
@@ -1993,6 +2001,7 @@ def build_app() -> gr.Blocks:
         with gr.Tab("6. 問答測試", interactive=False) as qa_tab:
             gr.Markdown(
                 "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
+                "Hybrid Search 會擴大召回候選，再由本機 Reranker 重排後取 Top K。"
             )
             answer_model = gr.Dropdown(
                 choices=llm_choices,

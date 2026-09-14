@@ -28,7 +28,7 @@
 - 每次匯入前自動清空本工具建立的既有圖譜，再寫入本次抽取結果。
 - 在獨立的 PDF 摘要頁建立路由摘要；文件識別資訊只保留主要對象及系列名稱（最多 5 項），排除出版商、文件編號、平台與附帶名稱。
 - 從每份 PDF 自動建立指定數量的問題、標準答案與來源頁碼，支援手動編輯、保存及 JSON／CSV 匯入與 JSON 匯出，再一鍵執行 RAG 回答及模型判分。
-- 使用 Neo4j 官方 HybridCypherRetriever 執行向量與全文混合搜尋，並結合圖譜擴展及原文片段組成 GraphRAG 問答內容。
+- 使用 Neo4j 官方 HybridCypherRetriever 執行向量與全文混合搜尋，以本機 Reranker 重排擴大召回的候選，再結合圖譜擴展及原文片段組成 GraphRAG 問答內容。
 - 模型服務可切換 OpenAI／Ollama，Embedding 服務可切換 OpenAI／Ollama／Voyage，並保留各自的連線設定。後續模型選單會顯示已驗證的 OpenAI、Ollama 與 Voyage 模型，執行時自動使用該模型所屬服務。
 
 ## 實作原理
@@ -47,11 +47,12 @@
 
 1. 使用問題向量搜尋相關原文、實體與關係。
 2. 使用問題文字從 CJK 全文索引搜尋精確詞彙、錯誤碼與實體名稱。
-3. 由 Neo4j 官方 HybridCypherRetriever 使用內建 naive ranker 正規化並融合兩組結果，再選出 Top K。
-4. GraphRAG 模式再從命中的節點向外擴展相關圖譜內容，並回查 PDF 原文片段。
-5. 將問題、圖譜內容及原文證據交給回答模型生成答案。
+3. 由 Neo4j 官方 HybridCypherRetriever 使用內建 naive ranker 正規化並融合兩組結果，召回 Top K 的 3 倍候選（最多 50 筆）。
+4. 本機 Reranker 依問題詞彙匹配、完整關鍵詞、Hybrid 分數與證據類型重排，再選出 Top K；候選內容不會因此額外傳送至外部服務。
+5. GraphRAG 模式再從命中的節點向外擴展相關圖譜內容，並回查 PDF 原文片段。
+6. 將問題、圖譜內容及原文證據交給回答模型生成答案。
 
-兩個問答模式都會使用官方 HybridCypherRetriever 進行向量與全文混合檢索；GraphRAG 會額外執行圖譜擴展。匯入階段預先建立 Embedding、向量索引與全文索引，是後續問答能快速檢索的關鍵。
+兩個問答模式都會使用官方 HybridCypherRetriever 進行向量與全文混合檢索及本機 Reranker；GraphRAG 會額外執行圖譜擴展。匯入階段預先建立 Embedding、向量索引與全文索引，是後續問答能快速檢索的關鍵。
 
 向量索引會依目前 Embedding 維度命名，例如 `graph_evidence_embedding_1536`。由於 Neo4j 不允許相同標籤與屬性同時存在不同維度的向量索引，每次匯入會先刪除本工具的舊向量索引，再建立目前維度的唯一索引；不會刪除其他應用程式的索引。更換 Embedding 模型後需重新執行「Embedding 並匯入 Neo4j」。
 

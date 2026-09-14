@@ -155,11 +155,13 @@ def search_graph_evidence(
     retrieval_mode: str,
     top_k: int,
     document_names: list[str] | None = None,
+    candidate_top_k: int | None = None,
 ) -> list[dict[str, Any]]:
     selected_documents = list(dict.fromkeys(
         str(name).strip() for name in (document_names or []) if str(name).strip()
     ))
     target_vector_index = vector_index_name(len(embedding))
+    retrieval_top_k = max(int(candidate_top_k or top_k), int(top_k))
     retrieval_query = """
     WITH node, score
     WHERE node.run_id = $run_id
@@ -181,7 +183,7 @@ def search_graph_evidence(
                     "MATCH (node:GraphEvidence) RETURN count(node) AS count"
                 ).single()
                 candidate_count = max(
-                    int(top_k),
+                    retrieval_top_k,
                     int(total_record["count"]) if total_record else int(top_k),
                 )
 
@@ -207,7 +209,7 @@ def search_graph_evidence(
             selected = [
                 dict(item.content) for item in result.items
                 if isinstance(item.content, dict)
-            ][:int(top_k)]
+            ][:retrieval_top_k]
 
             if retrieval_mode in {"關聯擴展檢索", "GraphRAG"} and selected:
                 with driver.session(database=database.strip()) as session:
@@ -264,7 +266,7 @@ def search_graph_evidence(
                         ),
                         default=len(chunk_priority),
                     ))
-                    selected.extend(source_chunks[:int(top_k)])
+                    selected.extend(source_chunks[:retrieval_top_k])
                     selected_ids = {item.get("evidence_id", "") for item in selected}
                     related_entities = session.run(
                         """
@@ -291,7 +293,7 @@ def search_graph_evidence(
                         document_names=selected_documents,
                         names=names,
                         chunk_numbers=chunk_numbers,
-                        top_k=int(top_k),
+                        top_k=retrieval_top_k,
                     ).data()
                     entity_evidence = [
                         _expanded_evidence(record["evidence"])
@@ -330,7 +332,7 @@ def search_graph_evidence(
                         document_names=selected_documents,
                         names=expanded_names,
                         chunk_numbers=chunk_numbers,
-                        top_k=int(top_k),
+                        top_k=retrieval_top_k,
                     ).data()
                     selected.extend(
                         _expanded_evidence(record["evidence"])
