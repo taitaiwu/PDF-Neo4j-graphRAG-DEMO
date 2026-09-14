@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import csv
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import partial
 import json
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from uuid import uuid4
 
@@ -16,26 +17,21 @@ from .config import (
     public_settings,
 )
 from .env_store import load_env, save_env
-from .service_settings import (
-    capture_service_settings, configured_models, load_service_settings,
-    preferred_service_model, provider_models, restore_service_settings, resolve_model_service, save_service_settings,
-    service_choice_items, service_choices,
-)
 from .evaluation_service import (
-    generate_evaluation_questions,
     generate_document_summary,
+    generate_evaluation_questions,
     judge_evaluation_answer,
     questions_are_similar,
     select_relevant_documents,
 )
 from .graph_service import (
+    RunCancelled,
+    RunControl,
+    check_model_connection,
     extract_graph,
     list_models,
     plan_graph_schema,
-    check_model_connection,
     validate_schema,
-    RunCancelled,
-    RunControl,
 )
 from .neo4j_service import (
     check_neo4j_connection,
@@ -54,9 +50,24 @@ from .project_store import (
     remove_document,
     save_project,
 )
-from .qa_service import answer_graph_question, check_embedding_connection, embedding_vectors
+from .qa_service import (
+    answer_graph_question,
+    check_embedding_connection,
+    embedding_vectors,
+)
+from .service_settings import (
+    capture_service_settings,
+    configured_models,
+    load_service_settings,
+    preferred_service_model,
+    provider_models,
+    resolve_model_service,
+    restore_service_settings,
+    save_service_settings,
+    service_choice_items,
+    service_choices,
+)
 from .storage import write_json
-
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 
@@ -690,7 +701,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         preferences.get("generation_model", legacy_model),
         preferences.get("test_model", legacy_model), preferences.get("question_count", 10),
         _display_retrieval_mode(preferences.get("retrieval_mode")), preferences.get("top_k", 8),
-        preferences.get("generation_max_concurrent_requests", 3),
+        preferences.get("allow_parallel_generation", False),
         preferences.get("test_max_concurrent_requests", 3),
         f"已載入 {len(questions)} 道題目與 {len(results)} 筆測試結果。",
     )
@@ -699,15 +710,14 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
 def save_evaluation_preferences_for_ui(
     project_id: str, generation_model: str, test_model: str, question_count: int,
     retrieval_mode: str, top_k: int,
-    generation_max_concurrent_requests: int = 3,
+    allow_parallel_generation: bool = False,
     test_max_concurrent_requests: int = 3,
 ) -> str:
     if not project_id:
         return "⚠️ 請先選擇專案。"
     try:
-        generation_concurrency = int(generation_max_concurrent_requests)
         test_concurrency = int(test_max_concurrent_requests)
-        if generation_concurrency < 1 or test_concurrency < 1:
+        if test_concurrency < 1:
             raise ValueError("最大並行請求數必須大於 0")
         project = load_project(project_id)
         evaluation = dict(project.get("evaluation") or {})
@@ -715,7 +725,7 @@ def save_evaluation_preferences_for_ui(
             "generation_model": generation_model, "test_model": test_model,
             "question_count": int(question_count),
             "retrieval_mode": retrieval_mode, "top_k": int(top_k),
-            "generation_max_concurrent_requests": int(generation_max_concurrent_requests),
+            "allow_parallel_generation": bool(allow_parallel_generation),
             "test_max_concurrent_requests": int(test_max_concurrent_requests),
         }
         save_project(project_id, {"evaluation": evaluation})
@@ -788,7 +798,7 @@ def generate_document_summaries_for_ui(
 def generate_evaluation_for_ui(
     project_id: str, model_endpoint: str, api_key: str, generation_model: str,
     test_model: str, question_count: int, retrieval_mode: str, top_k: int,
-    chunks: list[TextChunk], max_concurrent_requests: int = 3,
+    chunks: list[TextChunk], allow_parallel_generation: bool = False,
     test_max_concurrent_requests: int = 3,
 ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
     if not project_id:
@@ -799,9 +809,6 @@ def generate_evaluation_for_ui(
         count = int(question_count)
         if not 1 <= count <= 100:
             raise ValueError("題目數量必須介於 1 到 100")
-        concurrency = int(max_concurrent_requests)
-        if concurrency < 1:
-            raise ValueError("同時生題文件數必須大於 0")
         chunks_by_document: dict[str, list[TextChunk]] = {}
         for chunk in chunks:
             chunks_by_document.setdefault(chunk.document, []).append(chunk)
@@ -813,6 +820,9 @@ def generate_evaluation_for_ui(
             str(item.get("document", "")): item
             for item in existing_evaluation.get("document_summaries", [])
         }
+        accepted_questions: list[str] = []
+        accepted_lock = Lock()
+
         def generate_for_document(
             document: str,
             selected_chunks: list[TextChunk],
@@ -823,7 +833,8 @@ def generate_evaluation_for_ui(
             max_attempts = count * 5
             while len(accepted) < count and attempts < max_attempts:
                 attempts += 1
-                excluded = [item["question"] for item in accepted]
+                with accepted_lock:
+                    excluded = list(accepted_questions)
                 try:
                     batch = generate_evaluation_questions(
                         model_endpoint,
@@ -838,13 +849,15 @@ def generate_evaluation_for_ui(
                     last_error = str(exc)
                     continue
                 for question in batch:
-                    if any(
-                        questions_are_similar(question["question"], item["question"])
-                        for item in accepted
-                    ):
-                        continue
-                    accepted.append(question)
-                    break
+                    with accepted_lock:
+                        if any(
+                            questions_are_similar(question["question"], existing)
+                            for existing in accepted_questions
+                        ):
+                            continue
+                        accepted_questions.append(question["question"])
+                        accepted.append(question)
+                        break
             if len(accepted) < count:
                 detail = f"；最後錯誤：{last_error}" if last_error else ""
                 raise ValueError(
@@ -853,11 +866,18 @@ def generate_evaluation_for_ui(
                 )
             return accepted
 
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            document_results = list(executor.map(
-                lambda item: generate_for_document(item[0], item[1]),
-                chunks_by_document.items(),
-            ))
+        document_items = list(chunks_by_document.items())
+        if allow_parallel_generation:
+            with ThreadPoolExecutor(max_workers=len(document_items)) as executor:
+                document_results = list(executor.map(
+                    lambda item: generate_for_document(item[0], item[1]),
+                    document_items,
+                ))
+        else:
+            document_results = [
+                generate_for_document(document, selected_chunks)
+                for document, selected_chunks in document_items
+            ]
 
         questions = []
         for document_questions in document_results:
@@ -869,7 +889,7 @@ def generate_evaluation_for_ui(
             "preferences": {**existing_preferences, "generation_model": generation_model, "test_model": test_model,
                             "question_count": int(question_count),
                             "retrieval_mode": retrieval_mode, "top_k": int(top_k),
-                            "generation_max_concurrent_requests": concurrency,
+                            "allow_parallel_generation": bool(allow_parallel_generation),
                             "test_max_concurrent_requests": int(test_max_concurrent_requests)},
             "questions": questions, "results": [], "dirty": False,
         }
@@ -1864,7 +1884,7 @@ def build_app() -> gr.Blocks:
             gr.Markdown(
                 "### 從 PDF 自動建立問答測試集\n"
                 "每份 PDF 建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
-                "生題最大並行請求數表示可同時處理的 PDF 數；同一份 PDF 永遠只會有一個生題請求。"
+                "勾選允許並行時，不同 PDF 可同時生題，但同一份 PDF 同時只會送出一個請求；未勾選時全部依序處理。"
             )
             with gr.Group():
                 gr.Markdown("#### 生題設定")
@@ -1876,7 +1896,9 @@ def build_app() -> gr.Blocks:
                         label="生題模型",
                     )
                     evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="每份 PDF 題目數 N")
-                    evaluation_generation_max_concurrent_requests = gr.Number(value=3, minimum=1, precision=0, label="生題最大並行請求數（跨 PDF）")
+                    evaluation_allow_parallel_generation = gr.Checkbox(
+                        value=False, label="允許並行"
+                    )
                 generate_evaluation_button = gr.Button("從 PDF 建立題目與答案", variant="primary")
             with gr.Group():
                 gr.Markdown("#### 測試模型設定")
@@ -2016,17 +2038,17 @@ def build_app() -> gr.Blocks:
             load_evaluation_with_services_for_ui, inputs=[project_selector, llm_service_state],
             outputs=[evaluation_state, evaluation_questions_table, evaluation_results_table,
                      evaluation_generation_model, evaluation_test_model, evaluation_question_count,
-                     evaluation_retrieval_mode, evaluation_top_k, evaluation_generation_max_concurrent_requests,
+                     evaluation_retrieval_mode, evaluation_top_k, evaluation_allow_parallel_generation,
                      evaluation_test_max_concurrent_requests, evaluation_status],
         )
         evaluation_preference_inputs = [
             project_selector, evaluation_generation_model, evaluation_test_model, evaluation_question_count,
             evaluation_retrieval_mode, evaluation_top_k,
-            evaluation_generation_max_concurrent_requests, evaluation_test_max_concurrent_requests,
+            evaluation_allow_parallel_generation, evaluation_test_max_concurrent_requests,
         ]
         for component in [evaluation_generation_model, evaluation_test_model, evaluation_question_count,
                           evaluation_retrieval_mode, evaluation_top_k,
-                          evaluation_generation_max_concurrent_requests, evaluation_test_max_concurrent_requests]:
+                          evaluation_allow_parallel_generation, evaluation_test_max_concurrent_requests]:
             component.input(
                 save_evaluation_preferences_for_ui,
                 inputs=evaluation_preference_inputs, outputs=evaluation_status,
@@ -2053,7 +2075,7 @@ def build_app() -> gr.Blocks:
             generate_evaluation_for_ui,
             inputs=[project_selector, generation_model_endpoint, generation_model_key, evaluation_generation_model,
                     evaluation_test_model, evaluation_question_count, evaluation_retrieval_mode,
-                    evaluation_top_k, chunk_state, evaluation_generation_max_concurrent_requests,
+                    evaluation_top_k, chunk_state, evaluation_allow_parallel_generation,
                     evaluation_test_max_concurrent_requests],
             outputs=[evaluation_status, evaluation_questions_table,
                      evaluation_state, evaluation_results_table],

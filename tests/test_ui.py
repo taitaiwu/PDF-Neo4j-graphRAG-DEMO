@@ -1,10 +1,13 @@
 import json
 from pathlib import Path
+from threading import Barrier, Lock
+
 import gradio as gr
 import pytest
-from manual_graphrag import service_settings as settings, ui
-from manual_graphrag.chunking import PageText, TextChunk
 
+from manual_graphrag import service_settings as settings
+from manual_graphrag import ui
+from manual_graphrag.chunking import PageText, TextChunk
 from manual_graphrag.ui import build_app, connection_summary, persist_env_settings
 
 
@@ -165,6 +168,18 @@ def test_pdf_upload_starts_with_valid_multi_document_controls() -> None:
         == ["選取", "文件", "頁碼範圍", "Chunk 數"]
         for component in app.config["components"]
     )
+
+
+def test_evaluation_generation_uses_parallel_checkbox() -> None:
+    app = build_app()
+    fields = {
+        component.get("props", {}).get("label"): component
+        for component in app.config["components"]
+    }
+
+    assert fields["允許並行"]["type"] == "checkbox"
+    assert fields["允許並行"]["props"]["value"] is False
+    assert "生題最大並行請求數（跨 PDF）" not in fields
 
 
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
@@ -395,7 +410,7 @@ def test_build_app_has_independent_provider_switches_and_ollama_tables() -> None
     assert "⚡ 套用 Ollama 本機預設（省 token）" not in buttons
     assert not {"重新整理模型清單", "重新整理 Embedding 模型清單"} & buttons.keys()
     for label, provider_label, fetch_label, test_label, count in [
-        ("LLM 模型清單", "模型服務來源", "獲得模型清單", "測試模型服務連線", 5),
+        ("LLM 模型清單", "模型服務來源", "獲得模型清單", "測試模型服務連線", 6),
         ("Embedding 模型清單", "Embedding 服務來源", "獲得 Embedding 模型清單", "測試 Embedding 服務連線", 1),
     ]:
         table = next(c for c in components if c.get("props", {}).get("label") == label)
@@ -559,7 +574,7 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
 
     status, rows, state, results = ui.generate_evaluation_for_ui(
         "project", "endpoint", "key", "generation-model", "test-model", 1, "關聯擴展檢索", 8,
-        [TextChunk(1, "text", (1,))], 2, 5,
+        [TextChunk(1, "text", (1,))], True, 5,
     )
 
     assert status.startswith("✅")
@@ -567,8 +582,8 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     assert state["questions"] == questions
     assert state["preferences"]["generation_model"] == "generation-model"
     assert captured["evaluation"]["questions"] == questions
-    assert state["preferences"]["generation_max_concurrent_requests"] == 2
-    assert captured["generation_workers"] == 2
+    assert state["preferences"]["allow_parallel_generation"] is True
+    assert captured["generation_workers"] == 1
     assert state["preferences"]["test_max_concurrent_requests"] == 5
     assert results == []
 
@@ -576,6 +591,12 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
 def test_generate_evaluation_distributes_questions_across_documents(monkeypatch) -> None:
     requested_documents = []
     exclusions_by_document = {"a.pdf": [], "b.pdf": []}
+    captured = {}
+    real_executor = ui.ThreadPoolExecutor
+
+    def recording_executor(max_workers):
+        captured["generation_workers"] = max_workers
+        return real_executor(max_workers=max_workers)
 
     def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None, _summary=None):
         document = chunks[0].document
@@ -591,6 +612,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
         }]
 
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
     monkeypatch.setattr(
         ui, "generate_document_summary",
         lambda *args: (_ for _ in ()).throw(AssertionError("生題不應建立摘要")),
@@ -604,7 +626,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
         "project", "endpoint", "key", "generation-model", "test-model",
         2, "基本檢索", 8,
         [TextChunk(1, "a", (1,), "a.pdf"), TextChunk(2, "b", (1,), "b.pdf")],
-        3, 3,
+        True, 3,
     )
 
     assert status.startswith("✅")
@@ -614,8 +636,9 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
     assert [item["document"] for item in state["questions"]] == [
         "a.pdf", "a.pdf", "b.pdf", "b.pdf",
     ]
-    assert exclusions_by_document["a.pdf"] == [[], ["a.pdf question 1"]]
-    assert exclusions_by_document["b.pdf"] == [[], ["b.pdf question 1"]]
+    assert captured["generation_workers"] == 2
+    assert "a.pdf question 1" in exclusions_by_document["a.pdf"][1]
+    assert "b.pdf question 1" in exclusions_by_document["b.pdf"][1]
 
 
 def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
@@ -655,13 +678,93 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
         "基本檢索",
         8,
         [TextChunk(1, "內容", (1,), "manual.pdf")],
-        2,
+        True,
         3,
     )
 
     assert status.startswith("✅")
     assert [item["question"] for item in state["questions"]] == ["相同問題？", "不同問題？"]
     assert calls["count"] == 3
+
+
+def test_parallel_generation_refills_duplicates_across_documents(monkeypatch) -> None:
+    first_requests = Barrier(2)
+    call_counts = {"a.pdf": 0, "b.pdf": 0}
+    call_lock = Lock()
+
+    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None, _summary=None):
+        document = chunks[0].document
+        with call_lock:
+            call_counts[document] += 1
+            attempt = call_counts[document]
+        if attempt == 1:
+            first_requests.wait()
+            question = "跨文件重複問題？"
+        else:
+            assert "跨文件重複問題？" in (excluded or [])
+            question = f"{document} 替代問題？"
+        return [{
+            "number": 1,
+            "question": question,
+            "expected_answer": "答案",
+            "source_pages": [1],
+            "document": document,
+        }]
+
+    monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
+    monkeypatch.setattr(ui, "save_project", lambda *_: {})
+
+    status, _rows, state, _results = ui.generate_evaluation_for_ui(
+        "project", "endpoint", "key", "generation-model", "test-model",
+        1, "基本檢索", 8,
+        [TextChunk(1, "a", (1,), "a.pdf"), TextChunk(2, "b", (1,), "b.pdf")],
+        True, 3,
+    )
+
+    assert status.startswith("✅")
+    questions = [item["question"] for item in state["questions"]]
+    assert questions.count("跨文件重複問題？") == 1
+    assert len(questions) == len(set(questions)) == 2
+    assert sum(call_counts.values()) == 3
+
+
+def test_generate_evaluation_processes_all_documents_sequentially_when_parallel_disabled(
+    monkeypatch,
+) -> None:
+    requested_documents = []
+
+    def fake_generate(_endpoint, _key, _model, chunks, _count, *_args):
+        document = chunks[0].document
+        requested_documents.append(document)
+        return [{
+            "number": 1,
+            "question": f"{document} question",
+            "expected_answer": "answer",
+            "source_pages": [1],
+            "document": document,
+        }]
+
+    monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(
+        ui, "ThreadPoolExecutor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("未允許並行時不應建立執行緒池")
+        ),
+    )
+    monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
+    monkeypatch.setattr(ui, "save_project", lambda *_: {})
+
+    status, _rows, state, _results = ui.generate_evaluation_for_ui(
+        "project", "endpoint", "key", "generation-model", "test-model",
+        1, "基本檢索", 8,
+        [TextChunk(1, "a", (1,), "a.pdf"), TextChunk(2, "b", (1,), "b.pdf")],
+        False, 3,
+    )
+
+    assert status.startswith("✅")
+    assert requested_documents == ["a.pdf", "b.pdf"]
+    assert state["preferences"]["allow_parallel_generation"] is False
 
 
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
@@ -1337,7 +1440,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
 
     status = ui.save_evaluation_preferences_for_ui(
-        "project", "generation-model", "test-model", 12, "基本檢索", 6, 4, 5
+        "project", "generation-model", "test-model", 12, "基本檢索", 6, True, 5
     )
 
     assert status.startswith("✅")
@@ -1347,7 +1450,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
         "question_count": 12,
         "retrieval_mode": "基本檢索",
         "top_k": 6,
-        "generation_max_concurrent_requests": 4,
+        "allow_parallel_generation": True,
         "test_max_concurrent_requests": 5,
     }
 
@@ -1359,7 +1462,7 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
 
     loaded = ui.load_evaluation_for_ui("project")
 
-    assert loaded[8] == 3
+    assert loaded[8] is False
     assert loaded[9] == 3
     assert loaded[3:5] == ("legacy-model", "legacy-model")
     assert loaded[6] == "關聯擴展檢索"
