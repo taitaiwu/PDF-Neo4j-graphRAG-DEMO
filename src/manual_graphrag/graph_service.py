@@ -21,6 +21,7 @@ RATE_LIMIT_BASE_DELAY_SECONDS = 2.0
 RATE_LIMIT_MAX_DELAY_SECONDS = 30.0
 NETWORK_MAX_RETRIES = 2
 NETWORK_RETRY_BASE_DELAY_SECONDS = 0.5
+CHAT_COMPLETION_TIMEOUT_SECONDS = 600
 
 
 class RunCancelled(Exception):
@@ -118,7 +119,7 @@ def _post_json(
     url: str,
     payload: dict[str, Any],
     api_key: str,
-    timeout: int = 120,
+    timeout: int = CHAT_COMPLETION_TIMEOUT_SECONDS,
     on_retry: Callable[[int, float], None] | None = None,
     control: RunControl | None = None,
 ) -> dict[str, Any]:

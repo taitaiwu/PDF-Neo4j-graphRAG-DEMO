@@ -473,6 +473,20 @@ def test_post_json_retries_after_rate_limit_then_succeeds(monkeypatch) -> None:
     assert first_error.fp.closed, "retried HTTPError response must be closed, not leaked"
 
 
+def test_post_json_uses_extended_chat_timeout(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["timeout"] = timeout
+        return io.BytesIO(b'{"ok": true}')
+
+    monkeypatch.setattr(graph_service.urllib.request, "urlopen", fake_urlopen)
+
+    assert graph_service._post_json("http://models/v1/chat/completions", {}, "") == {"ok": True}
+    assert captured["timeout"] == graph_service.CHAT_COMPLETION_TIMEOUT_SECONDS == 600
+
+
+
 def test_post_json_raises_after_exhausting_rate_limit_retries(monkeypatch) -> None:
     calls = {"count": 0}
 
