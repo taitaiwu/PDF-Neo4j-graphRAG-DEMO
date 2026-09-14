@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import random
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from pathlib import Path
@@ -704,13 +705,41 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
     ] for item in results]
 
 
+def _source_values_for_document(display: str, documents: str, document: str) -> set[int]:
+    for line in str(display).splitlines():
+        prefix, separator, values = line.partition("：")
+        if separator and prefix == document:
+            return {int(value) for value in re.findall(r"\d+", values)}
+    listed_documents = {
+        value for value in re.split(r"[、\n]", str(documents)) if value
+    }
+    if listed_documents == {document}:
+        return {int(value) for value in re.findall(r"\d+", str(display))}
+    return set()
+
+
+def _retrieval_rank(question: dict[str, Any], rows: list[list[object]]) -> int | None:
+    document = str(question.get("document") or "")
+    expected_chunks = {
+        int(value) for value in question.get("source_chunk_numbers", [])
+    }
+    expected_pages = {int(value) for value in question.get("source_pages", [])}
+    for rank, row in enumerate(rows, start=1):
+        chunks = _source_values_for_document(row[5], row[6], document)
+        pages = _source_values_for_document(row[4], row[6], document)
+        if expected_chunks and chunks & expected_chunks:
+            return rank
+        if not expected_chunks and expected_pages and pages & expected_pages:
+            return rank
+    return None
+
 def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     if not project_id:
-        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
+        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
     try:
         project = load_project(project_id)
     except (OSError, ValueError) as exc:
-        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
+        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
     evaluation = dict(project.get("evaluation") or {})
     evaluation.setdefault("dirty", False)
     preferences = evaluation.get("preferences") or {}
@@ -723,6 +752,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         preferences.get("test_model", legacy_model), preferences.get("question_count", 10),
         _display_retrieval_mode(preferences.get("retrieval_mode")), preferences.get("top_k", 8),
         preferences.get("allow_parallel_generation", False),
+        preferences.get("use_reranker", True),
         preferences.get("test_max_concurrent_requests", 3),
         f"已載入 {len(questions)} 道題目與 {len(results)} 筆測試結果。",
     )
@@ -733,6 +763,7 @@ def save_evaluation_preferences_for_ui(
     retrieval_mode: str, top_k: int,
     allow_parallel_generation: bool = False,
     test_max_concurrent_requests: int = 3,
+    use_reranker: bool = True,
 ) -> str:
     if not project_id:
         return "⚠️ 請先選擇專案。"
@@ -747,6 +778,7 @@ def save_evaluation_preferences_for_ui(
             "question_count": int(question_count),
             "retrieval_mode": retrieval_mode, "top_k": int(top_k),
             "allow_parallel_generation": bool(allow_parallel_generation),
+            "use_reranker": bool(use_reranker),
             "test_max_concurrent_requests": int(test_max_concurrent_requests),
         }
         save_project(project_id, {"evaluation": evaluation})
@@ -821,6 +853,7 @@ def generate_evaluation_for_ui(
     test_model: str, question_count: int, retrieval_mode: str, top_k: int,
     chunks: list[TextChunk], allow_parallel_generation: bool = False,
     test_max_concurrent_requests: int = 3,
+    use_reranker: bool = True,
 ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
     if not project_id:
         return "❌ 請先建立或載入專案。", [], {}, []
@@ -911,6 +944,7 @@ def generate_evaluation_for_ui(
                             "question_count": int(question_count),
                             "retrieval_mode": retrieval_mode, "top_k": int(top_k),
                             "allow_parallel_generation": bool(allow_parallel_generation),
+                            "use_reranker": bool(use_reranker),
                             "test_max_concurrent_requests": int(test_max_concurrent_requests)},
             "questions": questions, "results": [], "dirty": False,
         }
@@ -929,6 +963,7 @@ def run_evaluation_for_ui(
     neo4j_uri: str, neo4j_database: str, neo4j_username: str, neo4j_password: str,
     model: str, retrieval_mode: str, top_k: int, evaluation: dict[str, Any],
     max_concurrent_requests: int = 3,
+    use_reranker: bool = True,
     progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], dict[str, Any]]:
     questions = evaluation.get("questions") if evaluation else None
@@ -970,12 +1005,13 @@ def run_evaluation_for_ui(
         selected_documents = routing["documents"]
         expected_document = str(item.get("document") or "")
         routing_correct = expected_document in selected_documents
-        status, actual, _ = answer_question_for_ui(
+        status, actual, evidence_rows = answer_question_for_ui(
             model_endpoint, api_key, embedding_api_base, embedding_api_key,
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
-            model, item["question"], retrieval_mode, int(top_k),
-            selected_documents,
+            model, item["question"], retrieval_mode, max(int(top_k), 5),
+            selected_documents, use_reranker,
         )
+        retrieval_rank = _retrieval_rank(item, evidence_rows)
         if status.startswith("✅"):
             try:
                 judgment = judge_evaluation_answer(
@@ -993,6 +1029,9 @@ def run_evaluation_for_ui(
             "routing_confidence": routing["confidence"],
             "routing_correct": routing_correct,
             "actual_answer": actual,
+            "retrieval_rank": retrieval_rank,
+            "recall_at_5": retrieval_rank is not None and retrieval_rank <= 5,
+            "reciprocal_rank": 1 / retrieval_rank if retrieval_rank else 0.0,
             **judgment,
         }
 
@@ -1020,6 +1059,12 @@ def run_evaluation_for_ui(
         bool(item["routing_correct"] and item["passed"]) for item in results
     )
     total = len(results)
+    recall_at_5 = (
+        sum(bool(item.get("recall_at_5")) for item in results) / total
+        if total else 0
+    )
+    mrr = sum(float(item.get("reciprocal_rank", 0)) for item in results) / total if total else 0
+
     document_totals: dict[str, list[int]] = {}
     for item in results:
         document = str(item.get("document") or "未標示文件")
@@ -1041,6 +1086,7 @@ def run_evaluation_for_ui(
         f"路由且答案正確：{complete_passed} / {total}  "
         f"\n答錯：{failed} 題｜答案正確率：{accuracy:.1f}%"
         f"\n\n### 各 PDF 結果\n{document_summary}"
+        f"  \nRecall@5：{recall_at_5:.1%}｜MRR：{mrr:.3f}"
     )
     return summary, _evaluation_result_rows(results), updated
 
@@ -1577,6 +1623,7 @@ def answer_question_for_ui(
     retrieval_mode: str,
     top_k: int,
     document_names: list[str] | None = None,
+    use_reranker: bool = True,
 ) -> tuple[str, str, list[list[object]]]:
     if not answer_model:
         return "❌ 請先勾選並選擇問答 LLM。", "", []
@@ -1594,12 +1641,15 @@ def answer_question_for_ui(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             graph_state["run_id"], question.strip(), question_vector,
             retrieval_mode, int(top_k), document_names,
-            candidate_top_k=min(
-                int(top_k) * RERANK_CANDIDATE_MULTIPLIER,
-                RERANK_MAX_CANDIDATES,
+            candidate_top_k=(
+                min(int(top_k) * RERANK_CANDIDATE_MULTIPLIER, RERANK_MAX_CANDIDATES)
+                if use_reranker else int(top_k)
             ),
         )
-        evidence = rerank_evidence(question, evidence, int(top_k))
+        if use_reranker:
+            evidence = rerank_evidence(question, evidence, int(top_k))
+        else:
+            evidence = evidence[:int(top_k)]
         result = answer_graph_question(
             model_endpoint, api_key, answer_model, question, retrieval_mode, evidence, document_names
         )
@@ -1953,6 +2003,9 @@ def build_app() -> gr.Blocks:
                     )
                     evaluation_retrieval_mode = gr.Radio(["基本檢索", "關聯擴展檢索"], value="關聯擴展檢索", label="檢索模式")
                     evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
+                    evaluation_use_reranker = gr.Checkbox(
+                        value=True, label="使用 Reranker"
+                    )
                     evaluation_test_max_concurrent_requests = gr.Number(value=3, minimum=1, precision=0, label="測試最大並行請求數")
                 run_evaluation_button = gr.Button("一鍵測試", variant="primary")
             with gr.Row():
@@ -2001,7 +2054,7 @@ def build_app() -> gr.Blocks:
         with gr.Tab("6. 問答測試", interactive=False) as qa_tab:
             gr.Markdown(
                 "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
-                "Hybrid Search 會擴大召回候選，再由本機 Reranker 重排後取 Top K。"
+                "可選擇是否由本機 Reranker 重排 Hybrid Search 候選。"
             )
             answer_model = gr.Dropdown(
                 choices=llm_choices,
@@ -2013,6 +2066,7 @@ def build_app() -> gr.Blocks:
             with gr.Row():
                 retrieval_mode = gr.Radio(["基本檢索", "關聯擴展檢索"], value="關聯擴展檢索", label="檢索模式")
                 top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
+                use_reranker = gr.Checkbox(value=True, label="使用 Reranker")
             ask_button = gr.Button("送出問題", variant="primary")
             answer_status = gr.Markdown()
             gr.HTML(
@@ -2069,6 +2123,7 @@ def build_app() -> gr.Blocks:
         answer_model_key = gr.State(initial_llm_credentials[4][1])
         selected_embedding_endpoint = gr.State(initial_embedding_credentials[0])
         selected_embedding_key = gr.State(initial_embedding_credentials[1])
+        qa_document_filter = gr.State(None)
 
         summary_tab.select(
             load_document_summaries_for_ui, inputs=project_selector,
@@ -2086,16 +2141,19 @@ def build_app() -> gr.Blocks:
             outputs=[evaluation_state, evaluation_questions_table, evaluation_results_table,
                      evaluation_generation_model, evaluation_test_model, evaluation_question_count,
                      evaluation_retrieval_mode, evaluation_top_k, evaluation_allow_parallel_generation,
+                     evaluation_use_reranker,
                      evaluation_test_max_concurrent_requests, evaluation_status],
         )
         evaluation_preference_inputs = [
             project_selector, evaluation_generation_model, evaluation_test_model, evaluation_question_count,
             evaluation_retrieval_mode, evaluation_top_k,
             evaluation_allow_parallel_generation, evaluation_test_max_concurrent_requests,
+            evaluation_use_reranker,
         ]
         for component in [evaluation_generation_model, evaluation_test_model, evaluation_question_count,
                           evaluation_retrieval_mode, evaluation_top_k,
-                          evaluation_allow_parallel_generation, evaluation_test_max_concurrent_requests]:
+                          evaluation_allow_parallel_generation, evaluation_use_reranker,
+                          evaluation_test_max_concurrent_requests]:
             component.input(
                 save_evaluation_preferences_for_ui,
                 inputs=evaluation_preference_inputs, outputs=evaluation_status,
@@ -2123,7 +2181,8 @@ def build_app() -> gr.Blocks:
             inputs=[project_selector, generation_model_endpoint, generation_model_key, evaluation_generation_model,
                     evaluation_test_model, evaluation_question_count, evaluation_retrieval_mode,
                     evaluation_top_k, chunk_state, evaluation_allow_parallel_generation,
-                    evaluation_test_max_concurrent_requests],
+                    evaluation_test_max_concurrent_requests,
+                    evaluation_use_reranker],
             outputs=[evaluation_status, evaluation_questions_table,
                      evaluation_state, evaluation_results_table],
         )
@@ -2133,7 +2192,8 @@ def build_app() -> gr.Blocks:
                     selected_embedding_endpoint, selected_embedding_key,
                     neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
                     evaluation_test_model, evaluation_retrieval_mode,
-                    evaluation_top_k, evaluation_state, evaluation_test_max_concurrent_requests],
+                    evaluation_top_k, evaluation_state, evaluation_test_max_concurrent_requests,
+                    evaluation_use_reranker],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
         )
 
@@ -2483,6 +2543,8 @@ def build_app() -> gr.Blocks:
                 question,
                 retrieval_mode,
                 top_k,
+                qa_document_filter,
+                use_reranker,
             ],
             outputs=[answer_status, answer, answer_sources, history_table, project_history_status],
         )

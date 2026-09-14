@@ -786,8 +786,31 @@ def test_generate_evaluation_processes_all_documents_sequentially_when_parallel_
     assert state["preferences"]["allow_parallel_generation"] is False
 
 
+def test_retrieval_rank_prefers_expected_chunk_and_supports_mrr() -> None:
+    question = {
+        "document": "manual.pdf",
+        "source_pages": [1],
+        "source_chunk_numbers": [42],
+    }
+    rows = [
+        ["原文", "錯誤 chunk", "", "0.9", "manual.pdf：1", "manual.pdf：9", "manual.pdf"],
+        ["原文", "正確 chunk", "", "0.8", "manual.pdf：2", "manual.pdf：42", "manual.pdf"],
+    ]
+
+    rank = ui._retrieval_rank(question, rows)
+
+    assert rank == 2
+    assert 1 / rank == 0.5
+
+
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
-    monkeypatch.setattr(ui, "answer_question_for_ui", lambda *args: ("✅ 完成", "實際答案", []))
+    monkeypatch.setattr(
+        ui, "answer_question_for_ui",
+        lambda *args: ("✅ 完成", "實際答案", [[
+            "原文", "證據", "official-hybrid", "0.9",
+            "manual.pdf：1", "manual.pdf：9", "manual.pdf",
+        ]]),
+    )
     monkeypatch.setattr(
         ui, "select_relevant_documents",
         lambda *args: {"documents": ["manual.pdf"], "reason": "符合", "confidence": 0.9},
@@ -821,6 +844,8 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     assert "文件路由正確：1 / 1" in status
     assert "答錯：0 題" in status
     assert "答案正確率：100.0%" in status
+    assert "Recall@5：100.0%" in status
+    assert "MRR：1.000" in status
     assert rows[0][3:] == [
         "manual.pdf", "manual.pdf", "✅ 正確", "實際答案", "✅ 通過", "正確",
     ]
@@ -861,7 +886,7 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
     assert captured["args"] == (
         "endpoint", "key", "embed-endpoint", "embed-key",
         "bolt", "neo4j", "user", "pass",
-        "model", "Q", "關聯擴展檢索", 8, ["manual.pdf"],
+        "model", "Q", "關聯擴展檢索", 8, ["manual.pdf"], True,
     )
 
 
@@ -1438,7 +1463,7 @@ def test_import_graph_for_ui_requires_extraction() -> None:
     ) == ("❌ 請先完成知識圖譜抽取。", {})
 
 
-def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) -> None:
+def test_answer_question_for_ui_can_disable_reranker(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         ui,
@@ -1476,15 +1501,15 @@ def test_answer_question_for_ui_displays_hybrid_scores(tmp_path, monkeypatch) ->
     status, answer, rows = ui.answer_question_for_ui(
         "http://models/v1", "key", "http://embed/v1", "embed-key",
         "bolt://db", "neo4j", "user", "password",
-        "answer", " E01 怎麼處理？ ", "基本檢索", 8,
+        "answer", " E01 怎麼處理？ ", "基本檢索", 8, None, False,
     )
 
     assert status.startswith("✅ 基本檢索")
     assert answer == "請重新啟動。"
     assert captured["args"][5] == "E01 怎麼處理？"
-    assert captured["kwargs"]["candidate_top_k"] == 24
+    assert captured["kwargs"]["candidate_top_k"] == 8
     assert rows == [[
-        "原文", "E01 排除方式", "official-hybrid, local-reranker",
+        "原文", "E01 排除方式", "official-hybrid",
         "0.0300", "3", "2", "",
     ]]
 
@@ -1495,7 +1520,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
 
     status = ui.save_evaluation_preferences_for_ui(
-        "project", "generation-model", "test-model", 12, "基本檢索", 6, True, 5
+        "project", "generation-model", "test-model", 12, "基本檢索", 6, True, 5, False
     )
 
     assert status.startswith("✅")
@@ -1506,6 +1531,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
         "retrieval_mode": "基本檢索",
         "top_k": 6,
         "allow_parallel_generation": True,
+        "use_reranker": False,
         "test_max_concurrent_requests": 5,
     }
 
@@ -1518,7 +1544,8 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     loaded = ui.load_evaluation_for_ui("project")
 
     assert loaded[8] is False
-    assert loaded[9] == 3
+    assert loaded[9] is True
+    assert loaded[10] == 3
     assert loaded[3:5] == ("legacy-model", "legacy-model")
     assert loaded[6] == "關聯擴展檢索"
 
