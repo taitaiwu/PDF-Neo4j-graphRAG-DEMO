@@ -188,7 +188,7 @@ def test_evaluation_results_table_uses_smaller_font_class() -> None:
         component
         for component in app.config["components"]
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "路由理由", "實際答案", "答案結果", "評判理由"]
+        == ["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "實際答案", "答案結果", "評判理由"]
     )
     html_styles = "\n".join(
         str(component.get("props", {}).get("value", ""))
@@ -359,7 +359,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     result_table_index = next(
         index for index, component in enumerate(components)
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "路由理由", "實際答案", "答案結果", "評判理由"]
+        == ["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "實際答案", "答案結果", "評判理由"]
     )
     assert question_table_index < metrics_box_index < result_title_index < result_table_index
 
@@ -822,8 +822,7 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     assert "答錯：0 題" in status
     assert "答案正確率：100.0%" in status
     assert rows[0][3:] == [
-        "manual.pdf", "manual.pdf", "✅ 正確", "符合",
-        "實際答案", "✅ 通過", "正確",
+        "manual.pdf", "manual.pdf", "✅ 正確", "實際答案", "✅ 通過", "正確",
     ]
     assert captured["test_workers"] == 2
     assert updated["results"][0]["routing_correct"] is True

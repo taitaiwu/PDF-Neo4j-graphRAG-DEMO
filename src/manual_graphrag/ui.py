@@ -695,7 +695,6 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
         item.get("document", ""),
         "、".join(item.get("selected_documents") or []),
         "✅ 正確" if item.get("routing_correct") else "❌ 錯誤",
-        item.get("routing_reason", ""),
         item.get("actual_answer", ""),
         "✅ 通過" if item.get("passed") else "❌ 未通過",
         item.get("reason", ""),
@@ -1986,7 +1985,7 @@ def build_app() -> gr.Blocks:
                 )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
-                headers=["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "路由理由", "實際答案", "答案結果", "評判理由"],
+                headers=["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "實際答案", "答案結果", "評判理由"],
                 interactive=False, wrap=True,
                 elem_classes=["evaluation-table", "evaluation-results-table"],
             )
