@@ -1,37 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
-<title id="title">HybridCypherRetriever 完整檢索流程</title><desc id="desc">以 E01 錯誤為例，逐步解釋 Embedding、向量搜尋、全文搜尋、naive ranker、Cypher 過濾、圖譜擴展、本機重排與生成答案。</desc>
-<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#F8FBFE"/><stop offset="1" stop-color="#EAF3F8"/></linearGradient><filter id="s"><feDropShadow dy="3" stdDeviation="4" flood-opacity=".13"/></filter><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5 0 10Z" fill="#506B80"/></marker><style>.f{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif}.t{font-size:34px;font-weight:700;fill:#17324D}.st{font-size:17px;fill:#60788C}.num{font-size:17px;font-weight:700;fill:#fff}.h{font-size:20px;font-weight:700;fill:#17324D}.b{font-size:15px;fill:#405B70}.e{font-size:14px;font-weight:600;fill:#17577D}.m{font-size:14px;fill:#6941A5}.wt{font-size:20px;font-weight:700;fill:#fff}.wb{font-size:15px;fill:#EAF7FF}.ar{fill:none;stroke:#506B80;stroke-width:2.5;marker-end:url(#a)}</style></defs>
+<title id="title">HybridCypherRetriever 簡明流程</title><desc id="desc">以 E01 錯誤為例的混合檢索、圖譜擴展、重排與回答流程。</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#F8FBFE"/><stop offset="1" stop-color="#EAF3F8"/></linearGradient><filter id="s"><feDropShadow dy="3" stdDeviation="4" flood-opacity=".12"/></filter><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5 0 10Z" fill="#526F84"/></marker><style>.f{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif}.t{font-size:38px;font-weight:700;fill:#17324D}.st{font-size:18px;fill:#60788C}.h{font-size:21px;font-weight:700;fill:#17324D}.b{font-size:16px;fill:#405B70}.e{font-size:15px;font-weight:600;fill:#1E6088}.wt{font-size:21px;font-weight:700;fill:#fff}.wb{font-size:16px;fill:#EAF7FF}.n{font-size:17px;font-weight:700;fill:#fff}.ar{fill:none;stroke:#526F84;stroke-width:3;marker-end:url(#a)}</style></defs>
 <rect width="1600" height="900" fill="url(#bg)"/>
-<text x="800" y="43" text-anchor="middle" class="f t">HybridCypherRetriever：從問題到答案的完整流程</text>
-<text x="800" y="70" text-anchor="middle" class="f st">範例問題：「印表機出現 E01 錯誤，該怎麼處理？」｜假設 Top K = 5</text>
+<text x="800" y="52" text-anchor="middle" class="f t">HybridCypherRetriever 簡明流程</text>
+<text x="800" y="82" text-anchor="middle" class="f st">例：「印表機出現 E01，該怎麼處理？」｜Top K = 5</text>
 
-<!-- 1 -->
-<g filter="url(#s)"><rect x="55" y="100" width="440" height="150" rx="18" fill="#E3F2FD" stroke="#3C91C7" stroke-width="2"/><circle cx="92" cy="137" r="23" fill="#3C91C7"/><text x="92" y="143" text-anchor="middle" class="f num">1</text><text x="128" y="132" class="f h">Question Embedding</text><text x="78" y="164" class="f b">使用建圖時相同的 Embedding 模型，</text><text x="78" y="187" class="f b">把問題轉成可計算相似度的向量。</text><text x="78" y="216" class="f e">例：問題 → [0.021, −0.136, 0.084, …]</text><text x="78" y="238" class="f m">向量維度決定使用哪一個 Vector Index。</text></g>
-<path d="M495 175H545" class="ar"/>
+<g filter="url(#s)"><rect x="500" y="110" width="600" height="88" rx="18" fill="#173F5F"/><circle cx="545" cy="154" r="23" fill="#2D78A3"/><text x="545" y="160" text-anchor="middle" class="f n">1</text><text x="585" y="145" class="f wt">Question Embedding</text><text x="585" y="174" class="f wb">問題 → 向量 [0.021, −0.136, 0.084, …]</text></g>
+<path d="M745 198C690 225 535 216 440 247" class="ar"/><path d="M855 198C910 225 1065 216 1160 247" class="ar"/>
 
-<!-- 2A / 2B -->
-<g filter="url(#s)"><rect x="550" y="90" width="470" height="170" rx="18" fill="#FFF" stroke="#5C7F95" stroke-width="2"/><text x="785" y="119" text-anchor="middle" class="f h">2　Hybrid Search：兩路同時召回</text><line x1="785" y1="130" x2="785" y2="247" stroke="#B7C7D2" stroke-width="2"/><text x="570" y="151" class="f e">2A Vector Search</text><text x="570" y="174" class="f b">以 cosine similarity 比較向量方向：</text><text x="570" y="196" class="f m">cos(q,d) = q·d / (‖q‖‖d‖)</text><text x="570" y="219" class="f b">例：找到「設備無法啟動」等同義描述。</text><text x="805" y="151" class="f e">2B Full-text Search</text><text x="805" y="174" class="f b">使用 CJK analyzer 與 Lucene 查詢；</text><text x="805" y="196" class="f b">先跳脫 +、( )、/ 等特殊符號。</text><text x="805" y="219" class="f b">例：精確找到「E01」與「進紙匣」。</text><text x="785" y="247" text-anchor="middle" class="f m">effective_search_ratio = 3：各路擴大搜尋候選，再進行融合。</text></g>
-<path d="M1020 175H1070" class="ar"/>
+<g filter="url(#s)"><rect x="120" y="250" width="600" height="125" rx="18" fill="#E3F2FD" stroke="#3C91C7" stroke-width="2"/><circle cx="163" cy="292" r="23" fill="#3C91C7"/><text x="163" y="298" text-anchor="middle" class="f n">2A</text><text x="203" y="285" class="f h">Vector Search</text><text x="203" y="314" class="f b">cos(q,d) = q·d / (‖q‖‖d‖)</text><text x="203" y="344" class="f e">找到語意相近：「設備無法啟動」</text></g>
+<g filter="url(#s)"><rect x="880" y="250" width="600" height="125" rx="18" fill="#FFF3E0" stroke="#E29A2D" stroke-width="2"/><circle cx="923" cy="292" r="23" fill="#E29A2D"/><text x="923" y="298" text-anchor="middle" class="f n">2B</text><text x="963" y="285" class="f h">Full-text Search</text><text x="963" y="314" class="f b">CJK analyzer ＋ Lucene 關鍵字查詢</text><text x="963" y="344" class="f e">精確找到：「E01」、「進紙匣」</text></g>
+<path d="M420 375C500 410 620 405 680 432" class="ar"/><path d="M1180 375C1100 410 980 405 920 432" class="ar"/>
 
-<!-- 3 -->
-<g filter="url(#s)"><rect x="1075" y="100" width="470" height="150" rx="18" fill="#EDE8FA" stroke="#7659C5" stroke-width="2"/><circle cx="1112" cy="137" r="23" fill="#7659C5"/><text x="1112" y="143" text-anchor="middle" class="f num">3</text><text x="1148" y="132" class="f h">naive ranker 融合排名</text><text x="1098" y="164" class="f b">官方 Retriever 將向量與全文分數正規化，</text><text x="1098" y="187" class="f b">再合併兩份排名；不是本系統自訂加權公式。</text><text x="1098" y="216" class="f e">例：同時命中 E01 且語意相近的處理段落優先。</text><text x="1098" y="238" class="f m">輸出：fusion_score 與 official-hybrid 標記。</text></g>
+<g filter="url(#s)"><rect x="430" y="435" width="740" height="100" rx="18" fill="#EDE8FA" stroke="#7659C5" stroke-width="2"/><circle cx="475" cy="485" r="23" fill="#7659C5"/><text x="475" y="491" text-anchor="middle" class="f n">3</text><text x="515" y="472" class="f h">HybridCypherRetriever：naive ranker</text><text x="515" y="501" class="f b">正規化並融合兩路排名｜effective_search_ratio = 3</text><text x="515" y="525" class="f e">E01 且語意相近的處理段落優先</text></g>
+<path d="M800 535V570" class="ar"/>
 
-<path d="M1310 250V292H1270" class="ar"/>
+<g filter="url(#s)"><rect x="85" y="573" width="450" height="120" rx="18" fill="#fff" stroke="#668399" stroke-width="2"/><circle cx="127" cy="613" r="23" fill="#668399"/><text x="127" y="619" text-anchor="middle" class="f n">4</text><text x="167" y="606" class="f h">Cypher Filter</text><text x="108" y="642" class="f b">限定本次 run_id 與指定 PDF</text><text x="108" y="671" class="f e">只採用「印表機 A 操作手冊」</text></g>
+<path d="M535 633H575" class="ar"/>
 
-<!-- 4 -->
-<g filter="url(#s)"><rect x="835" y="290" width="710" height="145" rx="18" fill="#FFF3E0" stroke="#D99127" stroke-width="2"/><circle cx="873" cy="327" r="23" fill="#D99127"/><text x="873" y="333" text-anchor="middle" class="f num">4</text><text x="910" y="322" class="f h">retrieval_query：Cypher 範圍過濾</text><text x="858" y="355" class="f b">僅保留 node.run_id = 本次建圖批次；若指定 PDF，來源文件也必須符合。</text><text x="858" y="380" class="f e">例：只保留「印表機 A 操作手冊」，排除印表機 B 與舊版建圖資料。</text><text x="858" y="407" class="f m">啟用 Reranker：候選數 = min(Top K × 3, 50)；本例 min(5 × 3, 50) = 15。</text></g>
-<path d="M835 365H785" class="ar"/>
+<g filter="url(#s)"><rect x="580" y="573" width="440" height="120" rx="18" fill="#E8F7F0" stroke="#35976A" stroke-width="2"/><circle cx="622" cy="613" r="23" fill="#35976A"/><text x="622" y="619" text-anchor="middle" class="f n">5</text><text x="662" y="606" class="f h">Graph Expansion（可選）</text><text x="603" y="642" class="f b">補回 Chunk、實體與關係</text><text x="603" y="671" class="f e">E01 → 進紙匣 → 重新安裝</text></g>
+<path d="M1020 633H1060" class="ar"/>
 
-<!-- 5 -->
-<g filter="url(#s)"><rect x="55" y="290" width="730" height="145" rx="18" fill="#E8F7F0" stroke="#35976A" stroke-width="2"/><circle cx="93" cy="327" r="23" fill="#35976A"/><text x="93" y="333" text-anchor="middle" class="f num">5</text><text x="130" y="322" class="f h">Graph Expansion（GraphRAG 模式）</text><text x="78" y="355" class="f b">依命中證據的 chunk 編號與實體名稱，使用 Cypher 補回三類內容：</text><text x="78" y="380" class="f b">①來源原文 Chunk　②同名或同 Chunk 實體　③相連或同 Chunk 關係。</text><text x="78" y="407" class="f e">例：E01 → 進紙匣 →「取出紙匣、重新安裝、重新啟動」及第 12 頁原文。</text></g>
+<g filter="url(#s)"><rect x="1065" y="573" width="450" height="120" rx="18" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/><circle cx="1107" cy="613" r="23" fill="#D69E2E"/><text x="1107" y="619" text-anchor="middle" class="f n">6</text><text x="1147" y="606" class="f h">Local Reranker（可選）</text><text x="1088" y="642" class="f b">候選 = min(Top K × 3, 50) = 15</text><text x="1088" y="671" class="f e">詞彙重疊×2＋命中×0.25＋融合分數＋原文0.05</text></g>
+<path d="M1290 693V735H1040" class="ar"/>
 
-<path d="M420 435V475" class="ar"/>
-
-<!-- 6 -->
-<g filter="url(#s)"><rect x="55" y="475" width="1490" height="175" rx="18" fill="#FFF" stroke="#4D7892" stroke-width="2"/><circle cx="95" cy="514" r="23" fill="#4D7892"/><text x="95" y="520" text-anchor="middle" class="f num">6</text><text x="132" y="509" class="f h">Local Reranker（可選）：對候選重新計分，再取 Top K</text><text x="80" y="544" class="f b">先拆出英文／數字詞與中文雙字詞，計算問題和證據的詞彙重疊，並保留 Hybrid 融合分數。</text><rect x="80" y="560" width="1440" height="42" rx="10" fill="#F1EFFA"/><text x="800" y="586" text-anchor="middle" class="f m">rerank_score = 詞彙重疊率 × 2 ＋ 完整關鍵詞命中數 × 0.25 ＋ fusion_score ＋ 原文加分 0.05</text><text x="80" y="626" class="f e">例：若 overlap=0.50、完整命中=2、fusion=0.80、且為原文：1.00 + 0.50 + 0.80 + 0.05 = 2.35；排序後取前 5 筆。</text></g>
-<path d="M800 650V690" class="ar"/>
-
-<!-- 7 -->
-<g filter="url(#s)"><rect x="210" y="690" width="1180" height="135" rx="20" fill="#173F5F"/><circle cx="252" cy="730" r="23" fill="#2D78A3"/><text x="252" y="736" text-anchor="middle" class="f num">7</text><text x="290" y="724" class="f wt">Evidence-grounded Answer Generation</text><text x="235" y="758" class="f wb">把 Top K 證據（原文、實體、關係、文件與頁碼）交給問答 LLM；temperature = 0。</text><text x="235" y="786" class="f wb">限制：只能根據證據回答、證據不足要明說，並在敘述後標示來源頁碼。</text><text x="235" y="813" class="f wb">例：「E01 表示進紙匣未正確安裝；請重新安裝後再啟動設備（印表機 A 操作手冊，第 12 頁）。」</text></g>
-<text x="800" y="865" text-anchor="middle" class="f st">重點：HybridCypherRetriever 負責步驟 2–4；Graph Expansion、Local Reranker 與 LLM 回答由本系統接續執行。</text>
+<g filter="url(#s)"><rect x="380" y="735" width="840" height="105" rx="19" fill="#173F5F"/><circle cx="425" cy="787" r="23" fill="#2D78A3"/><text x="425" y="793" text-anchor="middle" class="f n">7</text><text x="465" y="776" class="f wt">LLM Answer｜temperature = 0</text><text x="465" y="807" class="f wb">「重新安裝進紙匣後再啟動設備（印表機 A 手冊，第 12 頁）。」</text></g>
+<text x="800" y="875" text-anchor="middle" class="f st">HybridCypherRetriever：步驟 2–4｜本系統接續：步驟 5–7</text>
 </svg>
