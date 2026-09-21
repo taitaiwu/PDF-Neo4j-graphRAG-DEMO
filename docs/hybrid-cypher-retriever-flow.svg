@@ -46,10 +46,10 @@
     <rect x="145" y="260" width="550" height="155" rx="20" fill="#E3F2FD" stroke="#2196F3" stroke-width="2"/>
     <circle cx="193" cy="306" r="24" fill="#2196F3"/>
     <text x="193" y="313" text-anchor="middle" class="font white-title">A</text>
-    <text x="232" y="302" class="font box-title">A　向量搜尋：原文＋實體＋關係</text>
-    <text x="232" y="332" class="font body">三類證據都預先建立 Embedding</text>
-    <text x="232" y="359" class="font body">搜尋原文 Chunk、實體說明及關係說明</text>
-    <text x="232" y="386" class="font small">問題向量與證據向量計算 cosine similarity</text>
+    <text x="232" y="302" class="font box-title">A　向量搜尋「證據節點」</text>
+    <text x="232" y="332" class="font body">搜尋 Neo4j 中的三類證據節點：</text>
+    <text x="232" y="359" class="font body">原文 Chunk／實體描述／關係描述</text>
+    <text x="232" y="386" class="font small">每個證據節點皆有 Embedding，用於相似度比較</text>
   </g>
 
   <!-- Fulltext lane -->
@@ -57,10 +57,10 @@
     <rect x="905" y="260" width="550" height="155" rx="20" fill="#FFF3E0" stroke="#F59E0B" stroke-width="2"/>
     <circle cx="953" cy="306" r="24" fill="#F59E0B"/>
     <text x="953" y="313" text-anchor="middle" class="font white-title">B</text>
-    <text x="992" y="302" class="font box-title">B　全文搜尋：原文＋實體＋關係</text>
-    <text x="992" y="332" class="font body">搜尋原文、實體名稱及關係起訖名稱</text>
-    <text x="992" y="359" class="font body">原文 Chunk 同時保存完整文字與 Embedding</text>
-    <text x="992" y="386" class="font small">擅長：錯誤碼、型號、名稱與精確術語</text>
+    <text x="992" y="302" class="font box-title">B　全文搜尋「證據節點」</text>
+    <text x="992" y="332" class="font body">搜尋同一批三類證據節點的文字內容</text>
+    <text x="992" y="359" class="font body">原文 Chunk 節點保存完整文字與 Embedding</text>
+    <text x="992" y="386" class="font small">不是直接搜尋知識圖譜的實體節點或關係邊</text>
   </g>
 
   <!-- Merge arrows -->
