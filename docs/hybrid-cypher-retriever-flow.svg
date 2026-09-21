@@ -32,9 +32,9 @@
 
   <!-- User question -->
   <g filter="url(#shadow)">
-    <rect x="590" y="115" width="420" height="82" rx="20" fill="#173F5F"/>
+    <rect x="520" y="115" width="560" height="82" rx="20" fill="#173F5F"/>
     <text x="800" y="150" text-anchor="middle" class="font white-title">① 使用者輸入問題</text>
-    <text x="800" y="178" text-anchor="middle" class="font white-body">例如：「E01 錯誤應如何處理？」</text>
+    <text x="800" y="178" text-anchor="middle" class="font white-body">例如：「汽車出現 P0301 故障碼，該如何處理？」</text>
   </g>
 
   <!-- Split arrows -->
@@ -101,21 +101,19 @@
   <path d="M 1100 730 C 1100 755, 1000 756, 950 770" class="arrow"/>
 
   <g filter="url(#shadow)">
-    <rect x="380" y="770" width="510" height="90" rx="18" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/>
-    <text x="635" y="807" text-anchor="middle" class="font box-title">⑤ GraphRAG：可選關聯擴展</text>
-    <text x="635" y="837" text-anchor="middle" class="font body">補回來源 Chunk、相關實體及相連關係</text>
+    <rect x="180" y="760" width="920" height="120" rx="18" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/>
+    <text x="640" y="793" text-anchor="middle" class="font box-title">⑤ GraphRAG：可選關聯擴展</text>
+    <text x="640" y="821" text-anchor="middle" class="font body">① 回查來源原文　② 擴展同名／同段實體　③ 擴展相連／同段關係</text>
+    <text x="640" y="850" text-anchor="middle" class="font small">汽車維修例：P0301 → 第 1 缸失火 → 火星塞 → 檢查或更換</text>
+    <text x="640" y="871" text-anchor="middle" class="font small">並補回維修手冊中對應段落與頁碼</text>
   </g>
 
-  <path d="M 890 815 L 970 815" class="arrow"/>
+  <path d="M 1100 820 L 1140 820" class="arrow"/>
 
   <g filter="url(#shadow)">
-    <rect x="970" y="770" width="410" height="90" rx="18" fill="#173F5F"/>
-    <text x="1175" y="807" text-anchor="middle" class="font white-title">⑥ LLM 依證據產生答案</text>
-    <text x="1175" y="837" text-anchor="middle" class="font white-body">附 PDF 文件、頁碼與 Chunk 出處</text>
+    <rect x="1140" y="760" width="400" height="120" rx="18" fill="#173F5F"/>
+    <text x="1340" y="797" text-anchor="middle" class="font white-title">⑥ LLM 依證據產生答案</text>
+    <text x="1340" y="828" text-anchor="middle" class="font white-body">建議檢查第 1 缸火星塞</text>
+    <text x="1340" y="855" text-anchor="middle" class="font white-body">並標示汽車維修手冊頁碼</text>
   </g>
-
-  <!-- Legend -->
-  <text x="74" y="847" class="font small">實線：主要資料流</text>
-  <line x1="74" y1="866" x2="126" y2="866" class="arrow"/>
-  <text x="148" y="871" class="font small">虛線：啟用 Reranker 時</text>
 </svg>
