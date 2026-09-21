@@ -180,7 +180,7 @@ def test_saved_project_cannot_bypass_openai_allowlist_or_connection(monkeypatch)
     embed = act(service("embedding"), "test")[0]
     loaded = ui.load_project_with_services_for_ui(project["project_id"], llm, embed)
     assert loaded[8]["value"] == "gpt-4.1-mini"
-    assert loaded[18]["value"] == "gpt-4o-mini"
+    assert loaded[16]["value"] == "gpt-4o-mini"
     assert loaded[9]["value"] == "text-embedding-3-small"
     assert loaded[8]["choices"] == choices("OpenAI", settings.openai_models("llm"))
     assert loaded[9]["choices"] == choices("OpenAI", settings.openai_models("embedding"))
@@ -274,7 +274,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
         load = event(button("載入專案")["id"], "click")
         loaded = (await app.process_api(load["id"], [project["project_id"], None, None], state=session))["data"]
         assert loaded[8]["value"] == "gpt-4o-mini"
-        assert loaded[18]["value"] == "gpt-4.1-mini"
+        assert loaded[16]["value"] == "gpt-4.1-mini"
         reload = event(button("重新讀取 .env")["id"], "click")
         reloaded = (await app.process_api(reload["id"], [], state=session))["data"]
         assert reloaded[12]["choices"] == []

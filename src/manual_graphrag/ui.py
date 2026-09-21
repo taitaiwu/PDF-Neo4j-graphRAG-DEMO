@@ -214,7 +214,7 @@ def load_project_with_services_for_ui(
 ) -> tuple[Any, ...]:
     values = list(load_project_for_ui(project_id))
     llm_state = restore_service_settings(
-        llm_state, values[6], values[7], {0: values[8], 1: values[18], 4: values[10]},
+        llm_state, values[6], values[7], {0: values[8], 1: values[16], 4: values[10]},
     )
     embedding_profile = embedding_state["profiles"][embedding_state["active"]]
     embedding_state = restore_service_settings(
@@ -223,7 +223,7 @@ def load_project_with_services_for_ui(
     llm = render_service_for_ui(llm_state)
     embedding = render_service_for_ui(embedding_state)
     values[6:8] = llm[1:3]
-    values[8], values[18], values[10], values[9] = llm[7], llm[8], llm[11], embedding[7]
+    values[8], values[16], values[10], values[9] = llm[7], llm[8], llm[11], embedding[7]
     save_service_settings(llm_state)
     save_service_settings(embedding_state)
     return (*values, llm_state["active"], llm[0], *llm[3:7], llm[9], llm[10],
