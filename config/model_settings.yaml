@@ -7,7 +7,7 @@ openai_models:
   - text-embedding-3-large
 services:
   llm:
-    active: Ollama
+    active: OpenAI
     profiles:
       OpenAI:
         rows: []
