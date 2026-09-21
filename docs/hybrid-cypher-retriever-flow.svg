@@ -60,7 +60,6 @@
     <text x="992" y="302" class="font box-title">B　全文搜尋「證據節點」</text>
     <text x="992" y="332" class="font body">搜尋同一批三類證據節點的文字內容</text>
     <text x="992" y="359" class="font body">原文 Chunk 節點保存完整文字與 Embedding</text>
-    <text x="992" y="386" class="font small">不是直接搜尋知識圖譜的實體節點或關係邊</text>
   </g>
 
   <!-- Merge arrows -->
