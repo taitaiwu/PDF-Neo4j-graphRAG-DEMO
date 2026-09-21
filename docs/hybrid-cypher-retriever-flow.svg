@@ -46,10 +46,10 @@
     <rect x="145" y="260" width="550" height="155" rx="20" fill="#E3F2FD" stroke="#2196F3" stroke-width="2"/>
     <circle cx="193" cy="306" r="24" fill="#2196F3"/>
     <text x="193" y="313" text-anchor="middle" class="font white-title">A</text>
-    <text x="232" y="302" class="font box-title">向量語意搜尋</text>
-    <text x="232" y="332" class="font body">以建圖時相同的 Embedding 模型產生問題向量</text>
-    <text x="232" y="359" class="font body">從向量索引搜尋語意相近的內容</text>
-    <text x="232" y="386" class="font small">擅長：同義詞、語意相近但用字不同的描述</text>
+    <text x="232" y="302" class="font box-title">A　向量搜尋：原文＋實體＋關係</text>
+    <text x="232" y="332" class="font body">三類證據都預先建立 Embedding</text>
+    <text x="232" y="359" class="font body">搜尋原文 Chunk、實體說明及關係說明</text>
+    <text x="232" y="386" class="font small">問題向量與證據向量計算 cosine similarity</text>
   </g>
 
   <!-- Fulltext lane -->
@@ -57,10 +57,10 @@
     <rect x="905" y="260" width="550" height="155" rx="20" fill="#FFF3E0" stroke="#F59E0B" stroke-width="2"/>
     <circle cx="953" cy="306" r="24" fill="#F59E0B"/>
     <text x="953" y="313" text-anchor="middle" class="font white-title">B</text>
-    <text x="992" y="302" class="font box-title">CJK 全文關鍵字搜尋</text>
-    <text x="992" y="332" class="font body">以問題原文搜尋精確詞彙</text>
-    <text x="992" y="359" class="font body">從全文索引搜尋錯誤碼、型號與名稱</text>
-    <text x="992" y="386" class="font small">擅長：錯誤碼、型號、實體名稱與精確術語</text>
+    <text x="992" y="302" class="font box-title">B　全文搜尋：原文＋實體＋關係</text>
+    <text x="992" y="332" class="font body">搜尋原文、實體名稱及關係起訖名稱</text>
+    <text x="992" y="359" class="font body">原文 Chunk 同時保存完整文字與 Embedding</text>
+    <text x="992" y="386" class="font small">擅長：錯誤碼、型號、名稱與精確術語</text>
   </g>
 
   <!-- Merge arrows -->
@@ -81,8 +81,7 @@
   <g filter="url(#shadow)">
     <rect x="250" y="625" width="500" height="105" rx="18" fill="#FFFFFF" stroke="#5D7C91" stroke-width="2"/>
     <text x="500" y="663" text-anchor="middle" class="font box-title">③ 自訂 Cypher 範圍過濾</text>
-    <text x="500" y="694" text-anchor="middle" class="font body">限制本次建圖結果與指定 PDF 文件</text>
-    <text x="500" y="716" text-anchor="middle" class="font small">避免混入其他專案、批次或文件的證據</text>
+    <text x="500" y="699" text-anchor="middle" class="font body">避免混入其他文件的證據</text>
   </g>
 
   <!-- Reranker -->
