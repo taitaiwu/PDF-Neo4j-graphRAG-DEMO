@@ -101,10 +101,11 @@
 
   <g filter="url(#shadow)">
     <rect x="180" y="760" width="920" height="120" rx="18" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/>
-    <text x="640" y="793" text-anchor="middle" class="font box-title">⑤ GraphRAG：可選關聯擴展</text>
-    <text x="640" y="821" text-anchor="middle" class="font body">① 回查來源原文　② 擴展同名／同段實體　③ 擴展相連／同段關係</text>
-    <text x="640" y="850" text-anchor="middle" class="font small">汽車維修例：P0301 → 第 1 缸失火 → 火星塞 → 檢查或更換</text>
-    <text x="640" y="871" text-anchor="middle" class="font small">並補回維修手冊中對應段落與頁碼</text>
+    <text x="640" y="788" text-anchor="middle" class="font box-title">⑤ Evidence Expansion：證據擴展</text>
+    <text x="640" y="814" text-anchor="middle" class="font body">從命中的證據節點取得「實體名稱＋來源 Chunk 編號」</text>
+    <text x="640" y="838" text-anchor="middle" class="font small">① 補回同 Chunk 原文　② 補同名／同 Chunk 實體證據　③ 補起訖名稱相符／同 Chunk 關係證據</text>
+    <text x="640" y="860" text-anchor="middle" class="font small">例：P0301 證據 → 維修原文＋第 1 缸／火星塞實體證據＋相關關係證據</text>
+    <text x="640" y="879" text-anchor="middle" class="font small">目前不直接遍歷 ExtractedEntity—EXTRACTED_RELATION</text>
   </g>
 
   <path d="M 1100 820 L 1140 820" class="arrow"/>
