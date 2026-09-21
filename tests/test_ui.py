@@ -436,6 +436,16 @@ def test_pdf_table_has_checkbox_and_new_project_resets_visible_status() -> None:
         and str(dependency.get("api_name", "")).startswith("reset_new_project_pdf_status_for_ui")
         for dependency in app.config["dependencies"]
     )
+    schema_selector = next(
+        component for component in components
+        if component.get("props", {}).get("label") == "用於規劃 Schema 的 PDF"
+    )
+    assert schema_selector["type"] == "checkboxgroup"
+    assert schema_selector["props"]["choices"] == []
+    assert not any(
+        component.get("props", {}).get("label") in {"Schema 規劃範圍", "隨機抽取頁數 N"}
+        for component in components
+    )
 
 def test_build_app_has_independent_provider_switches_and_ollama_tables() -> None:
     app = build_app()
@@ -485,7 +495,7 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
         },
         "bolt://db", "neo4j", "user", "pass", "http://models", "key",
         "build", "embed", "answer", 1200, 100, 0.2,
-        "詳細", 2, "全部頁面", 4, "extract", 2,
+        "詳細", 2, "extract", 2,
         "關聯擴展檢索", 6, '{"entity_types": []}',
     ]
     saved, save_status = ui.save_project_for_ui(*values)
@@ -494,16 +504,16 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     assert Path(saved["documents"][0]["path"]).read_bytes() == b"pdf"
     assert loaded[0]["project_id"] == created["project_id"]
     assert loaded[11:13] == (1200, 100)
-    assert loaded[24][0].text == "內容"
+    assert loaded[22][0].text == "內容"
     stored_project = ui.load_project(created["project_id"])
     assert "model_endpoint" not in stored_project["settings"]
     assert "api_key" not in stored_project["settings"]
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
-    assert loaded[33][0][:2] == ["設備", "DEVICE"]
-    assert loaded[34][0][:3] == ["設備", "USES", "零件"]
-    assert "1 個實體、1 筆關係" in loaded[35]
-    assert "已匯入 Neo4j" in loaded[36]
+    assert loaded[31][0][:2] == ["設備", "DEVICE"]
+    assert loaded[32][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[33]
+    assert "已匯入 Neo4j" in loaded[34]
 
 
 def test_load_project_ignores_legacy_model_credentials(tmp_path, monkeypatch) -> None:
@@ -1254,10 +1264,33 @@ def test_plan_schema_for_ui_reports_stopped_status(monkeypatch) -> None:
 
     status, schema_text = ui.plan_schema_for_ui(
         "http://models/v1", "key", "llm", 0.3, "平衡", 3,
-        "全部頁面", 10, [TextChunk(1, "text", (1,))], ui.RunControl(),
+        ["manual.pdf"], [TextChunk(1, "text", (1,), "manual.pdf")], ui.RunControl(),
     )
 
     assert status.startswith("⏹")
+    assert schema_text == ""
+
+
+def test_schema_documents_default_to_all_and_require_a_selection() -> None:
+    update = ui.schema_documents_for_ui([
+        {"file_name": "a.pdf"},
+        {"file_name": "b.pdf"},
+    ])
+    assert update["choices"] == ["a.pdf", "b.pdf"]
+    assert update["value"] == ["a.pdf", "b.pdf"]
+
+    status, schema_text = ui.plan_schema_for_ui(
+        "http://models/v1",
+        "key",
+        "llm",
+        0.3,
+        "平衡",
+        3,
+        [],
+        [TextChunk(1, "text", (1,), "a.pdf")],
+        ui.RunControl(),
+    )
+    assert status == "❌ 請至少勾選一份用於規劃 Schema 的 PDF"
     assert schema_text == ""
 
 
@@ -1279,16 +1312,22 @@ def test_extract_graph_for_ui_reports_stopped_status(monkeypatch) -> None:
 def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
     from manual_graphrag.graph_service import SchemaPlan
 
-    monkeypatch.setattr(
-        ui,
-        "plan_graph_schema",
-        lambda *args, **kwargs: SchemaPlan(
+    captured = {}
+
+    def fake_plan(*args, **kwargs):
+        captured["chunks"] = args[3]
+        return SchemaPlan(
             {"entity_types": [{"name": "DEVICE"}], "relationship_types": [{"name": "USES"}]},
             5,
             5,
             2,
             1,
-        ),
+        )
+
+    monkeypatch.setattr(
+        ui,
+        "plan_graph_schema",
+        fake_plan,
     )
 
     status, schema_text = ui.plan_schema_for_ui(
@@ -1298,14 +1337,17 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
         0.3,
         "平衡",
         3,
-        "全部頁面",
-        10,
-        [TextChunk(1, "text", (1,))],
+        ["a.pdf"],
+        [
+            TextChunk(1, "A", (1,), "a.pdf"),
+            TextChunk(2, "B", (1, 2), "b.pdf"),
+        ],
         ui.RunControl(),
     )
 
     assert status.startswith("✅")
-    assert "全部 1 頁、5 個 chunk" in status
+    assert "1 份 PDF（a.pdf）的全部 1 頁、5 個 chunk" in status
+    assert [chunk.document for chunk in captured["chunks"]] == ["a.pdf"]
     assert "共 2 批、1 輪整合" in status
     assert "粒度：平衡。" in status
     assert "類型上限" not in status
@@ -1640,7 +1682,7 @@ def test_project_list_refreshes_on_page_load_and_tab_select_without_focus_rerend
 
 def test_unselected_models_report_actionable_errors_without_network() -> None:
     plan = ui.plan_schema_for_ui(
-        "", "", None, 0, "平衡", 1, "全部頁面", 1, [], ui.RunControl(),
+        "", "", None, 0, "平衡", 1, [], [], ui.RunControl(),
     )
     extraction = ui.extract_graph_for_ui("", "", None, 0, 1, [], "{}", [], ui.RunControl())
     generation = ui.generate_evaluation_for_ui("project", "", "", None, None, 1, "基本檢索", 1, [])

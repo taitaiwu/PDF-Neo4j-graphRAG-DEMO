@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import json
-import random
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
@@ -468,8 +467,7 @@ def save_project_for_ui(
     chunk_size: int, chunk_overlap: int,
     graph_temperature: float,
     schema_granularity: str,
-    max_concurrent_requests: int, schema_sampling_mode: str,
-    schema_sample_page_count: int, extraction_llm_model: str,
+    max_concurrent_requests: int, extraction_llm_model: str,
     extraction_max_concurrent_requests: int,
     retrieval_mode: str, top_k: int, schema_text: str,
 ) -> tuple[dict[str, Any], str]:
@@ -484,8 +482,6 @@ def save_project_for_ui(
         "graph_temperature": float(graph_temperature),
         "schema_granularity": schema_granularity,
         "max_concurrent_requests": int(max_concurrent_requests),
-        "schema_sampling_mode": schema_sampling_mode,
-        "schema_sample_page_count": int(schema_sample_page_count),
         "extraction_llm_model": extraction_llm_model,
         "extraction_max_concurrent_requests": int(extraction_max_concurrent_requests),
         "retrieval_mode": retrieval_mode,
@@ -546,11 +542,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         get("chunk_size", 1500), get("chunk_overlap", 200), get("graph_temperature", 0),
         get("schema_granularity", "平衡"),
         get("max_concurrent_requests", 3),
-        gr.update(
-            value=get("schema_sampling_mode", "全部頁面"),
-            visible=get("schema_sampling_mode", "全部頁面") == "隨機抽取 N 頁",
-        ),
-        get("schema_sample_page_count", 10), get("extraction_llm_model", DEFAULT_LLM_MODEL),
+        get("extraction_llm_model", DEFAULT_LLM_MODEL),
         get("extraction_max_concurrent_requests", 3),
         _display_retrieval_mode(get("retrieval_mode")), get("top_k", 8), get("schema_text", ""),
         documents, chunks, graph, active_preview, active_chunks,
@@ -1313,29 +1305,40 @@ def save_config(state: dict[str, Any]) -> tuple[str, str | None]:
     return f"設定已儲存：{output}", str(output)
 
 
+def schema_documents_for_ui(
+    documents: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    names = [
+        str(document.get("file_name") or "")
+        for document in (documents or [])
+        if document.get("file_name")
+    ]
+    return gr.update(choices=names, value=names)
+
+
 def _select_schema_planning_chunks(
-    chunks: list[TextChunk], sampling_mode: str, sample_page_count: int
-) -> tuple[list[TextChunk], list[int]]:
+    chunks: list[TextChunk], selected_documents: list[str] | None
+) -> tuple[list[TextChunk], list[str], int]:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
-    available_pages = sorted({page for chunk in chunks for page in chunk.pages})
-    if sampling_mode == "全部頁面":
-        return chunks, available_pages
-    if sampling_mode != "隨機抽取 N 頁":
-        raise ValueError("不支援的 Schema 規劃範圍")
-    sample_page_count = int(sample_page_count)
-    if sample_page_count < 1:
-        raise ValueError("隨機抽取頁數必須至少為 1")
-    if sample_page_count > len(available_pages):
-        raise ValueError(
-            f"隨機抽取頁數不可超過可用頁數 {len(available_pages)}"
-        )
-    sampled_pages = sorted(random.sample(available_pages, sample_page_count))
-    sampled_page_set = set(sampled_pages)
+    selected = list(dict.fromkeys(selected_documents or []))
+    if not selected:
+        raise ValueError("請至少勾選一份用於規劃 Schema 的 PDF")
+    available_documents = {chunk.document for chunk in chunks}
+    unknown = [document for document in selected if document not in available_documents]
+    if unknown:
+        unknown_text = "、".join(unknown)
+        raise ValueError(f"找不到選取的 PDF：{unknown_text}")
+    selected_set = set(selected)
     selected_chunks = [
-        chunk for chunk in chunks if sampled_page_set.intersection(chunk.pages)
+        chunk for chunk in chunks if chunk.document in selected_set
     ]
-    return selected_chunks, sampled_pages
+    page_count = len({
+        (chunk.document, page)
+        for chunk in selected_chunks
+        for page in chunk.pages
+    })
+    return selected_chunks, selected, page_count
 
 
 def plan_schema_for_ui(
@@ -1345,8 +1348,7 @@ def plan_schema_for_ui(
     temperature: float,
     schema_granularity: str,
     max_concurrent_requests: int,
-    sampling_mode: str,
-    sample_page_count: int,
+    selected_documents: list[str] | None,
     chunks: list[TextChunk],
     run_control: RunControl,
     progress=gr.Progress(),
@@ -1355,8 +1357,8 @@ def plan_schema_for_ui(
         return "❌ 請先勾選並選擇 Schema 規劃 LLM。", ""
     run_control.reset()
     try:
-        planning_chunks, selected_pages = _select_schema_planning_chunks(
-            chunks, sampling_mode, sample_page_count
+        planning_chunks, planned_documents, page_count = _select_schema_planning_chunks(
+            chunks, selected_documents
         )
         plan = plan_graph_schema(
             model_endpoint,
@@ -1373,13 +1375,10 @@ def plan_schema_for_ui(
         return "⏹ 已停止（使用者中止 Schema 規劃）。", ""
     except ValueError as exc:
         return f"❌ {exc}", ""
-    if sampling_mode == "全部頁面":
-        scope_note = f"全部 {len(selected_pages)} 頁"
-    else:
-        sampled_page_text = ", ".join(map(str, selected_pages))
-        scope_note = (
-            f"隨機抽取 {len(selected_pages)} 頁（頁碼：{sampled_page_text}）"
-        )
+    document_text = "、".join(planned_documents)
+    scope_note = (
+        f"{len(planned_documents)} 份 PDF（{document_text}）的全部 {page_count} 頁"
+    )
     note = (
         f"✅ 已使用 {llm_model} 規劃 schema；參考 {scope_note}、"
         f"{plan.analyzed_chunks} 個 chunk，"
@@ -1893,15 +1892,12 @@ def build_app() -> gr.Blocks:
                         value=3, minimum=1, precision=0, label="最大並行請求數",
                         info=OLLAMA_CONCURRENCY_HINT,
                     )
-                with gr.Row():
-                    schema_sampling_mode = gr.Radio(
-                        ["全部頁面", "隨機抽取 N 頁"],
-                        value="全部頁面",
-                        label="Schema 規劃範圍",
-                    )
-                    schema_sample_page_count = gr.Number(
-                        value=10, minimum=1, precision=0, label="隨機抽取頁數 N", visible=False
-                    )
+                schema_documents = gr.CheckboxGroup(
+                    choices=[],
+                    value=[],
+                    label="用於規劃 Schema 的 PDF",
+                    info="預設全選；每份勾選的 PDF 都會讀取整份文件。",
+                )
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema", variant="primary"
                 )
@@ -2216,7 +2212,7 @@ def build_app() -> gr.Blocks:
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
             max_concurrent_requests,
-            schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
+            extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
         ]
@@ -2227,7 +2223,7 @@ def build_app() -> gr.Blocks:
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
             max_concurrent_requests,
-            schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
+            extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
             documents_state, chunk_state, graph_state,
@@ -2263,6 +2259,18 @@ def build_app() -> gr.Blocks:
                      model_connection_status, evaluation_generation_model, evaluation_test_model,
                      embedding_provider, embedding_service_state, embedding_models_table,
                      embedding_test_button, embedding_list_button, embedding_connection_status],
+            show_progress="hidden",
+        )
+        load_project_event.success(
+            schema_documents_for_ui,
+            inputs=documents_state,
+            outputs=schema_documents,
+            show_progress="hidden",
+        )
+        initialize_project_event.success(
+            schema_documents_for_ui,
+            inputs=documents_state,
+            outputs=schema_documents,
             show_progress="hidden",
         )
         protected_tabs = [pdf_tab, summary_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
@@ -2302,7 +2310,7 @@ def build_app() -> gr.Blocks:
             answer_model, chunk_size, chunk_overlap,
             graph_temperature, schema_granularity,
             max_concurrent_requests,
-            schema_sampling_mode, schema_sample_page_count, extraction_llm_model,
+            extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
             top_k, schema_editor,
         ]
@@ -2435,6 +2443,11 @@ def build_app() -> gr.Blocks:
         preview_event.then(
             save_project_for_ui, inputs=project_setting_inputs,
             outputs=[project_state, project_status], show_progress="hidden",
+        ).then(
+            schema_documents_for_ui,
+            inputs=documents_state,
+            outputs=schema_documents,
+            show_progress="hidden",
         )
         remove_document_event = remove_document_button.click(
             remove_document_for_ui,
@@ -2454,6 +2467,11 @@ def build_app() -> gr.Blocks:
         remove_document_event.then(
             save_project_for_ui, inputs=project_setting_inputs,
             outputs=[project_state, project_status], show_progress="hidden",
+        ).then(
+            schema_documents_for_ui,
+            inputs=documents_state,
+            outputs=schema_documents,
+            show_progress="hidden",
         )
         previous_button.click(
             previous_document,
@@ -2468,11 +2486,6 @@ def build_app() -> gr.Blocks:
         export_button.click(
             save_config, inputs=[active_preview_state], outputs=[preview_status, export_file]
         )
-        schema_sampling_mode.change(
-            lambda mode: gr.update(visible=mode == "隨機抽取 N 頁"),
-            inputs=schema_sampling_mode,
-            outputs=schema_sample_page_count,
-        )
         plan_schema_button.click(
             plan_schema_for_ui,
             inputs=[
@@ -2482,8 +2495,7 @@ def build_app() -> gr.Blocks:
                 graph_temperature,
                 schema_granularity,
                 max_concurrent_requests,
-                schema_sampling_mode,
-                schema_sample_page_count,
+                schema_documents,
                 chunk_state,
                 run_control_state,
             ],
