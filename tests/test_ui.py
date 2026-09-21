@@ -440,8 +440,11 @@ def test_pdf_table_has_checkbox_and_new_project_resets_visible_status() -> None:
         component for component in components
         if component.get("props", {}).get("label") == "用於規劃 Schema 的 PDF"
     )
-    assert schema_selector["type"] == "checkboxgroup"
-    assert schema_selector["props"]["choices"] == []
+    assert schema_selector["type"] == "dataframe"
+    assert schema_selector["props"]["headers"] == ["使用", "PDF"]
+    assert schema_selector["props"]["datatype"] == ["bool", "str"]
+    assert schema_selector["props"]["static_columns"] == [1]
+    assert schema_selector["props"]["max_height"] == 300
     assert not any(
         component.get("props", {}).get("label") in {"Schema 規劃範圍", "隨機抽取頁數 N"}
         for component in components
@@ -1264,7 +1267,7 @@ def test_plan_schema_for_ui_reports_stopped_status(monkeypatch) -> None:
 
     status, schema_text = ui.plan_schema_for_ui(
         "http://models/v1", "key", "llm", 0.3, "平衡", 3,
-        ["manual.pdf"], [TextChunk(1, "text", (1,), "manual.pdf")], ui.RunControl(),
+        [[True, "manual.pdf"]], [TextChunk(1, "text", (1,), "manual.pdf")], ui.RunControl(),
     )
 
     assert status.startswith("⏹")
@@ -1276,8 +1279,7 @@ def test_schema_documents_default_to_all_and_require_a_selection() -> None:
         {"file_name": "a.pdf"},
         {"file_name": "b.pdf"},
     ])
-    assert update["choices"] == ["a.pdf", "b.pdf"]
-    assert update["value"] == ["a.pdf", "b.pdf"]
+    assert update["value"] == [[True, "a.pdf"], [True, "b.pdf"]]
 
     status, schema_text = ui.plan_schema_for_ui(
         "http://models/v1",
@@ -1337,7 +1339,7 @@ def test_plan_schema_for_ui_returns_editable_json(monkeypatch) -> None:
         0.3,
         "平衡",
         3,
-        ["a.pdf"],
+        [[True, "a.pdf"], [False, "b.pdf"]],
         [
             TextChunk(1, "A", (1,), "a.pdf"),
             TextChunk(2, "B", (1, 2), "b.pdf"),

@@ -1313,15 +1313,32 @@ def schema_documents_for_ui(
         for document in (documents or [])
         if document.get("file_name")
     ]
-    return gr.update(choices=names, value=names)
+    return gr.update(value=[[True, name] for name in names])
+
+
+def _selected_schema_documents(rows: Any) -> list[str]:
+    if isinstance(rows, dict) and "data" in rows:
+        rows = rows["data"]
+    elif hasattr(rows, "values") and hasattr(rows.values, "tolist"):
+        rows = rows.values.tolist()
+    if not isinstance(rows, list):
+        return []
+    return list(dict.fromkeys(
+        str(row[1])
+        for row in rows
+        if isinstance(row, (list, tuple))
+        and len(row) >= 2
+        and row[0] is True
+        and row[1]
+    ))
 
 
 def _select_schema_planning_chunks(
-    chunks: list[TextChunk], selected_documents: list[str] | None
+    chunks: list[TextChunk], document_rows: Any
 ) -> tuple[list[TextChunk], list[str], int]:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
-    selected = list(dict.fromkeys(selected_documents or []))
+    selected = _selected_schema_documents(document_rows)
     if not selected:
         raise ValueError("請至少勾選一份用於規劃 Schema 的 PDF")
     available_documents = {chunk.document for chunk in chunks}
@@ -1348,7 +1365,7 @@ def plan_schema_for_ui(
     temperature: float,
     schema_granularity: str,
     max_concurrent_requests: int,
-    selected_documents: list[str] | None,
+    document_rows: Any,
     chunks: list[TextChunk],
     run_control: RunControl,
     progress=gr.Progress(),
@@ -1358,7 +1375,7 @@ def plan_schema_for_ui(
     run_control.reset()
     try:
         planning_chunks, planned_documents, page_count = _select_schema_planning_chunks(
-            chunks, selected_documents
+            chunks, document_rows
         )
         plan = plan_graph_schema(
             model_endpoint,
@@ -1892,12 +1909,20 @@ def build_app() -> gr.Blocks:
                         value=3, minimum=1, precision=0, label="最大並行請求數",
                         info=OLLAMA_CONCURRENCY_HINT,
                     )
-                schema_documents = gr.CheckboxGroup(
-                    choices=[],
+                schema_documents = gr.Dataframe(
+                    headers=["使用", "PDF"],
+                    datatype=["bool", "str"],
+                    type="array",
                     value=[],
+                    interactive=True,
+                    static_columns=[1],
+                    row_count=(0, "fixed"),
+                    col_count=(2, "fixed"),
+                    max_height=300,
+                    wrap=True,
                     label="用於規劃 Schema 的 PDF",
-                    info="預設全選；每份勾選的 PDF 都會讀取整份文件。",
                 )
+                gr.Markdown("預設全選；每份勾選的 PDF 都會讀取整份文件。")
                 plan_schema_button = gr.Button(
                     "分析文件並規劃 Schema", variant="primary"
                 )
