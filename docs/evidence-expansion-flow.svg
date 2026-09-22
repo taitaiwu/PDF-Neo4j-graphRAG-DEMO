@@ -25,7 +25,7 @@
 <path d="M1305 558C1250 610 1065 603 940 630" class="ar"/>
 
 <!-- Combine -->
-<g filter="url(#s)"><rect x="350" y="630" width="900" height="125" rx="20" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/><circle cx="395" cy="691" r="25" fill="#D69E2E"/><text x="395" y="697" text-anchor="middle" class="f n">5</text><text x="440" y="674" class="f h">合併擴展證據</text><text x="440" y="705" class="f b">原始命中＋原文證據＋實體描述證據＋關係描述證據</text><text x="440" y="735" class="f e">步驟 3、4 保留來源頁碼與 Chunk 編號，但不會再進行第二輪原文回查</text></g>
+<g filter="url(#s)"><rect x="350" y="630" width="900" height="125" rx="20" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/><circle cx="395" cy="691" r="25" fill="#D69E2E"/><text x="395" y="697" text-anchor="middle" class="f n">5</text><text x="440" y="674" class="f h">第二輪原文回查與合併</text><text x="440" y="705" class="f b">原始命中＋第一輪原文＋實體／關係描述＋新增來源原文</text><text x="440" y="735" class="f e">只補尚未取得的 Chunk，最多 retrieval_top_k 筆；回查一次後停止</text></g>
 <path d="M800 755V792" class="ar"/>
 
 <!-- Output -->

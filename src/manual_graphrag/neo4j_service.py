@@ -229,44 +229,59 @@ def search_graph_evidence(
                         if item.get("kind") != "原文"
                         for number in item.get("source_chunk_numbers", [])
                     ))
-                    source_chunk_records = session.run(
-                        """
-                        MATCH (chunk:GraphEvidence {run_id: $run_id, kind: "原文"})
-                        WHERE any(
-                            number IN coalesce(chunk.source_chunk_numbers, [])
-                            WHERE number IN $chunk_numbers
-                        ) AND (size($document_names) = 0 OR (
-                            size(coalesce(chunk.source_documents, [])) > 0 AND all(
-                                document IN coalesce(chunk.source_documents, [])
-                                WHERE document IN $document_names
-                            )
+                    def fetch_source_chunks(
+                        target_chunk_numbers: list[int],
+                    ) -> list[dict[str, Any]]:
+                        if not target_chunk_numbers:
+                            return []
+                        records = session.run(
+                            """
+                            MATCH (chunk:GraphEvidence {run_id: $run_id, kind: "原文"})
+                            WHERE any(
+                                number IN coalesce(chunk.source_chunk_numbers, [])
+                                WHERE number IN $chunk_numbers
+                            ) AND (size($document_names) = 0 OR (
+                                size(coalesce(chunk.source_documents, [])) > 0 AND all(
+                                    document IN coalesce(chunk.source_documents, [])
+                                    WHERE document IN $document_names
+                                )
+                            ))
+                            RETURN chunk {
+                                .evidence_id, .kind, .name, .source, .target, .text,
+                                .source_pages, .source_chunk_numbers, .source_documents,
+                                .source_references_json
+                            } AS evidence
+                            """,
+                            run_id=run_id,
+                            chunk_numbers=target_chunk_numbers,
+                            document_names=selected_documents,
+                        ).data()
+                        chunks = [
+                            _expanded_evidence(record["evidence"])
+                            for record in records
+                        ]
+                        priority = {
+                            number: index
+                            for index, number in enumerate(target_chunk_numbers)
+                        }
+                        chunks.sort(key=lambda item: min(
+                            (
+                                priority[number]
+                                for number in item.get("source_chunk_numbers", [])
+                                if number in priority
+                            ),
+                            default=len(priority),
                         ))
-                        RETURN chunk {
-                            .evidence_id, .kind, .name, .source, .target, .text,
-                            .source_pages, .source_chunk_numbers, .source_documents,
-                            .source_references_json
-                        } AS evidence
-                        """,
-                        run_id=run_id,
-                        chunk_numbers=graph_chunk_numbers,
-                        document_names=selected_documents,
-                    ).data()
-                    source_chunks = [
-                        _expanded_evidence(record["evidence"])
-                        for record in source_chunk_records
-                    ]
-                    chunk_priority = {
-                        number: index for index, number in enumerate(graph_chunk_numbers)
+                        return chunks[:retrieval_top_k]
+
+                    source_chunks = fetch_source_chunks(graph_chunk_numbers)
+                    selected_ids = {
+                        item.get("evidence_id", "") for item in selected
                     }
-                    source_chunks.sort(key=lambda item: min(
-                        (
-                            chunk_priority[number]
-                            for number in item.get("source_chunk_numbers", [])
-                            if number in chunk_priority
-                        ),
-                        default=len(chunk_priority),
-                    ))
-                    selected.extend(source_chunks[:retrieval_top_k])
+                    selected.extend(
+                        item for item in source_chunks
+                        if item.get("evidence_id", "") not in selected_ids
+                    )
                     selected_ids = {item.get("evidence_id", "") for item in selected}
                     related_entities = session.run(
                         """
@@ -334,10 +349,36 @@ def search_graph_evidence(
                         chunk_numbers=chunk_numbers,
                         top_k=retrieval_top_k,
                     ).data()
-                    selected.extend(
+                    relation_evidence = [
                         _expanded_evidence(record["evidence"])
                         for record in related
-                        if record["evidence"].get("evidence_id", "") not in selected_ids
+                    ]
+                    selected.extend(
+                        item for item in relation_evidence
+                        if item.get("evidence_id", "") not in selected_ids
+                    )
+
+                    existing_source_chunk_numbers = {
+                        number
+                        for item in selected
+                        if item.get("kind") == "原文"
+                        for number in item.get("source_chunk_numbers", [])
+                    }
+                    expanded_chunk_numbers = list(dict.fromkeys(
+                        number
+                        for item in [*entity_evidence, *relation_evidence]
+                        for number in item.get("source_chunk_numbers", [])
+                        if number not in existing_source_chunk_numbers
+                    ))
+                    second_pass_chunks = fetch_source_chunks(
+                        expanded_chunk_numbers
+                    )
+                    selected_ids = {
+                        item.get("evidence_id", "") for item in selected
+                    }
+                    selected.extend(
+                        item for item in second_pass_chunks
+                        if item.get("evidence_id", "") not in selected_ids
                     )
     except (DriverError, Neo4jError, Neo4jGraphRagError, OSError, ValueError) as exc:
         detail = str(exc)

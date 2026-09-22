@@ -419,3 +419,134 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
         "document_names": ["printer-a.pdf"],
     }
     assert arguments["ranker"] == "naive"
+
+
+class ExpansionSearchSession:
+    def __init__(self):
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def run(self, query, **parameters):
+        self.calls.append((query, parameters))
+        if "count(node)" in query:
+            return FakeResult(10)
+        if 'kind: "原文"' in query:
+            rows = [
+                {
+                    "evidence": {
+                        "evidence_id": f"chunk-{number}",
+                        "kind": "原文",
+                        "name": "",
+                        "source": "",
+                        "target": "",
+                        "text": f"原文 {number}",
+                        "source_pages": [number],
+                        "source_chunk_numbers": [number],
+                        "source_documents": ["car.pdf"],
+                        "source_references_json": "[]",
+                    }
+                }
+                for number in parameters["chunk_numbers"]
+            ]
+            return FakeResult(rows=rows)
+        if "kind: '實體'" in query:
+            return FakeResult(rows=[{
+                "evidence": {
+                    "evidence_id": "entity-spark-plug",
+                    "kind": "實體",
+                    "name": "火星塞",
+                    "source": "",
+                    "target": "",
+                    "text": "實體：火星塞",
+                    "source_pages": [2],
+                    "source_chunk_numbers": [2],
+                    "source_documents": ["car.pdf"],
+                    "source_references_json": "[]",
+                }
+            }])
+        if "kind: '關係'" in query:
+            return FakeResult(rows=[{
+                "evidence": {
+                    "evidence_id": "relation-misfire-spark-plug",
+                    "kind": "關係",
+                    "name": "",
+                    "source": "第 1 缸失火",
+                    "target": "火星塞",
+                    "text": "第 1 缸失火可能由火星塞造成",
+                    "source_pages": [3],
+                    "source_chunk_numbers": [3],
+                    "source_documents": ["car.pdf"],
+                    "source_references_json": "[]",
+                }
+            }])
+        raise AssertionError(f"unexpected query: {query}")
+
+
+class ExpansionRetriever:
+    def __init__(self, **kwargs):
+        pass
+
+    def search(self, **kwargs):
+        evidence = {
+            "evidence_id": "entity-p0301",
+            "kind": "實體",
+            "name": "P0301",
+            "source": "",
+            "target": "",
+            "text": "實體：P0301",
+            "source_pages": [1],
+            "source_chunk_numbers": [1],
+            "source_documents": ["car.pdf"],
+            "source_references_json": "[]",
+            "score": 0.9,
+            "fusion_score": 0.9,
+            "matched_by": ["official-hybrid"],
+        }
+        return type("Result", (), {
+            "items": [type("Item", (), {"content": evidence})()]
+        })()
+
+
+def test_graph_expansion_fetches_new_source_chunks_once(monkeypatch) -> None:
+    session = ExpansionSearchSession()
+    monkeypatch.setattr(
+        neo4j_service.GraphDatabase,
+        "driver",
+        lambda *args, **kwargs: SearchDriver(session),
+    )
+    monkeypatch.setattr(
+        neo4j_service, "HybridCypherRetriever", ExpansionRetriever
+    )
+
+    results = neo4j_service.search_graph_evidence(
+        "bolt://db",
+        "neo4j",
+        "user",
+        "password",
+        "run-1",
+        "P0301 怎麼處理",
+        [0.1],
+        "GraphRAG",
+        5,
+        ["car.pdf"],
+    )
+
+    assert [item["evidence_id"] for item in results] == [
+        "entity-p0301",
+        "chunk-1",
+        "entity-spark-plug",
+        "relation-misfire-spark-plug",
+        "chunk-2",
+        "chunk-3",
+    ]
+    source_queries = [
+        parameters["chunk_numbers"]
+        for query, parameters in session.calls
+        if 'kind: "原文"' in query
+    ]
+    assert source_queries == [[1], [2, 3]]
