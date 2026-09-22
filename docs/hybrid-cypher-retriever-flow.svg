@@ -1,117 +1,40 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
-  <title id="title">HybridCypherRetriever 混合檢索流程</title>
-  <desc id="desc">從使用者問題開始，分別進行向量搜尋與全文搜尋，融合排序、範圍過濾、可選重排及圖譜擴展後交由語言模型回答。</desc>
-  <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#F7FAFC"/>
-      <stop offset="1" stop-color="#EAF2F8"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#18324A" flood-opacity="0.14"/>
-    </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#46627A"/>
-    </marker>
-    <style>
-      .font { font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
-      .title { font-size: 38px; font-weight: 700; fill: #17324D; }
-      .subtitle { font-size: 18px; fill: #587086; }
-      .box-title { font-size: 22px; font-weight: 700; fill: #17324D; }
-      .body { font-size: 16px; fill: #425B70; }
-      .small { font-size: 14px; fill: #587086; }
-      .white-title { font-size: 22px; font-weight: 700; fill: #FFFFFF; }
-      .white-body { font-size: 16px; fill: #EAF7FF; }
-      .arrow { fill: none; stroke: #46627A; stroke-width: 3; marker-end: url(#arrow); }
-      .dash { fill: none; stroke: #7A8FA3; stroke-width: 2.5; stroke-dasharray: 8 7; marker-end: url(#arrow); }
-    </style>
-  </defs>
+<title id="title">HybridCypherRetriever 混合檢索流程</title><desc id="desc">問題同時進行向量與全文搜尋，融合後依序執行文件過濾、二輪原文回查證據擴展、可選重排，最後由語言模型回答。</desc>
+<defs>
+<linearGradient id="bg" x2="1" y2="1"><stop stop-color="#F8FBFE"/><stop offset="1" stop-color="#E9F2F7"/></linearGradient>
+<filter id="s" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dy="4" stdDeviation="5" flood-color="#17324D" flood-opacity=".12"/></filter>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5 0 10Z" fill="#587387"/></marker>
+<style>.f{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif}.t{font-size:38px;font-weight:700;fill:#17324D}.st{font-size:18px;fill:#60788C}.h{font-size:21px;font-weight:700;fill:#17324D}.b{font-size:16px;fill:#405B70}.e{font-size:15px;font-weight:600;fill:#1E6088}.n{font-size:17px;font-weight:700;fill:#fff}.wt{font-size:22px;font-weight:700;fill:#fff}.wb{font-size:16px;fill:#EAF7FF}.ar{fill:none;stroke:#587387;stroke-width:3;marker-end:url(#a)}</style>
+</defs>
+<rect width="1600" height="900" fill="url(#bg)"/>
+<text x="800" y="48" text-anchor="middle" class="f t">HybridCypherRetriever 混合檢索流程</text>
+<text x="800" y="78" text-anchor="middle" class="f st">汽車維修例：「汽車出現 P0301 故障碼，該如何處理？」</text>
 
-  <rect width="1600" height="900" fill="url(#background)"/>
-  <text x="800" y="58" text-anchor="middle" class="font title">HybridCypherRetriever 混合檢索流程</text>
-  <text x="800" y="88" text-anchor="middle" class="font subtitle">語意搜尋 × 精確詞彙 × Cypher 範圍限制 × 圖譜關聯擴展</text>
+<!-- Question -->
+<g filter="url(#s)"><rect x="530" y="105" width="540" height="78" rx="20" fill="#173F5F"/><circle cx="575" cy="144" r="21" fill="#2D78A3"/><text x="575" y="150" text-anchor="middle" class="f n">1</text><text x="615" y="151" class="f wt">使用者問題</text></g>
+<path d="M735 183C680 210 520 205 400 228" class="ar"/><path d="M865 183C920 210 1080 205 1200 228" class="ar"/>
 
-  <!-- User question -->
-  <g filter="url(#shadow)">
-    <rect x="520" y="115" width="560" height="82" rx="20" fill="#173F5F"/>
-    <text x="800" y="150" text-anchor="middle" class="font white-title">① 使用者輸入問題</text>
-    <text x="800" y="178" text-anchor="middle" class="font white-body">例如：「汽車出現 P0301 故障碼，該如何處理？」</text>
-  </g>
+<!-- Search lanes -->
+<g filter="url(#s)"><rect x="100" y="230" width="600" height="155" rx="20" fill="#E3F2FD" stroke="#3C91C7" stroke-width="2"/><circle cx="145" cy="275" r="22" fill="#3C91C7"/><text x="145" y="281" text-anchor="middle" class="f n">A</text><text x="185" y="270" class="f h">向量搜尋「證據節點」</text><text x="125" y="307" class="f b">搜尋三類節點：原文 Chunk／實體描述／關係描述</text><text x="125" y="337" class="f b">每個證據節點皆有 Embedding</text><text x="125" y="365" class="f e">以 cosine similarity 找出語意相近內容</text></g>
 
-  <!-- Split arrows -->
-  <path d="M 740 197 C 700 230, 525 226, 420 258" class="arrow"/>
-  <path d="M 860 197 C 900 230, 1075 226, 1180 258" class="arrow"/>
+<g filter="url(#s)"><rect x="900" y="230" width="600" height="155" rx="20" fill="#FFF3E0" stroke="#E29A2D" stroke-width="2"/><circle cx="945" cy="275" r="22" fill="#E29A2D"/><text x="945" y="281" text-anchor="middle" class="f n">B</text><text x="985" y="270" class="f h">全文搜尋「證據節點」</text><text x="925" y="307" class="f b">搜尋同一批證據節點的文字內容</text><text x="925" y="337" class="f b">原文 Chunk 節點保存完整文字與 Embedding</text><text x="925" y="365" class="f e">精確搜尋故障碼、型號與實體名稱</text></g>
 
-  <!-- Vector lane -->
-  <g filter="url(#shadow)">
-    <rect x="145" y="260" width="550" height="155" rx="20" fill="#E3F2FD" stroke="#2196F3" stroke-width="2"/>
-    <circle cx="193" cy="306" r="24" fill="#2196F3"/>
-    <text x="193" y="313" text-anchor="middle" class="font white-title">A</text>
-    <text x="232" y="302" class="font box-title">A　向量搜尋「證據節點」</text>
-    <text x="232" y="332" class="font body">搜尋 Neo4j 中的三類證據節點：</text>
-    <text x="232" y="359" class="font body">原文 Chunk／實體描述／關係描述</text>
-    <text x="232" y="386" class="font small">每個證據節點皆有 Embedding，用於相似度比較</text>
-  </g>
+<path d="M400 385C490 420 620 410 690 438" class="ar"/><path d="M1200 385C1110 420 980 410 910 438" class="ar"/>
 
-  <!-- Fulltext lane -->
-  <g filter="url(#shadow)">
-    <rect x="905" y="260" width="550" height="155" rx="20" fill="#FFF3E0" stroke="#F59E0B" stroke-width="2"/>
-    <circle cx="953" cy="306" r="24" fill="#F59E0B"/>
-    <text x="953" y="313" text-anchor="middle" class="font white-title">B</text>
-    <text x="992" y="302" class="font box-title">B　全文搜尋「證據節點」</text>
-    <text x="992" y="332" class="font body">搜尋同一批三類證據節點的文字內容</text>
-    <text x="992" y="359" class="font body">原文 Chunk 節點保存完整文字與 Embedding</text>
-  </g>
+<!-- Merge -->
+<g filter="url(#s)"><rect x="500" y="440" width="600" height="95" rx="20" fill="#EDE8FA" stroke="#7659C5" stroke-width="2"/><circle cx="545" cy="487" r="22" fill="#7659C5"/><text x="545" y="493" text-anchor="middle" class="f n">2</text><text x="585" y="477" class="f h">HybridCypherRetriever 融合排名</text><text x="585" y="508" class="f b">naive ranker 正規化並合併兩路結果</text><text x="585" y="529" class="f e">effective_search_ratio = 3</text></g>
+<path d="M800 535C700 555 480 550 295 568" class="ar"/>
 
-  <!-- Merge arrows -->
-  <path d="M 420 415 C 500 452, 620 452, 690 478" class="arrow"/>
-  <path d="M 1180 415 C 1100 452, 980 452, 910 478" class="arrow"/>
+<!-- Linear post-processing -->
+<g filter="url(#s)"><rect x="80" y="570" width="430" height="135" rx="19" fill="#FFFFFF" stroke="#668399" stroke-width="2"/><circle cx="122" cy="611" r="21" fill="#668399"/><text x="122" y="617" text-anchor="middle" class="f n">3</text><text x="160" y="606" class="f h">Cypher 文件範圍過濾</text><text x="105" y="645" class="f b">避免混入其他文件的證據</text><text x="105" y="677" class="f e">只保留汽車維修手冊的結果</text></g>
+<path d="M510 637H580" class="ar"/>
 
-  <!-- Hybrid merge -->
-  <g filter="url(#shadow)">
-    <rect x="505" y="478" width="590" height="108" rx="20" fill="#E8E5FA" stroke="#7357C8" stroke-width="2"/>
-    <text x="800" y="515" text-anchor="middle" class="font box-title">② 官方 HybridCypherRetriever 融合排名</text>
-    <text x="800" y="546" text-anchor="middle" class="font body">naive ranker 正規化並合併兩路結果</text>
-    <text x="800" y="571" text-anchor="middle" class="font small">effective_search_ratio = 3，擴大底層候選範圍</text>
-  </g>
+<g filter="url(#s)"><rect x="585" y="570" width="430" height="135" rx="19" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/><circle cx="627" cy="611" r="21" fill="#D69E2E"/><text x="627" y="617" text-anchor="middle" class="f n">4</text><text x="665" y="606" class="f h">Evidence Expansion</text><text x="610" y="642" class="f b">依名稱與 Chunk 補充實體、關係及原文</text><text x="610" y="671" class="f e">新增來源再受限回查一次原文</text><text x="610" y="695" class="f e">第二輪完成後停止，不再遞迴</text></g>
+<path d="M1015 637H1085" class="ar"/>
 
-  <path d="M 800 586 L 800 622" class="arrow"/>
+<g filter="url(#s)"><rect x="1090" y="570" width="430" height="135" rx="19" fill="#E8F7F0" stroke="#35976A" stroke-width="2"/><circle cx="1132" cy="611" r="21" fill="#35976A"/><text x="1132" y="617" text-anchor="middle" class="f n">5</text><text x="1170" y="606" class="f h">Local Reranker（可選）</text><text x="1115" y="642" class="f b">先召回 Top K × 3（最多 50 筆）</text><text x="1115" y="671" class="f e">依詞彙重疊、完整命中與融合分數重排</text></g>
+<path d="M1305 705C1260 750 1090 752 1035 772" class="ar"/>
 
-  <!-- Filtering -->
-  <g filter="url(#shadow)">
-    <rect x="250" y="625" width="500" height="105" rx="18" fill="#FFFFFF" stroke="#5D7C91" stroke-width="2"/>
-    <text x="500" y="663" text-anchor="middle" class="font box-title">③ 自訂 Cypher 範圍過濾</text>
-    <text x="500" y="699" text-anchor="middle" class="font body">避免混入其他文件的證據</text>
-  </g>
-
-  <!-- Reranker -->
-  <g filter="url(#shadow)">
-    <rect x="850" y="625" width="500" height="105" rx="18" fill="#E8F7F0" stroke="#2E9D68" stroke-width="2"/>
-    <text x="1100" y="663" text-anchor="middle" class="font box-title">④ 可選：本機 Reranker</text>
-    <text x="1100" y="694" text-anchor="middle" class="font body">先召回 Top K × 3（最多 50 筆）再重排</text>
-    <text x="1100" y="716" text-anchor="middle" class="font small">依詞彙重疊、完整命中、融合分數與證據類型評分</text>
-  </g>
-
-  <path d="M 800 586 C 800 610, 700 610, 680 625" class="arrow"/>
-  <path d="M 750 677 L 850 677" class="dash"/>
-
-  <!-- Final stages -->
-  <path d="M 500 730 C 500 755, 600 756, 650 770" class="arrow"/>
-  <path d="M 1100 730 C 1100 755, 1000 756, 950 770" class="arrow"/>
-
-  <g filter="url(#shadow)">
-    <rect x="180" y="760" width="920" height="120" rx="18" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/>
-    <text x="640" y="793" text-anchor="middle" class="font box-title">⑤ Evidence Expansion：證據擴展</text>
-    <text x="640" y="821" text-anchor="middle" class="font body">依命中證據的「實體名稱＋Chunk 編號」補充相關證據</text>
-    <text x="640" y="847" text-anchor="middle" class="font small">同 Chunk 原文｜同名／同 Chunk 實體｜相關關係</text>
-    <text x="640" y="871" text-anchor="middle" class="font small">例：P0301 → 維修原文＋第 1 缸／火星塞＋相關關係（不直接遍歷實體關係邊）</text>
-  </g>
-
-  <path d="M 1100 820 L 1140 820" class="arrow"/>
-
-  <g filter="url(#shadow)">
-    <rect x="1140" y="760" width="400" height="120" rx="18" fill="#173F5F"/>
-    <text x="1340" y="797" text-anchor="middle" class="font white-title">⑥ LLM 依證據產生答案</text>
-    <text x="1340" y="828" text-anchor="middle" class="font white-body">建議檢查第 1 缸火星塞</text>
-    <text x="1340" y="855" text-anchor="middle" class="font white-body">並標示汽車維修手冊頁碼</text>
-  </g>
+<!-- Answer -->
+<g filter="url(#s)"><rect x="450" y="770" width="700" height="100" rx="21" fill="#173F5F"/><circle cx="498" cy="820" r="22" fill="#2D78A3"/><text x="498" y="826" text-anchor="middle" class="f n">6</text><text x="540" y="808" class="f wt">LLM 依證據產生答案</text><text x="540" y="841" class="f wb">建議檢查第 1 缸火星塞，並標示維修手冊頁碼</text></g>
 </svg>
