@@ -11,16 +11,20 @@
 
 <!-- Step 1 -->
 <g filter="url(#s)"><rect x="315" y="248" width="970" height="105" rx="18" fill="#E3F2FD" stroke="#3C91C7" stroke-width="2"/><circle cx="360" cy="300" r="25" fill="#3C91C7"/><text x="360" y="306" text-anchor="middle" class="f n">1</text><text x="405" y="286" class="f h">收集擴展線索</text><text x="405" y="316" class="f b">所有命中證據 → 收集來源 Chunk 編號　｜　命中的實體證據 → 額外收集實體名稱</text><text x="405" y="342" class="f e">例：Chunk 35、Chunk 36；實體名稱「P0301」</text></g>
-<path d="M800 353V390" class="ar"/>
+<path d="M770 353C650 365 450 370 295 393" class="ar"/>
+<path d="M830 353C820 366 810 378 800 393" class="ar"/>
+<text x="520" y="378" text-anchor="middle" class="f e">非原文命中的 Chunk</text>
+<text x="835" y="378" text-anchor="middle" class="f e">實體名稱＋所有 Chunk</text>
 
 <!-- Three expansion branches -->
-<g filter="url(#s)"><rect x="70" y="393" width="450" height="165" rx="18" fill="#FFF3E0" stroke="#E29A2D" stroke-width="2"/><circle cx="112" cy="435" r="24" fill="#E29A2D"/><text x="112" y="441" text-anchor="middle" class="f n">2</text><text x="152" y="428" class="f h">補回來源原文</text><text x="94" y="462" class="f b">若命中的是實體或關係證據，</text><text x="94" y="488" class="f b">依其 Chunk 編號找回完整原文。</text><text x="94" y="522" class="f e">例：找回維修手冊第 86 頁：</text><text x="94" y="546" class="f e">「P0301 表示第 1 缸偵測到失火……」</text></g>
+<g filter="url(#s)"><rect x="70" y="393" width="450" height="165" rx="18" fill="#FFF3E0" stroke="#E29A2D" stroke-width="2"/><circle cx="105" cy="424" r="18" fill="#E29A2D"/><text x="105" y="430" text-anchor="middle" class="f n">2</text><text x="140" y="430" class="f h">補回來源原文</text><text x="94" y="462" class="f b">若命中的是實體或關係證據，</text><text x="94" y="488" class="f b">依其 Chunk 編號找回完整原文。</text><text x="94" y="522" class="f e">例：找回維修手冊第 86 頁：</text><text x="94" y="546" class="f e">「P0301 表示第 1 缸偵測到失火……」</text></g>
 
-<g filter="url(#s)"><rect x="575" y="393" width="450" height="165" rx="18" fill="#E8F7F0" stroke="#35976A" stroke-width="2"/><circle cx="617" cy="435" r="24" fill="#35976A"/><text x="617" y="441" text-anchor="middle" class="f n">3</text><text x="657" y="428" class="f h">補充實體證據</text><text x="599" y="462" class="f b">尋找名稱相同，或出現在</text><text x="599" y="488" class="f b">相同 Chunk 的實體證據。</text><text x="599" y="522" class="f e">例：P0301、第 1 缸失火、</text><text x="599" y="546" class="f e">火星塞、點火線圈</text></g>
+<g filter="url(#s)"><rect x="575" y="393" width="450" height="165" rx="18" fill="#E8F7F0" stroke="#35976A" stroke-width="2"/><circle cx="610" cy="424" r="18" fill="#35976A"/><text x="610" y="430" text-anchor="middle" class="f n">3</text><text x="645" y="430" class="f h">補充實體證據</text><text x="599" y="462" class="f b">尋找名稱相同，或出現在</text><text x="599" y="488" class="f b">相同 Chunk 的實體證據。</text><text x="599" y="522" class="f e">例：P0301、第 1 缸失火、</text><text x="599" y="546" class="f e">火星塞、點火線圈</text></g>
 
-<g filter="url(#s)"><rect x="1080" y="393" width="450" height="165" rx="18" fill="#EDE8FA" stroke="#7659C5" stroke-width="2"/><circle cx="1122" cy="435" r="24" fill="#7659C5"/><text x="1122" y="441" text-anchor="middle" class="f n">4</text><text x="1162" y="428" class="f h">補充關係證據</text><text x="1104" y="462" class="f b">關係起點／終點符合擴展實體，</text><text x="1104" y="488" class="f b">或關係來自相同 Chunk。</text><text x="1104" y="522" class="f e">例：第 1 缸失火</text><text x="1104" y="546" class="f e">─可能原因→ 火星塞故障</text></g>
+<g filter="url(#s)"><rect x="1080" y="393" width="450" height="165" rx="18" fill="#EDE8FA" stroke="#7659C5" stroke-width="2"/><circle cx="1115" cy="424" r="18" fill="#7659C5"/><text x="1115" y="430" text-anchor="middle" class="f n">4</text><text x="1150" y="430" class="f h">補充關係證據</text><text x="1104" y="462" class="f b">關係起點／終點符合擴展實體，</text><text x="1104" y="488" class="f b">或關係來自相同 Chunk。</text><text x="1104" y="522" class="f e">例：第 1 缸失火</text><text x="1104" y="546" class="f e">─可能原因→ 火星塞故障</text></g>
 
-<path d="M520 475H575" class="dash"/><path d="M1025 475H1080" class="dash"/>
+<path d="M1025 475H1080" class="dash"/>
+<text x="1052" y="382" text-anchor="middle" class="f e">擴展實體名稱</text>
 <path d="M295 558C350 610 535 603 660 630" class="ar"/><path d="M800 558V625" class="ar"/><path d="M1305 558C1250 610 1065 603 940 630" class="ar"/>
 
 <!-- Combine -->
