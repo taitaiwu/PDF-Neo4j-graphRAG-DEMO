@@ -75,8 +75,6 @@
     <text x="800" y="571" text-anchor="middle" class="font small">effective_search_ratio = 3，擴大底層候選範圍</text>
   </g>
 
-  <path d="M 800 586 L 800 622" class="arrow"/>
-
   <!-- Filtering -->
   <g filter="url(#shadow)">
     <rect x="250" y="625" width="500" height="105" rx="18" fill="#FFFFFF" stroke="#5D7C91" stroke-width="2"/>
@@ -96,8 +94,8 @@
   <path d="M 750 677 L 850 677" class="dash"/>
 
   <!-- Final stages -->
-  <path d="M 500 730 C 500 755, 600 756, 650 770" class="arrow"/>
-  <path d="M 1100 730 C 1100 755, 1000 756, 950 770" class="arrow"/>
+  <path d="M 500 730 C 500 746, 600 750, 650 757" class="arrow"/>
+  <path d="M 1100 730 C 1100 746, 1000 750, 950 757" class="arrow"/>
 
   <g filter="url(#shadow)">
     <rect x="180" y="760" width="920" height="120" rx="18" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/>
@@ -107,7 +105,7 @@
     <text x="640" y="871" text-anchor="middle" class="font small">例：P0301 → 維修原文＋第 1 缸／火星塞＋相關關係（不直接遍歷實體關係邊）</text>
   </g>
 
-  <path d="M 1100 820 L 1140 820" class="arrow"/>
+  <path d="M 1100 820 L 1137 820" class="arrow"/>
 
   <g filter="url(#shadow)">
     <rect x="1140" y="760" width="400" height="120" rx="18" fill="#173F5F"/>
