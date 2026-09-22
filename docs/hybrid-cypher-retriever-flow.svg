@@ -102,7 +102,7 @@
     <text x="640" y="793" text-anchor="middle" class="font box-title">⑤ Evidence Expansion：證據擴展</text>
     <text x="640" y="821" text-anchor="middle" class="font body">依命中證據的「實體名稱＋Chunk 編號」補充相關證據</text>
     <text x="640" y="847" text-anchor="middle" class="font small">同 Chunk 原文｜同名／同 Chunk 實體｜相關關係</text>
-    <text x="640" y="871" text-anchor="middle" class="font small">例：P0301 → 維修原文＋第 1 缸／火星塞＋相關關係（不直接遍歷實體關係邊）</text>
+    <text x="640" y="871" text-anchor="middle" class="font small">例：命中 P0301 → 補回失火原文 → 擴展火星塞與相關關係 → 再補回新增來源原文</text>
   </g>
 
   <path d="M 1100 820 L 1137 820" class="arrow"/>
