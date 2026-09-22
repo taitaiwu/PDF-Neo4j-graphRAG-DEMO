@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+<title id="title">Evidence Expansion 證據擴展詳細流程</title><desc id="desc">以汽車 P0301 故障碼為例，說明如何從 Hybrid Search 命中證據補回原文、實體與關係證據。</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#F8FBFE"/><stop offset="1" stop-color="#EAF3F8"/></linearGradient><filter id="s" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dy="4" stdDeviation="5" flood-color="#17324D" flood-opacity=".13"/></filter><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5 0 10Z" fill="#526F84"/></marker><style>.f{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif}.t{font-size:38px;font-weight:700;fill:#17324D}.st{font-size:18px;fill:#60788C}.h{font-size:21px;font-weight:700;fill:#17324D}.b{font-size:16px;fill:#405B70}.e{font-size:15px;font-weight:600;fill:#1E6088}.n{font-size:18px;font-weight:700;fill:#fff}.wt{font-size:21px;font-weight:700;fill:#fff}.wb{font-size:16px;fill:#EAF7FF}.ar{fill:none;stroke:#526F84;stroke-width:3;marker-end:url(#a)}.dash{fill:none;stroke:#9A6B28;stroke-width:2.5;stroke-dasharray:8 6;marker-end:url(#a)}</style></defs>
+<rect width="1600" height="900" fill="url(#bg)"/>
+<text x="800" y="52" text-anchor="middle" class="f t">Evidence Expansion：證據擴展如何進行？</text>
+<text x="800" y="82" text-anchor="middle" class="f st">汽車維修例：從「P0301」相關命中，補齊可供回答的原文、實體與關係證據</text>
+
+<!-- Input -->
+<g filter="url(#s)"><rect x="475" y="110" width="650" height="95" rx="20" fill="#173F5F"/><text x="800" y="147" text-anchor="middle" class="f wt">輸入：Hybrid Search 命中的證據節點</text><text x="800" y="180" text-anchor="middle" class="f wb">可能是原文 Chunk、實體描述或關係描述</text></g>
+<path d="M800 205V245" class="ar"/>
+
+<!-- Step 1 -->
+<g filter="url(#s)"><rect x="315" y="248" width="970" height="105" rx="18" fill="#E3F2FD" stroke="#3C91C7" stroke-width="2"/><circle cx="360" cy="300" r="25" fill="#3C91C7"/><text x="360" y="306" text-anchor="middle" class="f n">1</text><text x="405" y="286" class="f h">收集擴展線索</text><text x="405" y="316" class="f b">所有命中證據 → 收集來源 Chunk 編號　｜　命中的實體證據 → 額外收集實體名稱</text><text x="405" y="342" class="f e">例：Chunk 35、Chunk 36；實體名稱「P0301」</text></g>
+<path d="M800 353V390" class="ar"/>
+
+<!-- Three expansion branches -->
+<g filter="url(#s)"><rect x="70" y="393" width="450" height="165" rx="18" fill="#FFF3E0" stroke="#E29A2D" stroke-width="2"/><circle cx="112" cy="435" r="24" fill="#E29A2D"/><text x="112" y="441" text-anchor="middle" class="f n">2</text><text x="152" y="428" class="f h">補回來源原文</text><text x="94" y="462" class="f b">若命中的是實體或關係證據，</text><text x="94" y="488" class="f b">依其 Chunk 編號找回完整原文。</text><text x="94" y="522" class="f e">例：找回維修手冊第 86 頁：</text><text x="94" y="546" class="f e">「P0301 表示第 1 缸偵測到失火……」</text></g>
+
+<g filter="url(#s)"><rect x="575" y="393" width="450" height="165" rx="18" fill="#E8F7F0" stroke="#35976A" stroke-width="2"/><circle cx="617" cy="435" r="24" fill="#35976A"/><text x="617" y="441" text-anchor="middle" class="f n">3</text><text x="657" y="428" class="f h">補充實體證據</text><text x="599" y="462" class="f b">尋找名稱相同，或出現在</text><text x="599" y="488" class="f b">相同 Chunk 的實體證據。</text><text x="599" y="522" class="f e">例：P0301、第 1 缸失火、</text><text x="599" y="546" class="f e">火星塞、點火線圈</text></g>
+
+<g filter="url(#s)"><rect x="1080" y="393" width="450" height="165" rx="18" fill="#EDE8FA" stroke="#7659C5" stroke-width="2"/><circle cx="1122" cy="435" r="24" fill="#7659C5"/><text x="1122" y="441" text-anchor="middle" class="f n">4</text><text x="1162" y="428" class="f h">補充關係證據</text><text x="1104" y="462" class="f b">關係起點／終點符合擴展實體，</text><text x="1104" y="488" class="f b">或關係來自相同 Chunk。</text><text x="1104" y="522" class="f e">例：第 1 缸失火</text><text x="1104" y="546" class="f e">─可能原因→ 火星塞故障</text></g>
+
+<path d="M520 475H575" class="dash"/><path d="M1025 475H1080" class="dash"/>
+<path d="M295 558C350 610 535 603 660 630" class="ar"/><path d="M800 558V625" class="ar"/><path d="M1305 558C1250 610 1065 603 940 630" class="ar"/>
+
+<!-- Combine -->
+<g filter="url(#s)"><rect x="350" y="630" width="900" height="125" rx="20" fill="#FFF8E6" stroke="#D69E2E" stroke-width="2"/><circle cx="395" cy="691" r="25" fill="#D69E2E"/><text x="395" y="697" text-anchor="middle" class="f n">5</text><text x="440" y="674" class="f h">合併擴展證據</text><text x="440" y="705" class="f b">原始命中＋來源原文＋實體證據＋關係證據</text><text x="440" y="735" class="f e">擴展證據標記為 graph；若啟用 Reranker，之後再與其他候選一起重排並取 Top K</text></g>
+<path d="M800 755V792" class="ar"/>
+
+<!-- Output -->
+<g filter="url(#s)"><rect x="345" y="795" width="910" height="75" rx="19" fill="#173F5F"/><text x="800" y="826" text-anchor="middle" class="f wt">輸出：較完整、具原文出處的回答證據</text><text x="800" y="853" text-anchor="middle" class="f wb">注意：目前依名稱與 Chunk 擴展，不直接遍歷 ExtractedEntity 的關係邊</text></g>
+</svg>
