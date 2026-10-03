@@ -627,7 +627,7 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
 
     status, rows, state, results = ui.generate_evaluation_for_ui(
         "project", "endpoint", "key", "generation-model", "test-model", 1, "關聯擴展檢索", 8,
-        [TextChunk(1, "text", (1,))], True, 5,
+        [TextChunk(1, "text", (1,))], True, 5, True, False,
     )
 
     assert status.startswith("✅")
@@ -638,6 +638,7 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     assert state["preferences"]["allow_parallel_generation"] is True
     assert captured["generation_workers"] == 1
     assert state["preferences"]["test_max_concurrent_requests"] == 5
+    assert state["preferences"]["expand_evidence"] is False
     assert results == []
 
 
@@ -920,7 +921,7 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
     assert captured["args"] == (
         "endpoint", "key", "embed-endpoint", "embed-key",
         "bolt", "neo4j", "user", "pass",
-        "model", "Q", "關聯擴展檢索", 8, ["manual.pdf"], True,
+        "model", "Q", "關聯擴展檢索", 8, ["manual.pdf"], True, True,
     )
 
 
@@ -1566,13 +1567,14 @@ def test_answer_question_for_ui_can_disable_reranker(tmp_path, monkeypatch) -> N
     status, answer, rows = ui.answer_question_for_ui(
         "http://models/v1", "key", "http://embed/v1", "embed-key",
         "bolt://db", "neo4j", "user", "password",
-        "answer", " E01 怎麼處理？ ", "基本檢索", 8, None, False,
+        "answer", " E01 怎麼處理？ ", "基本檢索", 8, None, False, False,
     )
 
     assert status.startswith("✅ 基本檢索")
     assert answer == "請重新啟動。"
     assert captured["args"][5] == "E01 怎麼處理？"
     assert captured["kwargs"]["candidate_top_k"] == 8
+    assert captured["kwargs"]["expand_evidence"] is False
     assert rows == [[
         "原文", "E01 排除方式", "official-hybrid",
         "0.0300", "3", "2", "",
@@ -1585,7 +1587,8 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
 
     status = ui.save_evaluation_preferences_for_ui(
-        "project", "generation-model", "test-model", 12, "基本檢索", 6, True, 5, False
+        "project", "generation-model", "test-model", 12, "基本檢索", 6,
+        True, 5, False, False,
     )
 
     assert status.startswith("✅")
@@ -1597,6 +1600,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
         "top_k": 6,
         "allow_parallel_generation": True,
         "use_reranker": False,
+        "expand_evidence": False,
         "test_max_concurrent_requests": 5,
     }
 
@@ -1641,7 +1645,8 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
 
     assert loaded[8] is False
     assert loaded[9] is True
-    assert loaded[10] == 3
+    assert loaded[10] is True
+    assert loaded[11] == 3
     assert loaded[3:5] == ("legacy-model", "legacy-model")
     assert loaded[6] == "關聯擴展檢索"
 

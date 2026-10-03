@@ -550,3 +550,27 @@ def test_graph_expansion_fetches_new_source_chunks_once(monkeypatch) -> None:
         if 'kind: "原文"' in query
     ]
     assert source_queries == [[1], [2, 3]]
+
+
+def test_graph_expansion_can_be_disabled(monkeypatch) -> None:
+    session = ExpansionSearchSession()
+    monkeypatch.setattr(
+        neo4j_service.GraphDatabase,
+        "driver",
+        lambda *args, **kwargs: SearchDriver(session),
+    )
+    monkeypatch.setattr(
+        neo4j_service, "HybridCypherRetriever", ExpansionRetriever
+    )
+
+    results = neo4j_service.search_graph_evidence(
+        "bolt://db", "neo4j", "user", "password", "run-1",
+        "P0301 怎麼處理", [0.1], "GraphRAG", 5, ["car.pdf"],
+        expand_evidence=False,
+    )
+
+    assert [item["evidence_id"] for item in results] == ["entity-p0301"]
+    assert not any(
+        'kind: "原文"' in query or "kind: '實體'" in query or "kind: '關係'" in query
+        for query, _parameters in session.calls
+    )

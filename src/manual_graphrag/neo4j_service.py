@@ -156,6 +156,7 @@ def search_graph_evidence(
     top_k: int,
     document_names: list[str] | None = None,
     candidate_top_k: int | None = None,
+    expand_evidence: bool = True,
 ) -> list[dict[str, Any]]:
     selected_documents = list(dict.fromkeys(
         str(name).strip() for name in (document_names or []) if str(name).strip()
@@ -211,7 +212,7 @@ def search_graph_evidence(
                 if isinstance(item.content, dict)
             ][:retrieval_top_k]
 
-            if retrieval_mode in {"關聯擴展檢索", "GraphRAG"} and selected:
+            if expand_evidence and retrieval_mode in {"關聯擴展檢索", "GraphRAG"} and selected:
                 with driver.session(database=database.strip()) as session:
                     chunk_numbers = sorted({
                         number
