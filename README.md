@@ -154,7 +154,7 @@ docker build --pull -t pdf-graphrag:latest .
 1. 下載 `python:3.12-slim-bookworm` 基底映像。
 2. 安裝 `requirements.txt` 中的 Python 套件。
 3. 複製 `src/` 與預設 `config/`。
-4. 建立容器內的 `/app/data`，開放 Gradio 的 7860 port，並設定 HTTP health check。
+4. 建立容器內的 `/app/data`，開放 Gradio 的 8080 port，並設定 HTTP health check。
 
 確認映像已建立：
 
@@ -170,7 +170,7 @@ Linux／macOS：
 docker run -d \
   --name pdf-graphrag \
   --restart unless-stopped \
-  -p 7860:7860 \
+  -p 8080:8080 \
   --add-host=host.docker.internal:host-gateway \
   -v "$(pwd)/.env:/app/.env" \
   -v "$(pwd)/config/model_settings.yaml:/app/config/model_settings.yaml" \
@@ -181,12 +181,12 @@ docker run -d \
 Windows PowerShell：
 
 ~~~powershell
-docker run -d --name pdf-graphrag --restart unless-stopped -p 7860:7860 --add-host=host.docker.internal:host-gateway -v "$PWD/.env:/app/.env" -v "$PWD/config/model_settings.yaml:/app/config/model_settings.yaml" -v "$PWD/data:/app/data" pdf-graphrag:latest
+docker run -d --name pdf-graphrag --restart unless-stopped -p 8080:8080 --add-host=host.docker.internal:host-gateway -v "$PWD/.env:/app/.env" -v "$PWD/config/model_settings.yaml:/app/config/model_settings.yaml" -v "$PWD/data:/app/data" pdf-graphrag:latest
 ~~~
 
 參數用途：
 
-- `-p 7860:7860`：將主機的 7860 port 對應到 Gradio。
+- `-p 8080:8080`：將主機的 8080 port 對應到 Gradio。
 - `--restart unless-stopped`：Docker 服務重新啟動後自動恢復容器。
 - `--add-host=host.docker.internal:host-gateway`：讓 Linux 容器能連到主機上的 Ollama／Neo4j。
 - 三個 `-v`：把設定與專案資料保存在主機，不隨容器刪除。
@@ -204,7 +204,7 @@ docker logs -f pdf-graphrag
 docker inspect --format '{{.State.Health.Status}}' pdf-graphrag
 ~~~
 
-狀態成為 `healthy` 後，開啟 <http://localhost:7860>。若主機 7860 已被占用，可把啟動參數改成 `-p 8080:7860`，再開啟 <http://localhost:8080>。
+狀態成為 `healthy` 後，開啟 <http://localhost:8080>。若主機 8080 已被占用，可把啟動參數改成 `-p 8081:8080`，再開啟 <http://localhost:8081>。
 
 進入介面後，在「1. 連線設定」測試 Neo4j、模型與 Embedding 服務。Ollama 請取得模型清單並勾選需要的模型；OpenAI／Voyage 則填入 API key 後測試連線。介面更新的連線資料與模型選擇會寫回已掛載的 `.env` 和 `config/model_settings.yaml`。
 
@@ -253,7 +253,7 @@ docker ps -a --filter name=pdf-graphrag
 docker logs pdf-graphrag
 ~~~
 
-若 7860 已被占用，將啟動參數改為 -p 8080:7860，再開啟 http://localhost:8080。
+若 8080 已被占用，將啟動參數改為 -p 8081:8080，再開啟 http://localhost:8081。
 
 ### Neo4j 或模型服務連線失敗
 

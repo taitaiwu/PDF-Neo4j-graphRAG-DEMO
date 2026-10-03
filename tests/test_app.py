@@ -8,7 +8,7 @@ def test_launch_settings_default_to_local_browser(monkeypatch) -> None:
 
     assert launch_settings() == {
         "server_name": "127.0.0.1",
-        "server_port": 7860,
+        "server_port": 8080,
         "share": False,
         "inbrowser": True,
     }
