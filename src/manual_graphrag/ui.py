@@ -417,9 +417,11 @@ def _history_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
 
 def _display_retrieval_mode(value: str | None) -> str:
     return {
-        "GraphRAG": "關聯擴展檢索",
-        "向量 RAG": "基本檢索",
-    }.get(value or "", value or "關聯擴展檢索")
+        "GraphRAG": "混合檢索",
+        "向量 RAG": "基本向量檢索",
+        "基本檢索": "基本向量檢索",
+        "關聯擴展檢索": "混合檢索",
+    }.get(value or "", value or "混合檢索")
 
 
 def _source_display(item: dict[str, Any]) -> tuple[str, str, str]:
@@ -2038,14 +2040,14 @@ def build_app() -> gr.Blocks:
                         allow_custom_value=False,
                         label="回答與評判模型",
                     )
-                    evaluation_retrieval_mode = gr.Radio(["基本檢索", "關聯擴展檢索"], value="關聯擴展檢索", label="檢索模式")
+                    evaluation_retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
                     evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
                     evaluation_use_reranker = gr.Checkbox(
                         value=True, label="使用 Reranker"
                     )
                     evaluation_expand_evidence = gr.Checkbox(
                         value=True, label="擴展圖譜證據",
-                        info="僅在「關聯擴展檢索」模式生效。",
+                        info="僅在「混合檢索」模式生效。",
                     )
                     evaluation_test_max_concurrent_requests = gr.Number(
                         value=3, minimum=1, precision=0,
@@ -2109,12 +2111,12 @@ def build_app() -> gr.Blocks:
             )
             question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
             with gr.Row():
-                retrieval_mode = gr.Radio(["基本檢索", "關聯擴展檢索"], value="關聯擴展檢索", label="檢索模式")
+                retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
                 top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
                 use_reranker = gr.Checkbox(value=True, label="使用 Reranker")
                 expand_evidence = gr.Checkbox(
                     value=True, label="擴展圖譜證據",
-                    info="僅在「關聯擴展檢索」模式生效。",
+                    info="僅在「混合檢索」模式生效。",
                 )
             ask_button = gr.Button("送出問題", variant="primary")
             answer_status = gr.Markdown()
@@ -2143,7 +2145,7 @@ def build_app() -> gr.Blocks:
             gr.Markdown("### 檢索來源")
             answer_sources = gr.Dataframe(
                 headers=[
-                    "類型", "證據", "Retriever", "官方混合分數",
+                    "類型", "證據", "Retriever", "檢索分數",
                     "來源頁碼", "來源 Chunks", "來源文件",
                 ],
                 interactive=False,

@@ -8,7 +8,7 @@ from typing import Any
 from neo4j import GraphDatabase
 from neo4j.exceptions import DriverError, Neo4jError
 from neo4j_graphrag.exceptions import Neo4jGraphRagError
-from neo4j_graphrag.retrievers import HybridCypherRetriever
+from neo4j_graphrag.retrievers import HybridCypherRetriever, VectorCypherRetriever
 from neo4j_graphrag.types import RetrieverResultItem
 
 
@@ -40,6 +40,17 @@ def _format_hybrid_record(record: Any) -> RetrieverResultItem:
         "score": score,
         "fusion_score": score,
         "matched_by": ["official-hybrid"],
+    })
+    return RetrieverResultItem(content=evidence, metadata={"score": score})
+
+
+def _format_vector_record(record: Any) -> RetrieverResultItem:
+    evidence = dict(record["evidence"])
+    score = float(record["score"])
+    evidence.update({
+        "score": score,
+        "fusion_score": score,
+        "matched_by": ["official-vector"],
     })
     return RetrieverResultItem(content=evidence, metadata={"score": score})
 
@@ -188,31 +199,47 @@ def search_graph_evidence(
                     int(total_record["count"]) if total_record else int(top_k),
                 )
 
-            retriever = HybridCypherRetriever(
-                driver=driver,
-                vector_index_name=target_vector_index,
-                fulltext_index_name="graph_evidence_fulltext",
-                retrieval_query=retrieval_query,
-                result_formatter=_format_hybrid_record,
-                neo4j_database=database.strip(),
-            )
-            result = retriever.search(
-                query_text=_escape_fulltext_query(question),
-                query_vector=embedding,
-                top_k=candidate_count,
-                effective_search_ratio=3,
-                query_params={
-                    "run_id": run_id,
-                    "document_names": selected_documents,
-                },
-                ranker="naive",
-            )
+            query_params = {
+                "run_id": run_id,
+                "document_names": selected_documents,
+            }
+            if retrieval_mode in {"基本向量檢索", "基本檢索", "向量 RAG"}:
+                retriever = VectorCypherRetriever(
+                    driver=driver,
+                    index_name=target_vector_index,
+                    retrieval_query=retrieval_query,
+                    result_formatter=_format_vector_record,
+                    neo4j_database=database.strip(),
+                )
+                result = retriever.search(
+                    query_vector=embedding,
+                    top_k=candidate_count,
+                    effective_search_ratio=3,
+                    query_params=query_params,
+                )
+            else:
+                retriever = HybridCypherRetriever(
+                    driver=driver,
+                    vector_index_name=target_vector_index,
+                    fulltext_index_name="graph_evidence_fulltext",
+                    retrieval_query=retrieval_query,
+                    result_formatter=_format_hybrid_record,
+                    neo4j_database=database.strip(),
+                )
+                result = retriever.search(
+                    query_text=_escape_fulltext_query(question),
+                    query_vector=embedding,
+                    top_k=candidate_count,
+                    effective_search_ratio=3,
+                    query_params=query_params,
+                    ranker="naive",
+                )
             selected = [
                 dict(item.content) for item in result.items
                 if isinstance(item.content, dict)
             ][:retrieval_top_k]
 
-            if expand_evidence and retrieval_mode in {"關聯擴展檢索", "GraphRAG"} and selected:
+            if expand_evidence and retrieval_mode in {"混合檢索", "關聯擴展檢索", "GraphRAG"} and selected:
                 with driver.session(database=database.strip()) as session:
                     chunk_numbers = sorted({
                         number
@@ -386,7 +413,7 @@ def search_graph_evidence(
         guidance = ""
         if "dimensionality" in detail.casefold() or "dimension" in detail.casefold() or "index" in detail.casefold():
             guidance = " 請使用目前的 Embedding 模型重新執行「Embedding 並匯入 Neo4j」以建立對應維度索引。"
-        raise ValueError(f"Neo4j 官方混合檢索失敗：{exc}{guidance}") from exc
+        raise ValueError(f"Neo4j 檢索失敗：{exc}{guidance}") from exc
     except Exception as exc:
         # neo4j-graphrag 1.19.0 tries to format a missing-index error with the
         # nonexistent `self.index_name` attribute. Replace that implementation
@@ -396,7 +423,7 @@ def search_graph_evidence(
         else:
             detail = str(exc)
         raise ValueError(
-            f"Neo4j 官方混合檢索失敗：{detail} "
+            f"Neo4j 檢索失敗：{detail} "
             "請使用目前的 Embedding 模型重新執行「Embedding 並匯入 Neo4j」。"
         ) from exc
     return [_restore_source_references(item) for item in selected]

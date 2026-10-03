@@ -327,6 +327,24 @@ class FakeOfficialRetriever:
         })()
 
 
+class FakeOfficialVectorRetriever:
+    initialization = None
+    search_arguments = None
+
+    def __init__(self, **kwargs):
+        type(self).initialization = kwargs
+
+    def search(self, **kwargs):
+        type(self).search_arguments = kwargs
+        evidence = [_evidence("vector-hit", 0.9)]
+        formatted = type(self).initialization["result_formatter"]({
+            "evidence": evidence[0], "score": evidence[0]["score"],
+        })
+        return type("Result", (), {
+            "items": [type("Item", (), {"content": formatted.content})()]
+        })()
+
+
 def test_missing_dimension_index_replaces_upstream_attribute_error(monkeypatch) -> None:
     session = SearchSession()
     monkeypatch.setattr(
@@ -346,7 +364,7 @@ def test_missing_dimension_index_replaces_upstream_attribute_error(monkeypatch) 
     with pytest.raises(ValueError) as error:
         neo4j_service.search_graph_evidence(
             "bolt://db", "neo4j", "user", "password", "run-1",
-            "question", [0.1] * 1536, "基本檢索", 3,
+            "question", [0.1] * 1536, "混合檢索", 3,
         )
 
     message = str(error.value)
@@ -378,7 +396,7 @@ def test_search_dimension_error_instructs_user_to_reimport(monkeypatch) -> None:
     with pytest.raises(ValueError, match="重新執行.*Embedding 並匯入 Neo4j"):
         neo4j_service.search_graph_evidence(
             "bolt://db", "neo4j", "user", "password", "run-1",
-            "question", [0.1] * 1536, "基本檢索", 3,
+            "question", [0.1] * 1536, "混合檢索", 3,
         )
 
 
@@ -395,8 +413,9 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
 
     results = neo4j_service.search_graph_evidence(
         "bolt://db", "neo4j", "user", "password", "run-1",
-        "E01 +(重試)", [0.1], "基本檢索", 3, ["printer-a.pdf"],
+        "E01 +(重試)", [0.1], "混合檢索", 3, ["printer-a.pdf"],
         candidate_top_k=9,
+        expand_evidence=False,
     )
 
     assert [item["evidence_id"] for item in results] == [
@@ -419,6 +438,41 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
         "document_names": ["printer-a.pdf"],
     }
     assert arguments["ranker"] == "naive"
+
+
+def test_basic_vector_retrieval_uses_vector_cypher_retriever(monkeypatch) -> None:
+    session = SearchSession()
+    monkeypatch.setattr(
+        neo4j_service.GraphDatabase,
+        "driver",
+        lambda *args, **kwargs: SearchDriver(session),
+    )
+    monkeypatch.setattr(
+        neo4j_service, "VectorCypherRetriever", FakeOfficialVectorRetriever
+    )
+    monkeypatch.setattr(
+        neo4j_service, "HybridCypherRetriever",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("混合檢索不應執行")),
+    )
+
+    results = neo4j_service.search_graph_evidence(
+        "bolt://db", "neo4j", "user", "password", "run-1",
+        "E01 如何處理", [0.1], "基本向量檢索", 3, ["manual.pdf"],
+    )
+
+    assert [item["evidence_id"] for item in results] == ["vector-hit"]
+    assert results[0]["matched_by"] == ["official-vector"]
+    initialization = FakeOfficialVectorRetriever.initialization
+    assert initialization["index_name"] == "graph_evidence_embedding_1"
+    assert initialization["neo4j_database"] == "neo4j"
+    assert "$run_id" in initialization["retrieval_query"]
+    assert "$document_names" in initialization["retrieval_query"]
+    assert FakeOfficialVectorRetriever.search_arguments == {
+        "query_vector": [0.1],
+        "top_k": 3,
+        "effective_search_ratio": 3,
+        "query_params": {"run_id": "run-1", "document_names": ["manual.pdf"]},
+    }
 
 
 class ExpansionSearchSession:

@@ -1648,7 +1648,7 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     assert loaded[10] is True
     assert loaded[11] == 3
     assert loaded[3:5] == ("legacy-model", "legacy-model")
-    assert loaded[6] == "關聯擴展檢索"
+    assert loaded[6] == "混合檢索"
 
 
 def test_project_list_refreshes_on_page_load_and_tab_select_without_focus_rerender(tmp_path, monkeypatch) -> None:
