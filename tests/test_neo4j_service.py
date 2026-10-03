@@ -663,11 +663,11 @@ def test_ensure_project_database_creates_then_checks_database(monkeypatch) -> No
     driver = Driver()
     monkeypatch.setattr(neo4j_service.GraphDatabase, "driver", lambda *args, **kwargs: driver)
 
-    neo4j_service.ensure_project_database("bolt://db", "vehicle_123abc", "user", "pass")
+    neo4j_service.ensure_project_database("bolt://db", "vehicle-123abc", "user", "pass")
 
     assert driver.sessions[0].database == "system"
-    assert "CREATE DATABASE `vehicle_123abc` IF NOT EXISTS WAIT 30 SECONDS" in driver.sessions[0].queries[0]
-    assert driver.sessions[1].database == "vehicle_123abc"
+    assert "CREATE DATABASE `vehicle-123abc` IF NOT EXISTS WAIT 30 SECONDS" in driver.sessions[0].queries[0]
+    assert driver.sessions[1].database == "vehicle-123abc"
     assert driver.sessions[1].queries[0] == "RETURN 1 AS value"
 
 

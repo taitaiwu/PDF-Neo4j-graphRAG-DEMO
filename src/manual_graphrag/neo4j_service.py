@@ -100,7 +100,7 @@ def check_neo4j_connection(
 
 def ensure_project_database(uri: str, database: str, username: str, password: str) -> None:
     """Create the project database when supported, then verify it is usable."""
-    if not re.fullmatch(r"[a-z][a-z0-9_]*", database.strip()):
+    if not re.fullmatch(r"[a-z][a-z0-9.-]*", database.strip()):
         raise ValueError("專案 Neo4j Database 名稱格式無效")
     try:
         with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:

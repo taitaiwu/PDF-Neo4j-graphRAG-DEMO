@@ -17,7 +17,7 @@ PROJECT_CONNECTION_SETTINGS = {"model_endpoint", "api_key"}
 def project_database_name(project_id: str) -> str:
     """Return a stable, Neo4j-safe database name isolated to this project."""
     digest = hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:16]
-    return f"vehicle_{digest}"
+    return f"vehicle-{digest}"
 
 
 def _without_model_credentials(settings: Any) -> Any:
@@ -80,8 +80,11 @@ def load_project(project_id: str, root: str | Path = PROJECTS_DIR) -> dict[str, 
     if not target.is_file():
         raise ValueError("找不到指定專案")
     project = read_json(target)
-    had_project_database = bool(project.get("neo4j_database"))
-    project.setdefault("neo4j_database", project_database_name(project_id))
+    stored_database = str(project.get("neo4j_database") or "")
+    legacy_generated_database = stored_database.startswith("vehicle_")
+    had_project_database = bool(stored_database) and not legacy_generated_database
+    if not had_project_database:
+        project["neo4j_database"] = project_database_name(project_id)
     if not had_project_database:
         graph_state = project.get("graph_state")
         if isinstance(graph_state, dict) and graph_state.get("neo4j_imported"):
