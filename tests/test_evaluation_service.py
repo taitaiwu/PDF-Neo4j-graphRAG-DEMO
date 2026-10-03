@@ -77,7 +77,7 @@ def test_question_dedup_rejects_same_answer_across_chunks(monkeypatch) -> None:
         )
 
 
-def test_random_page_context_includes_focus_chunk_and_neighbors(monkeypatch) -> None:
+def test_random_page_context_selects_only_focus_page_chunks(monkeypatch) -> None:
     chunks = [
         TextChunk(number, f"chunk-{number}", (number,), "manual.pdf")
         for number in range(1, 6)
@@ -87,10 +87,10 @@ def test_random_page_context_includes_focus_chunk_and_neighbors(monkeypatch) -> 
     focus_page, context = evaluation_service.sample_random_page_context(chunks)
 
     assert focus_page == 3
-    assert [chunk.number for chunk in context] == [2, 3, 4]
+    assert [chunk.number for chunk in context] == [3]
 
 
-def test_random_page_context_expands_at_document_boundaries(monkeypatch) -> None:
+def test_random_page_context_selects_focus_page_at_document_boundaries(monkeypatch) -> None:
     chunks = [
         TextChunk(number, f"chunk-{number}", (number,), "manual.pdf")
         for number in range(1, 4)
@@ -100,7 +100,31 @@ def test_random_page_context_expands_at_document_boundaries(monkeypatch) -> None
     focus_page, context = evaluation_service.sample_random_page_context(chunks)
 
     assert focus_page == 1
-    assert [chunk.number for chunk in context] == [1, 2]
+    assert [chunk.number for chunk in context] == [1]
+
+
+def test_page_context_expands_until_llm_reports_complete(monkeypatch) -> None:
+    assessments = iter([False, False, True])
+    checked_contexts = []
+
+    def fake_chat(*args, **kwargs):
+        checked_contexts.append(args[4])
+        return kwargs["validator"]({"sufficient": next(assessments), "reason": "需更多上下文"})
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+    chunks = [
+        TextChunk(number, f"page-{number}", (number,), "manual.pdf")
+        for number in range(1, 6)
+    ]
+
+    context = evaluation_service.expand_page_context_until_complete(
+        "url", "key", "model", chunks, 3,
+    )
+
+    assert [chunk.number for chunk in context] == [1, 2, 3, 4, 5]
+    assert len(checked_contexts) == 3
+    assert "PAGES 3" in checked_contexts[0]
+    assert "PAGES 2" in checked_contexts[1] and "PAGES 4" in checked_contexts[1]
 
 
 def test_generate_evaluation_questions_tells_model_which_questions_to_avoid(

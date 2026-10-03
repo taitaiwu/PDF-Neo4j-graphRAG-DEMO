@@ -601,6 +601,7 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
 
     sampled_chunks = [TextChunk(7, "sampled page with context", (7,), "manual.pdf")]
     monkeypatch.setattr(ui, "sample_random_page_context", lambda _chunks: (7, sampled_chunks))
+    monkeypatch.setattr(ui, "expand_page_context_until_complete", lambda *args: sampled_chunks)
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
     monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
     captured = {}
@@ -662,6 +663,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
             "document": chunks[0].document,
         }]
 
+    monkeypatch.setattr(ui, "expand_page_context_until_complete", lambda *args: args[3])
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
     monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
     monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
@@ -711,6 +713,7 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
             "document": chunks[0].document,
         }]
 
+    monkeypatch.setattr(ui, "expand_page_context_until_complete", lambda *args: args[3])
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
     monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
     monkeypatch.setattr(ui, "save_project", lambda *args: {})
@@ -761,6 +764,7 @@ def test_parallel_generation_refills_duplicates_across_documents(monkeypatch) ->
             "document": document,
         }]
 
+    monkeypatch.setattr(ui, "expand_page_context_until_complete", lambda *args: args[3])
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
     monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
     monkeypatch.setattr(ui, "save_project", lambda *_: {})
@@ -796,6 +800,7 @@ def test_generate_evaluation_processes_all_documents_sequentially_when_parallel_
             "document": document,
         }]
 
+    monkeypatch.setattr(ui, "expand_page_context_until_complete", lambda *args: args[3])
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
     monkeypatch.setattr(
         ui, "ThreadPoolExecutor",

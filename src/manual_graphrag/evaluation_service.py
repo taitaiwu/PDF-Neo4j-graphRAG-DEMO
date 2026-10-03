@@ -109,24 +109,63 @@ def _evaluation_context(chunks: list[TextChunk]) -> tuple[str, set[int]]:
 
 
 def sample_random_page_context(
-    chunks: list[TextChunk], neighbor_chunks: int = 1,
+    chunks: list[TextChunk],
 ) -> tuple[int, list[TextChunk]]:
-    """Choose one source page and include its chunks plus adjacent chunk context."""
+    """Choose a focus page and return only chunks that contain that page."""
     ordered = sorted(chunks, key=lambda chunk: chunk.number)
     pages = sorted({page for chunk in ordered for page in chunk.pages})
     if not ordered or not pages:
         raise ValueError("PDF chunks 沒有可供隨機抽樣的來源頁碼")
-    if neighbor_chunks < 0:
-        raise ValueError("相鄰 chunk 數不可小於 0")
-
     focus_page = random.choice(pages)
-    focus_indexes = [
-        index for index, chunk in enumerate(ordered)
-        if focus_page in chunk.pages
-    ]
-    start = max(0, min(focus_indexes) - neighbor_chunks)
-    end = min(len(ordered), max(focus_indexes) + neighbor_chunks + 1)
-    return focus_page, ordered[start:end]
+    return focus_page, [chunk for chunk in ordered if focus_page in chunk.pages]
+
+
+def expand_page_context_until_complete(
+    base_url: str,
+    api_key: str,
+    model: str,
+    chunks: list[TextChunk],
+    focus_page: int,
+) -> list[TextChunk]:
+    """Expand a focus page by adjacent pages until an LLM judges it self-contained."""
+    ordered = sorted(chunks, key=lambda chunk: chunk.number)
+    pages = sorted({page for chunk in ordered for page in chunk.pages})
+    if focus_page not in pages:
+        raise ValueError(f"找不到焦點頁 {focus_page} 的文件內容")
+
+    lower = upper = pages.index(focus_page)
+    while True:
+        selected_pages = set(pages[lower:upper + 1])
+        context_chunks = [chunk for chunk in ordered if selected_pages.intersection(chunk.pages)]
+        context, _ = _evaluation_context(context_chunks)
+
+        def validate(payload: dict[str, Any]) -> dict[str, Any]:
+            sufficient = payload.get("sufficient")
+            reason = str(payload.get("reason", "")).strip()
+            if not isinstance(sufficient, bool):
+                raise ValueError("內容完整性檢查必須回傳 sufficient boolean")
+            return {"sufficient": sufficient, "reason": reason}
+
+        assessment = _chat_json(
+            base_url,
+            api_key,
+            model,
+            "你是文件脈絡完整性檢查員。判斷提供的頁面內容是否足以獨立理解一個明確事實，"
+            "並能據此提出答案不含糊的問答題。只輸出 JSON。",
+            f"焦點頁：第 {focus_page} 頁。檢查目前提供的內容是否已包含足夠主詞、條件、步驟與結論，"
+            "使一個可由內容明確回答的問題不依賴缺失的前文或後文。若內容已完整，sufficient=true；"
+            "若句子被截斷、指代不明、步驟/條件/結論延續到未提供頁面，或資訊不足以形成明確問答，則為 false。"
+            '輸出格式：{"sufficient":true,"reason":"簡短說明"}。\n\n'
+            f"目前已提供頁面 {pages[lower]} 至 {pages[upper]}：\n{context}",
+            temperature=0,
+            validator=validate,
+        )
+        if assessment["sufficient"] or (lower == 0 and upper == len(pages) - 1):
+            return context_chunks
+        if lower > 0:
+            lower -= 1
+        if upper < len(pages) - 1:
+            upper += 1
 
 
 def generate_evaluation_questions(

@@ -19,6 +19,7 @@ from .config import (
 from .env_store import load_env, save_env
 from .evaluation_service import (
     evaluation_questions_are_similar,
+    expand_page_context_until_complete,
     generate_evaluation_questions,
     judge_evaluation_answer,
     sample_random_page_context,
@@ -851,7 +852,14 @@ def generate_evaluation_for_ui(
                 with accepted_lock:
                     excluded = list(accepted_questions)
                 try:
-                    focus_page, page_context = sample_random_page_context(selected_chunks)
+                    focus_page, _ = sample_random_page_context(selected_chunks)
+                    page_context = expand_page_context_until_complete(
+                        model_endpoint,
+                        api_key,
+                        generation_model,
+                        selected_chunks,
+                        focus_page,
+                    )
                     batch = generate_evaluation_questions(
                         model_endpoint,
                         api_key,
