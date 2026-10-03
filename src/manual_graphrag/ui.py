@@ -772,8 +772,8 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         preferences.get("test_model", legacy_model), preferences.get("question_count", 10),
         _display_retrieval_mode(preferences.get("retrieval_mode")), preferences.get("top_k", 8),
         preferences.get("allow_parallel_generation", False),
-        preferences.get("use_reranker", True),
-        preferences.get("expand_evidence", True),
+        preferences.get("use_reranker", False),
+        preferences.get("expand_evidence", False),
         preferences.get("test_max_concurrent_requests", 3),
         (_evaluation_summary(results, loaded=True) if results else
          f"已載入 {len(questions)} 道題目與 0 筆測試結果。"),
@@ -785,8 +785,8 @@ def save_evaluation_preferences_for_ui(
     retrieval_mode: str, top_k: int,
     allow_parallel_generation: bool = False,
     test_max_concurrent_requests: int = 3,
-    use_reranker: bool = True,
-    expand_evidence: bool = True,
+    use_reranker: bool = False,
+    expand_evidence: bool = False,
 ) -> str:
     if not project_id:
         return "⚠️ 請先選擇專案。"
@@ -816,8 +816,8 @@ def generate_evaluation_for_ui(
     test_model: str, question_count: int, retrieval_mode: str, top_k: int,
     chunks: list[TextChunk], allow_parallel_generation: bool = False,
     test_max_concurrent_requests: int = 3,
-    use_reranker: bool = True,
-    expand_evidence: bool = True,
+    use_reranker: bool = False,
+    expand_evidence: bool = False,
 ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
     if not project_id:
         return "❌ 請先建立或載入專案。", [], {}, []
@@ -923,8 +923,8 @@ def run_evaluation_for_ui(
     neo4j_uri: str, neo4j_database: str, neo4j_username: str, neo4j_password: str,
     model: str, retrieval_mode: str, top_k: int, evaluation: dict[str, Any],
     max_concurrent_requests: int = 3,
-    use_reranker: bool = True,
-    expand_evidence: bool = True,
+    use_reranker: bool = False,
+    expand_evidence: bool = False,
     progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], dict[str, Any]]:
     questions = evaluation.get("questions") if evaluation else None
@@ -1543,8 +1543,8 @@ def answer_question_for_ui(
     question: str,
     retrieval_mode: str,
     top_k: int,
-    use_reranker: bool = True,
-    expand_evidence: bool = True,
+    use_reranker: bool = False,
+    expand_evidence: bool = False,
 ) -> tuple[str, str, list[list[object]]]:
     if not answer_model:
         return "❌ 請先勾選並選擇問答 LLM。", "", []
@@ -1912,10 +1912,10 @@ def build_app() -> gr.Blocks:
                     evaluation_retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
                     evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
                     evaluation_use_reranker = gr.Checkbox(
-                        value=True, label="使用 Reranker"
+                        value=False, label="使用 Reranker"
                     )
                     evaluation_expand_evidence = gr.Checkbox(
-                        value=True, label="擴展圖譜證據",
+                        value=False, label="擴展圖譜證據",
                         info="僅在「混合檢索」模式生效。",
                     )
                     evaluation_test_max_concurrent_requests = gr.Number(
@@ -1982,9 +1982,9 @@ def build_app() -> gr.Blocks:
             with gr.Row():
                 retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
                 top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
-                use_reranker = gr.Checkbox(value=True, label="使用 Reranker")
+                use_reranker = gr.Checkbox(value=False, label="使用 Reranker")
                 expand_evidence = gr.Checkbox(
-                    value=True, label="擴展圖譜證據",
+                    value=False, label="擴展圖譜證據",
                     info="僅在「混合檢索」模式生效。",
                 )
             ask_button = gr.Button("送出問題", variant="primary")

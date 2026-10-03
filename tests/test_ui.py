@@ -196,6 +196,17 @@ def test_all_concurrency_inputs_show_ollama_recommendation() -> None:
     )
 
 
+def test_reranker_and_graph_evidence_expansion_default_off() -> None:
+    app = build_app()
+    defaults = {
+        component.get("props", {}).get("label"): component.get("props", {}).get("value")
+        for component in app.config["components"]
+        if component.get("props", {}).get("label") in {"使用 Reranker", "擴展圖譜證據"}
+    }
+
+    assert defaults == {"使用 Reranker": False, "擴展圖譜證據": False}
+
+
 
 def test_evaluation_results_table_uses_smaller_font_class() -> None:
     app = build_app()
@@ -863,7 +874,7 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
     assert captured["args"] == (
         "endpoint", "key", "embed-endpoint", "embed-key",
         "bolt", "neo4j", "user", "pass",
-        "model", "Q", "關聯擴展檢索", 8, True, True,
+        "model", "Q", "關聯擴展檢索", 8, False, False,
     )
 
 
@@ -1546,8 +1557,8 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     loaded = ui.load_evaluation_for_ui("project")
 
     assert loaded[8] is False
-    assert loaded[9] is True
-    assert loaded[10] is True
+    assert loaded[9] is False
+    assert loaded[10] is False
     assert loaded[11] == 3
     assert loaded[3:5] == ("legacy-model", "legacy-model")
     assert loaded[6] == "混合檢索"
