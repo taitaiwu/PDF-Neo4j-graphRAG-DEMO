@@ -25,6 +25,15 @@ def test_project_round_trip_and_listing(tmp_path) -> None:
     assert "model_endpoint" not in saved["settings"]
     assert load_project(project["project_id"], tmp_path)["settings"]["chunk_size"] == 1200
     assert list_projects(tmp_path) == [("設備手冊", project["project_id"])]
+    assert saved["neo4j_database"].startswith("vehicle_")
+
+
+def test_each_project_gets_a_stable_unique_database(tmp_path) -> None:
+    first = create_project("Model A", tmp_path)
+    second = create_project("Model B", tmp_path)
+
+    assert first["neo4j_database"] == load_project(first["project_id"], tmp_path)["neo4j_database"]
+    assert first["neo4j_database"] != second["neo4j_database"]
 
 
 def test_save_project_copies_documents(tmp_path) -> None:
@@ -120,3 +129,20 @@ def test_delete_project_removes_only_selected_project(tmp_path) -> None:
     assert load_project(second["project_id"], tmp_path)["name"] == "second"
     with pytest.raises(ValueError, match="找不到"):
         delete_project(first["project_id"], tmp_path)
+
+
+def test_legacy_shared_graph_requires_reimport_to_project_database(tmp_path) -> None:
+    from manual_graphrag.storage import write_json
+
+    project = create_project("Legacy imported", tmp_path)
+    path = tmp_path / project["project_id"] / "project.json"
+    payload = load_project(project["project_id"], tmp_path)
+    payload.pop("neo4j_database")
+    payload["graph_state"] = {"run_id": "old", "neo4j_imported": True}
+    write_json(path, payload)
+
+    loaded = load_project(project["project_id"], tmp_path)
+
+    assert loaded["neo4j_database"].startswith("vehicle_")
+    assert loaded["graph_state"]["neo4j_imported"] is False
+    assert "請重新匯入" in loaded["graph_state"]["neo4j_error"]

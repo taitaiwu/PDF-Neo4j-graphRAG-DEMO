@@ -18,11 +18,9 @@ from .config import (
 )
 from .env_store import load_env, save_env
 from .evaluation_service import (
-    generate_document_summary,
     generate_evaluation_questions,
     judge_evaluation_answer,
     questions_are_similar,
-    select_relevant_documents,
 )
 from .graph_service import (
     RunCancelled,
@@ -34,7 +32,7 @@ from .graph_service import (
     validate_schema,
 )
 from .neo4j_service import (
-    check_neo4j_connection,
+    ensure_project_database,
     import_extraction,
     load_latest_graph,
     search_graph_evidence,
@@ -47,6 +45,7 @@ from .project_store import (
     delete_project,
     list_projects,
     load_project,
+    project_database_name,
     remove_document,
     save_project,
 )
@@ -114,7 +113,7 @@ def check_neo4j_for_ui(
     uri: str, database: str, username: str, password: str
 ) -> tuple[str, bool]:
     try:
-        check_neo4j_connection(uri, database, username, password)
+        ensure_project_database(uri, database, username, password)
     except ValueError as exc:
         return f"❌ {exc}", False
     return "✅ Neo4j 連線成功，且可存取指定 Database。", True
@@ -247,7 +246,7 @@ def reload_env_with_services_for_ui() -> tuple[Any, ...]:
     llm_state = load_service_settings("llm", env)
     embedding_state = load_service_settings("embedding", env)
     return (
-        env["NEO4J_URI"], env["NEO4J_DATABASE"], env["NEO4J_USERNAME"], env["NEO4J_PASSWORD"],
+        env["NEO4J_URI"], env["NEO4J_USERNAME"], env["NEO4J_PASSWORD"],
         llm_state["active"], *render_service_for_ui(llm_state),
         embedding_state["active"], *render_service_for_ui(embedding_state),
         "✅ 已重新讀取 .env；OpenAI 請重新測試連線。",
@@ -256,7 +255,6 @@ def reload_env_with_services_for_ui() -> tuple[Any, ...]:
 
 def persist_env_settings(
     neo4j_uri: str,
-    neo4j_database: str,
     neo4j_username: str,
     neo4j_password: str,
     model_endpoint: str,
@@ -269,7 +267,6 @@ def persist_env_settings(
 ) -> str:
     save_env({
         "NEO4J_URI": neo4j_uri,
-        "NEO4J_DATABASE": neo4j_database,
         "NEO4J_USERNAME": neo4j_username,
         "NEO4J_PASSWORD": neo4j_password,
     })
@@ -283,7 +280,7 @@ def reload_env_settings() -> tuple[str, ...]:
     llm_profile = llm["profiles"][llm["active"]]
     embedding_profile = embedding["profiles"][embedding["active"]]
     return (
-        env["NEO4J_URI"], env["NEO4J_DATABASE"], env["NEO4J_USERNAME"], env["NEO4J_PASSWORD"],
+        env["NEO4J_URI"], env["NEO4J_USERNAME"], env["NEO4J_PASSWORD"],
         llm_profile["base_url"], llm_profile["api_key"],
         embedding_profile["base_url"], embedding_profile["api_key"],
         llm_profile["models"][0], embedding_profile["models"][0], llm_profile["models"][4],
@@ -530,13 +527,14 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         )
         import_status = (
             "✅ 此圖譜已匯入 Neo4j。" if graph.get("neo4j_imported")
+            else f"⚠️ {graph['neo4j_error']}" if graph.get("neo4j_error")
             else "此圖譜尚未匯入 Neo4j。"
         )
     else:
         graph_status, import_status = "尚未執行抽取。", "尚未執行 Embedding 與匯入。"
     return (
         project, f"✅ 已載入專案「{project['name']}」。",
-        get("neo4j_uri", env["NEO4J_URI"]), get("neo4j_database", env["NEO4J_DATABASE"]),
+        get("neo4j_uri", env["NEO4J_URI"]), project.get("neo4j_database") or project_database_name(project_id),
         get("neo4j_username", env["NEO4J_USERNAME"]), get("neo4j_password", env["NEO4J_PASSWORD"]),
         llm_profile["base_url"], llm_profile["api_key"],
         get("graph_llm_model", DEFAULT_LLM_MODEL), get("graph_embedding_model", embedding_profile["models"][0]),
@@ -692,8 +690,6 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
         item["question"],
         item["expected_answer"],
         item.get("document", ""),
-        "、".join(item.get("selected_documents") or []),
-        "✅ 正確" if item.get("routing_correct") else "❌ 錯誤",
         item.get("actual_answer", ""),
         "✅ 通過" if item.get("passed") else "❌ 未通過",
         item.get("reason", ""),
@@ -702,10 +698,6 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
 
 def _evaluation_summary(results: list[dict[str, Any]], *, loaded: bool = False) -> str:
     passed = sum(bool(item.get("passed")) for item in results)
-    routing_passed = sum(bool(item.get("routing_correct")) for item in results)
-    complete_passed = sum(
-        bool(item.get("routing_correct") and item.get("passed")) for item in results
-    )
     total = len(results)
     recall_at_5 = sum(bool(item.get("recall_at_5")) for item in results) / total
     mrr = sum(float(item.get("reciprocal_rank", 0)) for item in results) / total
@@ -714,12 +706,10 @@ def _evaluation_summary(results: list[dict[str, Any]], *, loaded: bool = False) 
     for item in results:
         document = str(item.get("document") or "未標示文件")
         stats = document_totals.setdefault(document, [0, 0, 0])
-        stats[0] += int(bool(item.get("routing_correct")))
-        stats[1] += int(bool(item.get("passed")))
-        stats[2] += 1
+        stats[0] += int(bool(item.get("passed")))
+        stats[1] += 1
     document_summary = "\n".join(
-        f"- {document}：路由正確 {stats[0]} / {stats[2]}；"
-        f"答案正確 {stats[1]} / {stats[2]}"
+        f"- {document}：答案正確 {stats[0]} / {stats[1]}"
         for document, stats in document_totals.items()
     )
 
@@ -728,8 +718,6 @@ def _evaluation_summary(results: list[dict[str, Any]], *, loaded: bool = False) 
     accuracy = passed / total * 100
     return (
         f"## {heading}｜總共答對 {passed} 題 / {total} 題  "
-        f"\n文件路由正確：{routing_passed} / {total}｜"
-        f"路由且答案正確：{complete_passed} / {total}  "
         f"\n答錯：{failed} 題｜答案正確率：{accuracy:.1f}%"
         f"\n\n### 各 PDF 結果\n{document_summary}"
         f"  \nRecall@5：{recall_at_5:.1%}｜MRR：{mrr:.3f}"
@@ -823,67 +811,6 @@ def save_evaluation_preferences_for_ui(
     return "✅ 自動測試設定已保存。"
 
 
-def _document_summary_rows(summaries: list[dict[str, Any]]) -> list[list[str]]:
-    return [[
-        str(item.get("document", "")), str(item.get("summary", "")),
-        "、".join(item.get("identifiers", item.get("product_names", [])) or []),
-        "、".join(item.get("topics") or []),
-        "、".join(item.get("keywords") or []),
-    ] for item in summaries]
-
-
-def load_document_summaries_for_ui(project_id: str) -> tuple[list[list[str]], str]:
-    if not project_id:
-        return [], "請先選擇專案。"
-    try:
-        evaluation = dict(load_project(project_id).get("evaluation") or {})
-    except (OSError, ValueError) as exc:
-        return [], f"❌ {exc}"
-    summaries = evaluation.get("document_summaries") or []
-    if not summaries:
-        return [], "尚未建立 PDF 摘要。"
-    return _document_summary_rows(summaries), f"✅ 已載入 {len(summaries)} 份 PDF 摘要。"
-
-
-def generate_document_summaries_for_ui(
-    project_id: str, model_endpoint: str, api_key: str, model: str,
-    chunks: list[TextChunk], max_concurrent_requests: int = 3,
-) -> tuple[str, list[list[str]], dict[str, Any]]:
-    if not project_id:
-        return "❌ 請先建立或載入專案。", [], {}
-    if not model:
-        return "❌ 請先選擇摘要模型。", [], {}
-    try:
-        concurrency = int(max_concurrent_requests)
-        if concurrency < 1:
-            raise ValueError("最大並行請求數必須大於 0")
-        chunks_by_document: dict[str, list[TextChunk]] = {}
-        for chunk in chunks:
-            chunks_by_document.setdefault(chunk.document, []).append(chunk)
-        if not chunks_by_document:
-            raise ValueError("請先解析 PDF 並產生 chunks")
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            summaries = list(executor.map(
-                lambda selected: generate_document_summary(
-                    model_endpoint, api_key, model, selected
-                ),
-                chunks_by_document.values(),
-            ))
-        project = load_project(project_id)
-        evaluation = dict(project.get("evaluation") or {})
-        preferences = dict(evaluation.get("preferences") or {})
-        preferences.update({
-            "summary_model": model,
-            "summary_max_concurrent_requests": concurrency,
-        })
-        evaluation.update({"preferences": preferences, "document_summaries": summaries})
-        save_project(project_id, {"evaluation": evaluation})
-    except (OSError, TypeError, ValueError) as exc:
-        return f"❌ {exc}", [], {}
-    return (f"✅ 已建立並保存 {len(summaries)} 份 PDF 摘要。",
-            _document_summary_rows(summaries), evaluation)
-
-
 def generate_evaluation_for_ui(
     project_id: str, model_endpoint: str, api_key: str, generation_model: str,
     test_model: str, question_count: int, retrieval_mode: str, top_k: int,
@@ -907,10 +834,6 @@ def generate_evaluation_for_ui(
         if not document_chunks:
             raise ValueError("請先解析 PDF 並產生 chunks")
         existing_evaluation = dict(load_project(project_id).get("evaluation") or {})
-        summaries_by_document = {
-            str(item.get("document", "")): item
-            for item in existing_evaluation.get("document_summaries", [])
-        }
         accepted_questions: list[str] = []
         accepted_lock = Lock()
 
@@ -934,7 +857,6 @@ def generate_evaluation_for_ui(
                         selected_chunks,
                         1,
                         excluded,
-                        summaries_by_document.get(document),
                     )
                 except ValueError as exc:
                     last_error = str(exc)
@@ -1017,38 +939,12 @@ def run_evaluation_for_ui(
     concurrency = int(max_concurrent_requests)
     if concurrency < 1:
         return "❌ 測試最大並行請求數必須大於 0", [], evaluation
-    document_summaries = evaluation.get("document_summaries") or []
-    if not document_summaries:
-        return "❌ 尚未建立 PDF 路由摘要，請先到「3. PDF 摘要」建立摘要。", [], evaluation
-
     def evaluate(item: dict[str, Any]) -> dict[str, Any]:
-        try:
-            routing = select_relevant_documents(
-                model_endpoint,
-                api_key,
-                model,
-                item["question"],
-                document_summaries,
-            )
-        except ValueError as exc:
-            return {
-                **item,
-                "selected_documents": [],
-                "routing_reason": f"文件路由失敗：{exc}",
-                "routing_confidence": 0.0,
-                "routing_correct": False,
-                "actual_answer": "",
-                "passed": False,
-                "reason": f"文件路由失敗：{exc}",
-            }
-        selected_documents = routing["documents"]
-        expected_document = str(item.get("document") or "")
-        routing_correct = expected_document in selected_documents
         status, actual, evidence_rows = answer_question_for_ui(
             model_endpoint, api_key, embedding_api_base, embedding_api_key,
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             model, item["question"], retrieval_mode, max(int(top_k), 5),
-            selected_documents, use_reranker, expand_evidence,
+            use_reranker, expand_evidence,
         )
         retrieval_rank = _retrieval_rank(item, evidence_rows)
         if status.startswith("✅"):
@@ -1063,10 +959,6 @@ def run_evaluation_for_ui(
             judgment = {"passed": False, "reason": status}
         return {
             **item,
-            "selected_documents": selected_documents,
-            "routing_reason": routing["reason"],
-            "routing_confidence": routing["confidence"],
-            "routing_correct": routing_correct,
             "actual_answer": actual,
             "retrieval_rank": retrieval_rank,
             "recall_at_5": retrieval_rank is not None and retrieval_rank <= 5,
@@ -1651,7 +1543,6 @@ def answer_question_for_ui(
     question: str,
     retrieval_mode: str,
     top_k: int,
-    document_names: list[str] | None = None,
     use_reranker: bool = True,
     expand_evidence: bool = True,
 ) -> tuple[str, str, list[list[object]]]:
@@ -1670,7 +1561,7 @@ def answer_question_for_ui(
         evidence = search_graph_evidence(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             graph_state["run_id"], question.strip(), question_vector,
-            retrieval_mode, int(top_k), document_names,
+            retrieval_mode, int(top_k),
             candidate_top_k=(
                 min(int(top_k) * RERANK_CANDIDATE_MULTIPLIER, RERANK_MAX_CANDIDATES)
                 if use_reranker else int(top_k)
@@ -1682,7 +1573,7 @@ def answer_question_for_ui(
         else:
             evidence = evidence[:int(top_k)]
         result = answer_graph_question(
-            model_endpoint, api_key, answer_model, question, retrieval_mode, evidence, document_names
+            model_endpoint, api_key, answer_model, question, retrieval_mode, evidence
         )
     except ValueError as exc:
         return f"❌ {exc}", "", []
@@ -1777,7 +1668,7 @@ def build_app() -> gr.Blocks:
                 with gr.Column():
                     gr.Markdown("### Neo4j")
                     neo4j_uri = gr.Textbox(label="URI", value=env["NEO4J_URI"])
-                    neo4j_database = gr.Textbox(label="Database", value=env["NEO4J_DATABASE"])
+                    neo4j_database = gr.Textbox(label="專案專屬 Neo4j Database（測試連線時自動建立）", value="", interactive=False)
                     neo4j_username = gr.Textbox(label="Username", value=env["NEO4J_USERNAME"])
                     neo4j_password = gr.Textbox(label="Password", value=env["NEO4J_PASSWORD"], type="password")
                     neo4j_test_button = gr.Button("測試 Neo4j 連線", variant="primary")
@@ -1862,29 +1753,7 @@ def build_app() -> gr.Blocks:
                         column_widths=[80, 160, 120, 100, 900],
                     )
 
-        with gr.Tab("3. PDF 摘要", interactive=False) as summary_tab:
-            gr.Markdown(
-                "### 建立 PDF 路由摘要\n"
-                "為每份 PDF 建立可區分來源之識別資訊與主題的摘要，供自動測試時由 LLM 選擇檢索文件。"
-            )
-            with gr.Row():
-                summary_model = gr.Dropdown(
-                    choices=llm_choices, value=preferred_llm, allow_custom_value=False,
-                    label="摘要模型",
-                )
-                summary_max_concurrent_requests = gr.Number(
-                    value=3, minimum=1, precision=0, label="摘要最大並行請求數",
-                    info=OLLAMA_CONCURRENCY_HINT,
-                )
-            generate_summaries_button = gr.Button("建立／重新建立全部 PDF 摘要", variant="primary")
-            summary_status = gr.Markdown("尚未建立 PDF 摘要。")
-            document_summaries_table = gr.Dataframe(
-                headers=["文件", "摘要", "文件識別資訊", "主題", "關鍵詞"],
-                datatype=["str", "str", "str", "str", "str"],
-                interactive=False, wrap=True,
-            )
-
-        with gr.Tab("4. 建圖", interactive=False) as graph_tab:
+        with gr.Tab("3. 建圖", interactive=False) as graph_tab:
             gr.Markdown("### 規劃並抽取知識圖譜")
             with gr.Row():
                 pause_button = gr.Button("⏸ 暫停")
@@ -2011,7 +1880,7 @@ def build_app() -> gr.Blocks:
                 )
                 import_status = gr.Markdown("尚未執行 Embedding 與匯入。")
 
-        with gr.Tab("5. 自動問答測試", interactive=False) as evaluation_tab:
+        with gr.Tab("4. 自動問答測試", interactive=False) as evaluation_tab:
             gr.Markdown(
                 "### 從 PDF 自動建立問答測試集\n"
                 "每份 PDF 建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
@@ -2093,12 +1962,12 @@ def build_app() -> gr.Blocks:
                 )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
-                headers=["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "實際答案", "答案結果", "評判理由"],
+                headers=["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案結果", "評判理由"],
                 interactive=False, wrap=True,
                 elem_classes=["evaluation-table", "evaluation-results-table"],
             )
 
-        with gr.Tab("6. 問答測試", interactive=False) as qa_tab:
+        with gr.Tab("5. 問答測試", interactive=False) as qa_tab:
             gr.Markdown(
                 "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
                 "可選擇是否由本機 Reranker 重排 Hybrid Search 候選。"
@@ -2152,7 +2021,7 @@ def build_app() -> gr.Blocks:
                 wrap=True,
             )
 
-        with gr.Tab("7. 歷史紀錄", interactive=False) as history_tab:
+        with gr.Tab("6. 歷史紀錄", interactive=False) as history_tab:
             gr.Markdown("目前專案的問答紀錄；成功問答後會自動追加並保存。")
             project_history_status = gr.Markdown()
             history_table = gr.Dataframe(
@@ -2164,8 +2033,6 @@ def build_app() -> gr.Blocks:
         schema_model_key = gr.State(initial_llm_credentials[0][1])
         extraction_model_endpoint = gr.State(initial_llm_credentials[1][0])
         extraction_model_key = gr.State(initial_llm_credentials[1][1])
-        summary_model_endpoint = gr.State(initial_llm_credentials[5][0])
-        summary_model_key = gr.State(initial_llm_credentials[5][1])
         generation_model_endpoint = gr.State(initial_llm_credentials[2][0])
         generation_model_key = gr.State(initial_llm_credentials[2][1])
         evaluation_model_endpoint = gr.State(initial_llm_credentials[3][0])
@@ -2174,18 +2041,6 @@ def build_app() -> gr.Blocks:
         answer_model_key = gr.State(initial_llm_credentials[4][1])
         selected_embedding_endpoint = gr.State(initial_embedding_credentials[0])
         selected_embedding_key = gr.State(initial_embedding_credentials[1])
-        qa_document_filter = gr.State(None)
-
-        summary_tab.select(
-            load_document_summaries_for_ui, inputs=project_selector,
-            outputs=[document_summaries_table, summary_status],
-        )
-        generate_summaries_button.click(
-            generate_document_summaries_for_ui,
-            inputs=[project_selector, summary_model_endpoint, summary_model_key,
-                    summary_model, chunk_state, summary_max_concurrent_requests],
-            outputs=[summary_status, document_summaries_table, evaluation_state],
-        )
 
         evaluation_tab.select(
             load_evaluation_with_services_for_ui, inputs=[project_selector, llm_service_state],
@@ -2319,12 +2174,12 @@ def build_app() -> gr.Blocks:
             outputs=schema_documents,
             show_progress="hidden",
         )
-        protected_tabs = [pdf_tab, summary_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
+        protected_tabs = [pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
         delete_project_event = delete_project_button.click(
             delete_project_for_ui,
             inputs=project_selector,
             outputs=[project_selector, project_state, project_status,
-                     pdf_tab, summary_tab, graph_tab, evaluation_tab, qa_tab, history_tab,
+                     pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab,
                      delete_project_completed],
             js="""(projectId) => {
                 if (!window.confirm('確定要刪除此專案嗎？專案設定、PDF、圖譜、題庫與紀錄都會永久刪除。')) {
@@ -2341,11 +2196,11 @@ def build_app() -> gr.Blocks:
         )
         access_inputs = [project_selector, neo4j_connected_state, llm_service_state, embedding_service_state]
         initialize_project_event.success(
-            workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
-        )
+            lambda: False, outputs=neo4j_connected_state, show_progress="hidden",
+        ).then(workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs)
         load_project_event.success(
-            workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
-        )
+            lambda: False, outputs=neo4j_connected_state, show_progress="hidden",
+        ).then(workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs)
         project_state.change(
             _current_project_banner, inputs=project_state, outputs=current_project_banner,
             show_progress="hidden",
@@ -2387,7 +2242,7 @@ def build_app() -> gr.Blocks:
             )
         llm_model_fields = [
             graph_llm_model, extraction_llm_model, evaluation_generation_model,
-            evaluation_test_model, answer_model, summary_model,
+            evaluation_test_model, answer_model,
         ]
         llm_service_outputs = [
             llm_service_state, model_endpoint, api_key, llm_models_table,
@@ -2419,7 +2274,6 @@ def build_app() -> gr.Blocks:
                 )
         for field, endpoint_state, key_state in [
             (graph_llm_model, schema_model_endpoint, schema_model_key),
-            (summary_model, summary_model_endpoint, summary_model_key),
             (extraction_llm_model, extraction_model_endpoint, extraction_model_key),
             (evaluation_generation_model, generation_model_endpoint, generation_model_key),
             (evaluation_test_model, evaluation_model_endpoint, evaluation_model_key),
@@ -2438,7 +2292,6 @@ def build_app() -> gr.Blocks:
         )
         env_inputs = [
             neo4j_uri,
-            neo4j_database,
             neo4j_username,
             neo4j_password,
             model_endpoint,
@@ -2453,7 +2306,7 @@ def build_app() -> gr.Blocks:
             component.change(persist_env_settings, inputs=env_inputs, outputs=env_status)
         reload_event = reload_button.click(
             reload_env_with_services_for_ui,
-            outputs=[neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            outputs=[neo4j_uri, neo4j_username, neo4j_password,
                      llm_provider, *llm_service_outputs,
                      embedding_provider, *embedding_service_outputs, env_status],
         )
@@ -2613,7 +2466,6 @@ def build_app() -> gr.Blocks:
                 question,
                 retrieval_mode,
                 top_k,
-                qa_document_filter,
                 use_reranker,
                 expand_evidence,
             ],

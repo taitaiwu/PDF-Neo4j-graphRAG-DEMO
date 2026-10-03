@@ -10,7 +10,7 @@ from threading import RLock
 _ENV_LOCK = RLock()
 
 ENV_KEYS = (
-    "NEO4J_URI", "NEO4J_DATABASE", "NEO4J_USERNAME", "NEO4J_PASSWORD",
+    "NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD",
     "MODEL_OPENAI_API_BASE", "MODEL_OPENAI_API_KEY",
     "MODEL_OLLAMA_API_BASE", "MODEL_OLLAMA_API_KEY",
     "EMBEDDING_OPENAI_API_BASE", "EMBEDDING_OPENAI_API_KEY",
@@ -27,7 +27,7 @@ LEGACY_ENV_KEYS = {
 }
 
 DEFAULTS = {
-    "NEO4J_URI": "bolt://localhost:7687", "NEO4J_DATABASE": "neo4j",
+    "NEO4J_URI": "bolt://localhost:7687",
     "NEO4J_USERNAME": "neo4j", "NEO4J_PASSWORD": "",
     "MODEL_OPENAI_API_BASE": "https://api.openai.com/v1", "MODEL_OPENAI_API_KEY": "",
     "MODEL_OLLAMA_API_BASE": "http://localhost:11434/v1", "MODEL_OLLAMA_API_KEY": "",

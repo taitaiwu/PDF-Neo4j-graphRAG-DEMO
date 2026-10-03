@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
-import json
 import re
 from typing import Any
 
@@ -45,131 +44,6 @@ def _evaluation_context(chunks: list[TextChunk]) -> tuple[str, set[int]]:
     return context, {chunk.number for chunk in sampled}
 
 
-def generate_document_summary(
-    base_url: str,
-    api_key: str,
-    model: str,
-    chunks: list[TextChunk],
-) -> dict[str, Any]:
-    if not chunks:
-        raise ValueError("無法為空文件建立摘要")
-    context, _ = _evaluation_context(chunks)
-    document = chunks[0].document or "未命名文件"
-
-    def validate(payload: dict[str, Any]) -> dict[str, Any]:
-        summary = str(payload.get("summary", "")).strip()
-        if not summary:
-            raise ValueError("文件摘要不得為空")
-        primary_identifier = str(payload.get("primary_identifier", "")).strip()
-        normalized: dict[str, Any] = {
-            "document": document, "summary": summary,
-            "primary_identifier": primary_identifier,
-        }
-        for field in ("identifiers", "topics", "keywords"):
-            values = payload.get(field, [])
-            if not isinstance(values, list):
-                raise ValueError(f"{field} 必須是陣列")
-            normalized[field] = list(dict.fromkeys(
-                str(value).strip() for value in values if str(value).strip()
-            ))
-        if primary_identifier:
-            normalized["identifiers"] = list(dict.fromkeys(
-                [primary_identifier, *normalized["identifiers"]]
-            ))[:5]
-        else:
-            normalized["identifiers"] = normalized["identifiers"][:5]
-        return normalized
-
-    return _chat_json(
-        base_url,
-        api_key,
-        model,
-        "你是文件分類與路由摘要助手。只能根據文件內容整理摘要，並只輸出 JSON。",
-        "請建立供後續問題路由使用的繁體中文短摘要。文件識別資訊只可包含文件主要描述對象的正式名稱、型號、系統名稱、規範名稱、研究對象或其他唯一名稱。"
-        "primary_identifier 請優先使用能涵蓋整份文件的共同名稱或系列名稱。identifiers 最多列 5 項。"
-        "排除出版商、作者、版權所有者、文件編號、作業系統、支援平台、一般欄位名稱、版本欄位、通用術語，以及僅在內文附帶提及的名稱。"
-        "判斷標準是：把名稱放入問題後，是否能讓讀者辨認該問題適用的主要文件對象；若不能就不得收錄。找不到時 primary_identifier 使用空字串且 identifiers 回傳空陣列。"
-        "摘要應能區分內容相似但來源不同的文件。輸出格式："
-        '{"summary":"...","primary_identifier":"...","identifiers":["..."],"topics":["..."],"keywords":["..."]}。\n\n'
-        f"文件名稱：{document}\n文件內容：\n{context}",
-        temperature=0,
-        validator=validate,
-    )
-
-
-def select_relevant_documents(
-    base_url: str,
-    api_key: str,
-    model: str,
-    question: str,
-    document_summaries: list[dict[str, Any]],
-    max_documents: int = 3,
-) -> dict[str, Any]:
-    if not question.strip():
-        raise ValueError("文件路由問題不可為空")
-    available = {
-        str(item.get("document", "")).strip()
-        for item in document_summaries
-        if str(item.get("document", "")).strip()
-    }
-    if not available:
-        raise ValueError("請先建立 PDF 路由摘要")
-    limit = min(max(int(max_documents), 1), len(available))
-
-    def validate(payload: dict[str, Any]) -> dict[str, Any]:
-        raw_documents = payload.get("documents")
-        reason = str(payload.get("reason", "")).strip()
-        if not isinstance(raw_documents, list) or not raw_documents:
-            raise ValueError("documents 必須是非空陣列")
-        documents = list(dict.fromkeys(
-            str(document).strip() for document in raw_documents
-            if str(document).strip()
-        ))
-        unknown = [document for document in documents if document not in available]
-        if unknown:
-            raise ValueError(f"文件路由包含不存在的文件：{unknown}")
-        if not 1 <= len(documents) <= limit:
-            raise ValueError(f"文件路由必須選擇 1 到 {limit} 份文件")
-        if not reason:
-            raise ValueError("文件路由必須包含 reason")
-        try:
-            confidence = float(payload.get("confidence", 0))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("confidence 必須是數字") from exc
-        return {
-            "documents": documents,
-            "reason": reason,
-            "confidence": min(max(confidence, 0.0), 1.0),
-        }
-
-    summaries = [
-        {
-            "document": item.get("document", ""),
-            "summary": item.get("summary", ""),
-            "primary_identifier": item.get("primary_identifier", ""),
-            "identifiers": item.get("identifiers", item.get("product_names", [])),
-            "topics": item.get("topics", []),
-            "keywords": item.get("keywords", []),
-        }
-        for item in document_summaries
-    ]
-    return _chat_json(
-        base_url,
-        api_key,
-        model,
-        "你是多文件檢索路由器。只能根據問題與文件摘要選擇應搜尋的文件，並只輸出 JSON。",
-        f"問題：{question.strip()}\n最多選擇 {limit} 份文件。"
-        "問題指向單一文件識別資訊時只選該文件；需要跨文件比較時才能選多份。"
-        "不得回傳清單以外的文件。輸出格式："
-        '{"documents":["..."],"reason":"...","confidence":0.0}。\n\n'
-        f"文件摘要：\n{json.dumps(summaries, ensure_ascii=False)}",
-        temperature=0,
-        validator=validate,
-    )
-
-
-
-
 def generate_evaluation_questions(
     base_url: str,
     api_key: str,
@@ -177,7 +51,6 @@ def generate_evaluation_questions(
     chunks: list[TextChunk],
     question_count: int,
     excluded_questions: list[str] | None = None,
-    document_summary: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     count = int(question_count)
     if not chunks:
@@ -189,17 +62,6 @@ def generate_evaluation_questions(
         str(question).strip() for question in (excluded_questions or [])
         if str(question).strip()
     ]
-    summary = document_summary or {}
-    primary_identifier = str(summary.get("primary_identifier", "")).strip()
-    listed_identifiers = list(dict.fromkeys(
-        str(value).strip()
-        for value in summary.get("identifiers", summary.get("product_names", []))
-        if str(value).strip()
-    ))
-    identifiers = [primary_identifier] if primary_identifier else listed_identifiers[:1]
-    if not identifiers:
-        identifiers = [chunks[0].document] if chunks[0].document else []
-
     context, available_chunk_numbers = _evaluation_context(chunks)
     chunk_lookup = {chunk.number: chunk for chunk in chunks}
 
@@ -216,8 +78,6 @@ def generate_evaluation_questions(
             answer = str(item.get("expected_answer", "")).strip()
             if not question or not answer:
                 raise ValueError("每一題都必須包含 question 與 expected_answer")
-            if identifiers and not any(identifier.casefold() in question.casefold() for identifier in identifiers):
-                raise ValueError("每一題都必須包含至少一項文件識別資訊")
             if any(questions_are_similar(question, existing) for existing in accepted_questions):
                 raise ValueError(f"題目與既有題目重複或過度相似：{question}")
             accepted_questions.append(question)
@@ -266,8 +126,6 @@ def generate_evaluation_questions(
         model,
         "你是文件問答評測資料設計師。只能根據提供的文件內容出題，並只輸出 JSON。",
         f"請建立剛好 {count} 道可由文件明確回答、彼此不重複且涵蓋不同內容的繁體中文問題。"
-        f"每一題都必須自然包含至少一項文件識別資訊：{json.dumps(identifiers, ensure_ascii=False)}。"
-        "識別資訊用來讓讀者不看答案也能判斷問題所屬文件，不可只寫成無法區分來源的通用問題。"
         f"{exclusion_instruction}"
         "每題提供精確標準答案、來源頁碼，以及該題所依據的 CHUNK 編號"
         "（source_chunk_numbers，必須引用下方文件中標示的 CHUNK 編號）。輸出格式："

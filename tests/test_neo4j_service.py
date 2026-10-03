@@ -413,7 +413,7 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
 
     results = neo4j_service.search_graph_evidence(
         "bolt://db", "neo4j", "user", "password", "run-1",
-        "E01 +(重試)", [0.1], "混合檢索", 3, ["printer-a.pdf"],
+        "E01 +(重試)", [0.1], "混合檢索", 3,
         candidate_top_k=9,
         expand_evidence=False,
     )
@@ -426,17 +426,14 @@ def test_search_graph_evidence_uses_official_hybrid_retriever(monkeypatch) -> No
     assert initialization["fulltext_index_name"] == "graph_evidence_fulltext"
     assert initialization["neo4j_database"] == "neo4j"
     assert "$run_id" in initialization["retrieval_query"]
-    assert "$document_names" in initialization["retrieval_query"]
+    assert "$document_names" not in initialization["retrieval_query"]
     arguments = FakeOfficialRetriever.search_arguments
-    assert "all(" in initialization["retrieval_query"]
+    assert "source_documents" in initialization["retrieval_query"]
     assert arguments["query_text"] == r"E01 \+\(重試\)"
     assert arguments["query_vector"] == [0.1]
     assert arguments["top_k"] == 9
     assert arguments["effective_search_ratio"] == 3
-    assert arguments["query_params"] == {
-        "run_id": "run-1",
-        "document_names": ["printer-a.pdf"],
-    }
+    assert arguments["query_params"] == {"run_id": "run-1"}
     assert arguments["ranker"] == "naive"
 
 
@@ -457,7 +454,7 @@ def test_basic_vector_retrieval_uses_vector_cypher_retriever(monkeypatch) -> Non
 
     results = neo4j_service.search_graph_evidence(
         "bolt://db", "neo4j", "user", "password", "run-1",
-        "E01 如何處理", [0.1], "基本向量檢索", 3, ["manual.pdf"],
+        "E01 如何處理", [0.1], "基本向量檢索", 3,
     )
 
     assert [item["evidence_id"] for item in results] == ["vector-hit"]
@@ -466,12 +463,12 @@ def test_basic_vector_retrieval_uses_vector_cypher_retriever(monkeypatch) -> Non
     assert initialization["index_name"] == "graph_evidence_embedding_1"
     assert initialization["neo4j_database"] == "neo4j"
     assert "$run_id" in initialization["retrieval_query"]
-    assert "$document_names" in initialization["retrieval_query"]
+    assert "$document_names" not in initialization["retrieval_query"]
     assert FakeOfficialVectorRetriever.search_arguments == {
         "query_vector": [0.1],
         "top_k": 3,
         "effective_search_ratio": 3,
-        "query_params": {"run_id": "run-1", "document_names": ["manual.pdf"]},
+        "query_params": {"run_id": "run-1"},
     }
 
 
@@ -587,7 +584,6 @@ def test_graph_expansion_fetches_new_source_chunks_once(monkeypatch) -> None:
         [0.1],
         "GraphRAG",
         5,
-        ["car.pdf"],
     )
 
     assert [item["evidence_id"] for item in results] == [
@@ -619,7 +615,7 @@ def test_graph_expansion_can_be_disabled(monkeypatch) -> None:
 
     results = neo4j_service.search_graph_evidence(
         "bolt://db", "neo4j", "user", "password", "run-1",
-        "P0301 怎麼處理", [0.1], "GraphRAG", 5, ["car.pdf"],
+        "P0301 怎麼處理", [0.1], "GraphRAG", 5,
         expand_evidence=False,
     )
 
@@ -628,3 +624,53 @@ def test_graph_expansion_can_be_disabled(monkeypatch) -> None:
         'kind: "原文"' in query or "kind: '實體'" in query or "kind: '關係'" in query
         for query, _parameters in session.calls
     )
+
+
+def test_ensure_project_database_creates_then_checks_database(monkeypatch) -> None:
+    class Session:
+        def __init__(self, database):
+            self.database = database
+            self.queries = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def run(self, query):
+            self.queries.append(query)
+            return FakeResult()
+
+    class Driver:
+        def __init__(self):
+            self.sessions = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def verify_connectivity(self):
+            pass
+
+        def session(self, *, database):
+            session = Session(database)
+            self.sessions.append(session)
+            return session
+
+    driver = Driver()
+    monkeypatch.setattr(neo4j_service.GraphDatabase, "driver", lambda *args, **kwargs: driver)
+
+    neo4j_service.ensure_project_database("bolt://db", "vehicle_123abc", "user", "pass")
+
+    assert driver.sessions[0].database == "system"
+    assert "CREATE DATABASE `vehicle_123abc` IF NOT EXISTS WAIT 30 SECONDS" in driver.sessions[0].queries[0]
+    assert driver.sessions[1].database == "vehicle_123abc"
+    assert driver.sessions[1].queries[0] == "RETURN 1 AS value"
+
+
+def test_ensure_project_database_rejects_unsafe_name():
+    with pytest.raises(ValueError, match="名稱格式無效"):
+        neo4j_service.ensure_project_database("bolt://db", "x` DROP DATABASE neo4j", "u", "p")

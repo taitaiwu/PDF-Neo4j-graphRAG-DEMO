@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,12 @@ from .storage import read_json, write_json
 
 PROJECTS_DIR = Path("data/projects")
 PROJECT_CONNECTION_SETTINGS = {"model_endpoint", "api_key"}
+
+
+def project_database_name(project_id: str) -> str:
+    """Return a stable, Neo4j-safe database name isolated to this project."""
+    digest = hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:16]
+    return f"vehicle_{digest}"
 
 
 def _without_model_credentials(settings: Any) -> Any:
@@ -51,6 +58,7 @@ def create_project(name: str, root: str | Path = PROJECTS_DIR) -> dict[str, Any]
     now = datetime.now(timezone.utc).isoformat()
     project = {
         "project_id": project_id,
+        "neo4j_database": project_database_name(project_id),
         "name": clean_name,
         "created_at": now,
         "updated_at": now,
@@ -72,6 +80,13 @@ def load_project(project_id: str, root: str | Path = PROJECTS_DIR) -> dict[str, 
     if not target.is_file():
         raise ValueError("找不到指定專案")
     project = read_json(target)
+    had_project_database = bool(project.get("neo4j_database"))
+    project.setdefault("neo4j_database", project_database_name(project_id))
+    if not had_project_database:
+        graph_state = project.get("graph_state")
+        if isinstance(graph_state, dict) and graph_state.get("neo4j_imported"):
+            graph_state["neo4j_imported"] = False
+            graph_state["neo4j_error"] = "已切換為專案專屬 Neo4j Database，請重新匯入此專案的圖譜。"
     if "documents" not in project:
         legacy_document = project.pop("document", None)
         project["documents"] = [legacy_document] if legacy_document else []
@@ -150,4 +165,3 @@ def append_question(
     questions = list(project.get("questions") or [])
     questions.append({"asked_at": datetime.now(timezone.utc).isoformat(), **record})
     return save_project(project_id, {**project, "questions": questions}, root=root)
-

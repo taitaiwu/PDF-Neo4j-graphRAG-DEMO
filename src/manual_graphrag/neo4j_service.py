@@ -98,6 +98,25 @@ def check_neo4j_connection(
         raise ValueError(f"Neo4j 連線失敗：{exc}") from exc
 
 
+def ensure_project_database(uri: str, database: str, username: str, password: str) -> None:
+    """Create the project database when supported, then verify it is usable."""
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", database.strip()):
+        raise ValueError("專案 Neo4j Database 名稱格式無效")
+    try:
+        with GraphDatabase.driver(uri.strip(), auth=(username.strip(), password)) as driver:
+            driver.verify_connectivity()
+            with driver.session(database="system") as session:
+                session.run(
+                    f"CREATE DATABASE `{database.strip()}` IF NOT EXISTS WAIT 30 SECONDS"
+                ).consume()
+    except (DriverError, Neo4jError, OSError, ValueError) as exc:
+        raise ValueError(
+            "無法建立專案專屬 Neo4j Database；此功能需要支援多資料庫的 Neo4j Enterprise "
+            f"及管理權限（Neo4j Community／Aura 不支援）：{exc}"
+        ) from exc
+    check_neo4j_connection(uri, database, username, password)
+
+
 def load_latest_graph(
     uri: str, database: str, username: str, password: str
 ) -> dict[str, Any]:
@@ -165,24 +184,14 @@ def search_graph_evidence(
     embedding: list[float],
     retrieval_mode: str,
     top_k: int,
-    document_names: list[str] | None = None,
     candidate_top_k: int | None = None,
     expand_evidence: bool = True,
 ) -> list[dict[str, Any]]:
-    selected_documents = list(dict.fromkeys(
-        str(name).strip() for name in (document_names or []) if str(name).strip()
-    ))
     target_vector_index = vector_index_name(len(embedding))
     retrieval_top_k = max(int(candidate_top_k or top_k), int(top_k))
     retrieval_query = """
     WITH node, score
     WHERE node.run_id = $run_id
-      AND (size($document_names) = 0 OR (
-        size(coalesce(node.source_documents, [])) > 0 AND all(
-          document IN coalesce(node.source_documents, [])
-          WHERE document IN $document_names
-        )
-      ))
     RETURN node {
         .evidence_id, .kind, .name, .source, .target, .text, .source_pages,
         .source_chunk_numbers, .source_documents, .source_references_json
@@ -199,10 +208,7 @@ def search_graph_evidence(
                     int(total_record["count"]) if total_record else int(top_k),
                 )
 
-            query_params = {
-                "run_id": run_id,
-                "document_names": selected_documents,
-            }
+            query_params = {"run_id": run_id}
             if retrieval_mode in {"基本向量檢索", "基本檢索", "向量 RAG"}:
                 retriever = VectorCypherRetriever(
                     driver=driver,
@@ -268,12 +274,7 @@ def search_graph_evidence(
                             WHERE any(
                                 number IN coalesce(chunk.source_chunk_numbers, [])
                                 WHERE number IN $chunk_numbers
-                            ) AND (size($document_names) = 0 OR (
-                                size(coalesce(chunk.source_documents, [])) > 0 AND all(
-                                    document IN coalesce(chunk.source_documents, [])
-                                    WHERE document IN $document_names
-                                )
-                            ))
+                            )
                             RETURN chunk {
                                 .evidence_id, .kind, .name, .source, .target, .text,
                                 .source_pages, .source_chunk_numbers, .source_documents,
@@ -282,7 +283,6 @@ def search_graph_evidence(
                             """,
                             run_id=run_id,
                             chunk_numbers=target_chunk_numbers,
-                            document_names=selected_documents,
                         ).data()
                         chunks = [
                             _expanded_evidence(record["evidence"])
@@ -314,12 +314,7 @@ def search_graph_evidence(
                     related_entities = session.run(
                         """
                         MATCH (entity:GraphEvidence {run_id: $run_id, kind: '實體'})
-                        WHERE (size($document_names) = 0 OR (
-                            size(coalesce(entity.source_documents, [])) > 0 AND all(
-                                document IN coalesce(entity.source_documents, [])
-                                WHERE document IN $document_names
-                            )
-                        )) AND (
+                        WHERE (
                             entity.name IN $names OR any(
                                 number IN coalesce(entity.source_chunk_numbers, [])
                                 WHERE number IN $chunk_numbers
@@ -333,7 +328,6 @@ def search_graph_evidence(
                         LIMIT $top_k
                         """,
                         run_id=run_id,
-                        document_names=selected_documents,
                         names=names,
                         chunk_numbers=chunk_numbers,
                         top_k=retrieval_top_k,
@@ -353,12 +347,7 @@ def search_graph_evidence(
                     related = session.run(
                         """
                         MATCH (relation:GraphEvidence {run_id: $run_id, kind: '關係'})
-                        WHERE (size($document_names) = 0 OR (
-                            size(coalesce(relation.source_documents, [])) > 0 AND all(
-                                document IN coalesce(relation.source_documents, [])
-                                WHERE document IN $document_names
-                            )
-                        )) AND (
+                        WHERE (
                             relation.source IN $names OR relation.target IN $names OR any(
                                 number IN coalesce(relation.source_chunk_numbers, [])
                                 WHERE number IN $chunk_numbers
@@ -372,7 +361,6 @@ def search_graph_evidence(
                         LIMIT $top_k
                         """,
                         run_id=run_id,
-                        document_names=selected_documents,
                         names=expanded_names,
                         chunk_numbers=chunk_numbers,
                         top_k=retrieval_top_k,

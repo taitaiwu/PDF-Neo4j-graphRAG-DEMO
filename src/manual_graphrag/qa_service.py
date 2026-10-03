@@ -88,7 +88,6 @@ def answer_graph_question(
     question: str,
     retrieval_mode: str,
     evidence: list[dict[str, Any]],
-    document_names: list[str] | None = None,
 ) -> dict[str, Any]:
     if not question.strip():
         raise ValueError("請輸入問題")
@@ -101,12 +100,6 @@ def answer_graph_question(
         raise ValueError("不支援的檢索模式")
     if not evidence:
         raise ValueError("Neo4j 檢索找不到相關證據")
-    document_scope = ""
-    if document_names:
-        document_scope = (
-            "本題只允許使用以下文件的證據：" + "、".join(document_names)
-            + "。不得引用其他文件。"
-        )
     response = _post_json(
         _api_url(base_url, "chat/completions"),
         {
@@ -115,7 +108,7 @@ def answer_graph_question(
             "messages": [
                 {
                     "role": "system",
-                    "content": "你是文件知識圖譜問答助手。只能根據提供的證據回答；證據不足時必須明確說明。使用繁體中文，並在相關敘述後標示來源頁碼。" + document_scope,
+                    "content": "你是車型文件知識圖譜問答助手。只能根據目前專案提供的證據回答；證據不足時必須明確說明。使用繁體中文，並在相關敘述後標示來源頁碼。",
                 },
                 {
                     "role": "user",

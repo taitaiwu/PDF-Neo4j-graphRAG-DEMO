@@ -189,7 +189,7 @@ def test_all_concurrency_inputs_show_ollama_recommendation() -> None:
         if "最大並行請求數" in str(component.get("props", {}).get("label", ""))
     ]
 
-    assert len(concurrency_inputs) == 4
+    assert len(concurrency_inputs) == 3
     assert all(
         component["props"].get("info") == ui.OLLAMA_CONCURRENCY_HINT
         for component in concurrency_inputs
@@ -203,7 +203,7 @@ def test_evaluation_results_table_uses_smaller_font_class() -> None:
         component
         for component in app.config["components"]
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "實際答案", "答案結果", "評判理由"]
+        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案結果", "評判理由"]
     )
     html_styles = "\n".join(
         str(component.get("props", {}).get("value", ""))
@@ -219,15 +219,15 @@ def test_evaluation_results_table_uses_smaller_font_class() -> None:
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
-        "2. PDF 與參數", "3. PDF 摘要", "4. 建圖",
-        "5. 自動問答測試", "6. 問答測試", "7. 歷史紀錄",
+        "2. PDF 與參數", "3. 建圖",
+        "4. 自動問答測試", "5. 問答測試", "6. 歷史紀錄",
     }
     tabs = [
         component for component in app.config["components"]
         if component.get("props", {}).get("label") in protected_labels
     ]
 
-    assert len(tabs) == 6
+    assert len(tabs) == 5
     connection_tab = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("label") == "1. 連線設定"
@@ -246,7 +246,7 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
         if str(dependency.get("api_name", "")).startswith("workflow_tabs_for_ui")
     ]
     assert len(gate_dependencies) >= 5
-    assert all(len(dependency["outputs"]) == 6 for dependency in gate_dependencies)
+    assert all(len(dependency["outputs"]) == 5 for dependency in gate_dependencies)
 
 
 
@@ -353,11 +353,11 @@ def test_build_app_has_automatic_evaluation_page() -> None:
         )
         for dependency in app.config["dependencies"]
     )
-    assert any(component.get("props", {}).get("label") == "3. PDF 摘要" for component in app.config["components"])
-    assert any(component.get("props", {}).get("headers") == ["文件", "摘要", "文件識別資訊", "主題", "關鍵詞"] for component in app.config["components"])
-    assert any(component.get("props", {}).get("label") == "5. 自動問答測試" for component in app.config["components"])
-    assert any(component.get("props", {}).get("label") == "6. 問答測試" for component in app.config["components"])
-    assert any(component.get("props", {}).get("label") == "7. 歷史紀錄" for component in app.config["components"])
+    assert not any("摘要" in str(component.get("props", {}).get("label", "")) for component in app.config["components"])
+    assert not any("選定 PDF" in str(component.get("props", {}).get("headers", [])) for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "5. 問答測試" for component in app.config["components"])
+    assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
     components = app.config["components"]
     question_table_index = next(
         index for index, component in enumerate(components)
@@ -374,7 +374,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     result_table_index = next(
         index for index, component in enumerate(components)
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "預期 PDF", "選定 PDF", "路由", "實際答案", "答案結果", "評判理由"]
+        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案結果", "評判理由"]
     )
     assert question_table_index < metrics_box_index < result_title_index < result_table_index
 
@@ -401,7 +401,7 @@ def test_connection_summary_does_not_expose_secrets() -> None:
 def test_persist_env_settings_writes_all_fields(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     status = persist_env_settings(
-        "bolt://db", "neo4j", "user", "pass", "http://models", "key",
+        "bolt://db", "user", "pass", "http://models", "key",
         "http://embeddings", "embed-key", "build", "embed", "answer",
     )
     content = (tmp_path / ".env").read_text(encoding="utf-8")
@@ -457,7 +457,7 @@ def test_build_app_has_independent_provider_switches_and_ollama_tables() -> None
     assert "⚡ 套用 Ollama 本機預設（省 token）" not in buttons
     assert not {"重新整理模型清單", "重新整理 Embedding 模型清單"} & buttons.keys()
     for label, provider_label, fetch_label, test_label, count in [
-        ("LLM 模型清單", "模型服務來源", "獲得模型清單", "測試模型服務連線", 6),
+        ("LLM 模型清單", "模型服務來源", "獲得模型清單", "測試模型服務連線", 5),
         ("Embedding 模型清單", "Embedding 服務來源", "獲得 Embedding 模型清單", "測試 Embedding 服務連線", 1),
     ]:
         table = next(c for c in components if c.get("props", {}).get("label") == label)
@@ -533,7 +533,6 @@ def test_load_project_ignores_legacy_model_credentials(tmp_path, monkeypatch) ->
         "EMBEDDING_VOYAGE_API_BASE": "https://api.voyageai.com/v1",
         "EMBEDDING_VOYAGE_API_KEY": "",
         "NEO4J_URI": "bolt://db",
-        "NEO4J_DATABASE": "neo4j",
         "NEO4J_USERNAME": "user",
         "NEO4J_PASSWORD": "password",
     })
@@ -580,41 +579,10 @@ def test_project_answer_appends_history(monkeypatch) -> None:
     assert result[3][0][1:3] == ["問題", "答案"]
 
 
-def test_generate_document_summaries_for_ui_saves_and_displays_each_pdf(monkeypatch) -> None:
-    captured = {}
-    monkeypatch.setattr(
-        ui, "generate_document_summary",
-        lambda _endpoint, _key, _model, chunks: {
-            "document": chunks[0].document, "summary": f"{chunks[0].document} 摘要",
-            "identifiers": ["型號 A"], "topics": ["設定"], "keywords": ["IP"],
-        },
-    )
-    monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {"questions": [{"question": "Q"}]}})
-    monkeypatch.setattr(ui, "save_project", lambda _project_id, payload: captured.update(payload) or {})
-
-    status, rows, state = ui.generate_document_summaries_for_ui(
-        "project", "endpoint", "key", "summary-model",
-        [TextChunk(1, "a", (1,), "a.pdf"), TextChunk(2, "b", (1,), "b.pdf")], 2,
-    )
-
-    assert status == "✅ 已建立並保存 2 份 PDF 摘要。"
-    assert [row[0] for row in rows] == ["a.pdf", "b.pdf"]
-    assert rows[0][1:] == ["a.pdf 摘要", "型號 A", "設定", "IP"]
-    assert state["questions"] == [{"question": "Q"}]
-    assert state["preferences"]["summary_model"] == "summary-model"
-    assert captured["evaluation"]["document_summaries"] == state["document_summaries"]
-
-
 def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     questions = [{"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}]
     monkeypatch.setattr(ui, "generate_evaluation_questions", lambda *args: questions)
-    monkeypatch.setattr(
-        ui, "generate_document_summary",
-        lambda *args: (_ for _ in ()).throw(AssertionError("生題不應建立摘要")),
-    )
-    monkeypatch.setattr(ui, "load_project", lambda *_: {
-        "evaluation": {"document_summaries": [{"document": "manual.pdf", "summary": "既有摘要"}]}
-    })
+    monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
     captured = {}
     real_executor = ui.ThreadPoolExecutor
 
@@ -652,7 +620,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
         captured["generation_workers"] = max_workers
         return real_executor(max_workers=max_workers)
 
-    def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None, _summary=None):
+    def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None):
         document = chunks[0].document
         exclusions_by_document[document].append(list(_excluded or []))
         requested_documents.append(document)
@@ -666,14 +634,8 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
         }]
 
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
+    monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
     monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
-    monkeypatch.setattr(
-        ui, "generate_document_summary",
-        lambda *args: (_ for _ in ()).throw(AssertionError("生題不應建立摘要")),
-    )
-    monkeypatch.setattr(ui, "load_project", lambda *_: {
-        "evaluation": {"document_summaries": [{"document": "manual.pdf", "summary": "既有摘要"}]}
-    })
     monkeypatch.setattr(ui, "save_project", lambda *args: {})
 
     status, _rows, state, _results = ui.generate_evaluation_for_ui(
@@ -698,7 +660,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
 def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
     calls = {"count": 0}
 
-    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None, _summary=None):
+    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None):
         calls["count"] += 1
         question = "相同問題？" if calls["count"] <= 2 else "不同問題？"
         if excluded:
@@ -713,13 +675,7 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
         }]
 
     monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
-    monkeypatch.setattr(
-        ui, "generate_document_summary",
-        lambda *args: (_ for _ in ()).throw(AssertionError("生題不應建立摘要")),
-    )
-    monkeypatch.setattr(ui, "load_project", lambda *_: {
-        "evaluation": {"document_summaries": [{"document": "manual.pdf", "summary": "既有摘要"}]}
-    })
+    monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
     monkeypatch.setattr(ui, "save_project", lambda *args: {})
 
     status, _rows, state, _results = ui.generate_evaluation_for_ui(
@@ -746,7 +702,7 @@ def test_parallel_generation_refills_duplicates_across_documents(monkeypatch) ->
     call_counts = {"a.pdf": 0, "b.pdf": 0}
     call_lock = Lock()
 
-    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None, _summary=None):
+    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None):
         document = chunks[0].document
         with call_lock:
             call_counts[document] += 1
@@ -846,10 +802,6 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
             "manual.pdf：1", "manual.pdf：9", "manual.pdf",
         ]]),
     )
-    monkeypatch.setattr(
-        ui, "select_relevant_documents",
-        lambda *args: {"documents": ["manual.pdf"], "reason": "符合", "confidence": 0.9},
-    )
     real_executor = ui.ThreadPoolExecutor
 
     def recording_executor(max_workers):
@@ -865,7 +817,6 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
             "number": 1, "question": "Q", "expected_answer": "A",
             "source_pages": [1], "document": "manual.pdf",
         }],
-        "document_summaries": [{"document": "manual.pdf", "summary": "手冊摘要"}],
     }
 
     status, rows, updated = ui.run_evaluation_for_ui(
@@ -875,17 +826,13 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     )
 
     assert "總共答對 1 題 / 1 題" in status
-    assert "manual.pdf：路由正確 1 / 1；答案正確 1 / 1" in status
-    assert "文件路由正確：1 / 1" in status
+    assert "manual.pdf：答案正確 1 / 1" in status
     assert "答錯：0 題" in status
     assert "答案正確率：100.0%" in status
     assert "Recall@5：100.0%" in status
     assert "MRR：1.000" in status
-    assert rows[0][3:] == [
-        "manual.pdf", "manual.pdf", "✅ 正確", "實際答案", "✅ 通過", "正確",
-    ]
+    assert rows[0][3:] == ["manual.pdf", "實際答案", "✅ 通過", "正確"]
     assert captured["test_workers"] == 2
-    assert updated["results"][0]["routing_correct"] is True
     assert updated["results"][0]["passed"] is True
     assert captured["evaluation"] == updated
 
@@ -898,10 +845,6 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
         return "✅ 完成", "實際答案", []
 
     monkeypatch.setattr(ui, "answer_question_for_ui", fake_answer_question_for_ui)
-    monkeypatch.setattr(
-        ui, "select_relevant_documents",
-        lambda *args: {"documents": ["manual.pdf"], "reason": "符合", "confidence": 0.9},
-    )
     monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *args: {"passed": True, "reason": "正確"})
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: {})
     evaluation = {
@@ -909,7 +852,6 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
             "number": 1, "question": "Q", "expected_answer": "A",
             "source_pages": [1], "document": "manual.pdf",
         }],
-        "document_summaries": [{"document": "manual.pdf", "summary": "手冊摘要"}],
     }
 
     ui.run_evaluation_for_ui(
@@ -921,46 +863,8 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
     assert captured["args"] == (
         "endpoint", "key", "embed-endpoint", "embed-key",
         "bolt", "neo4j", "user", "pass",
-        "model", "Q", "關聯擴展檢索", 8, ["manual.pdf"], True, True,
+        "model", "Q", "關聯擴展檢索", 8, True, True,
     )
-
-
-def test_run_evaluation_does_not_fallback_when_document_routing_fails(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        ui,
-        "select_relevant_documents",
-        lambda *args: (_ for _ in ()).throw(ValueError("無法選擇")),
-    )
-    monkeypatch.setattr(
-        ui,
-        "answer_question_for_ui",
-        lambda *args: (_ for _ in ()).throw(
-            AssertionError("路由失敗時不得搜尋全部文件")
-        ),
-    )
-    monkeypatch.setattr(ui, "save_project", lambda *args: {})
-    evaluation = {
-        "questions": [{
-            "number": 1,
-            "question": "問題",
-            "expected_answer": "答案",
-            "source_pages": [1],
-            "document": "manual.pdf",
-        }],
-        "document_summaries": [{"document": "manual.pdf", "summary": "摘要"}],
-    }
-
-    status, _rows, updated = ui.run_evaluation_for_ui(
-        "project", "endpoint", "key", "embed-endpoint", "embed-key",
-        "bolt", "neo4j", "user", "pass", "model", "基本檢索", 8, evaluation,
-    )
-
-    assert "文件路由正確：0 / 1" in status
-    assert updated["results"][0]["selected_documents"] == []
-
-    assert updated["results"][0]["reason"].startswith("文件路由失敗")
 
 
 def test_edit_questions_auto_save_and_clear_results(monkeypatch) -> None:
@@ -1561,13 +1465,13 @@ def test_answer_question_for_ui_can_disable_reranker(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(
         ui,
         "answer_graph_question",
-        lambda *args: {"answer": "請重新啟動。", "evidence": args[-2]},
+        lambda *args: {"answer": "請重新啟動。", "evidence": args[-1]},
     )
 
     status, answer, rows = ui.answer_question_for_ui(
         "http://models/v1", "key", "http://embed/v1", "embed-key",
         "bolt://db", "neo4j", "user", "password",
-        "answer", " E01 怎麼處理？ ", "基本檢索", 8, None, False, False,
+        "answer", " E01 怎麼處理？ ", "基本檢索", 8, False, False,
     )
 
     assert status.startswith("✅ 基本檢索")
@@ -1612,14 +1516,12 @@ def test_load_evaluation_restores_saved_summary(monkeypatch) -> None:
             "results": [
                 {
                     "number": 1, "question": "Q1", "expected_answer": "A1",
-                    "document": "manual.pdf", "selected_documents": ["manual.pdf"],
-                    "routing_correct": True, "actual_answer": "A1", "passed": True,
+                    "document": "manual.pdf", "actual_answer": "A1", "passed": True,
                     "reason": "正確", "recall_at_5": True, "reciprocal_rank": 0.5,
                 },
                 {
                     "number": 2, "question": "Q2", "expected_answer": "A2",
-                    "document": "manual.pdf", "selected_documents": ["manual.pdf"],
-                    "routing_correct": True, "actual_answer": "", "passed": False,
+                    "document": "manual.pdf", "actual_answer": "", "passed": False,
                     "reason": "錯誤", "recall_at_5": False, "reciprocal_rank": 0.0,
                 },
             ],
@@ -1706,7 +1608,7 @@ def test_unselected_models_report_actionable_errors_without_network() -> None:
 
 def test_model_selections_are_not_saved_in_env(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    ui.persist_env_settings("", "", "", "", "", "", "", "", "build", "embed", "answer")
+    ui.persist_env_settings("", "", "", "", "", "", "", "build", "embed", "answer")
     content = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "BUILD_MODEL" not in content
     assert "EMBEDDING_MODEL" not in content
