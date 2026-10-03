@@ -592,7 +592,16 @@ def test_project_answer_appends_history(monkeypatch) -> None:
 
 def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     questions = [{"number": 1, "question": "Q", "expected_answer": "A", "source_pages": [1]}]
-    monkeypatch.setattr(ui, "generate_evaluation_questions", lambda *args: questions)
+    generated = {}
+
+    def fake_generate(_endpoint, _key, _model, chunks, _count, _excluded=None, focus_page=None):
+        generated["chunks"] = chunks
+        generated["focus_page"] = focus_page
+        return questions
+
+    sampled_chunks = [TextChunk(7, "sampled page with context", (7,), "manual.pdf")]
+    monkeypatch.setattr(ui, "sample_random_page_context", lambda _chunks: (7, sampled_chunks))
+    monkeypatch.setattr(ui, "generate_evaluation_questions", fake_generate)
     monkeypatch.setattr(ui, "load_project", lambda *_: {"evaluation": {}})
     captured = {}
     real_executor = ui.ThreadPoolExecutor
@@ -618,6 +627,8 @@ def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
     assert captured["generation_workers"] == 1
     assert state["preferences"]["test_max_concurrent_requests"] == 5
     assert state["preferences"]["expand_evidence"] is False
+    assert generated["chunks"] == sampled_chunks
+    assert generated["focus_page"] == 7
     assert results == []
 
 
@@ -631,7 +642,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
         captured["generation_workers"] = max_workers
         return real_executor(max_workers=max_workers)
 
-    def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None):
+    def fake_generate(_endpoint, _key, _model, chunks, count, _excluded=None, _focus_page=None):
         document = chunks[0].document
         exclusions_by_document[document].append(list(_excluded or []))
         requested_documents.append(document)
@@ -682,7 +693,7 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
 def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
     calls = {"count": 0}
 
-    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None):
+    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None, _focus_page=None):
         calls["count"] += 1
         question = (
             "馬達異音時如何檢查？" if calls["count"] == 1
@@ -730,7 +741,7 @@ def test_parallel_generation_refills_duplicates_across_documents(monkeypatch) ->
     call_counts = {"a.pdf": 0, "b.pdf": 0}
     call_lock = Lock()
 
-    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None):
+    def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None, _focus_page=None):
         document = chunks[0].document
         with call_lock:
             call_counts[document] += 1

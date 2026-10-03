@@ -77,6 +77,32 @@ def test_question_dedup_rejects_same_answer_across_chunks(monkeypatch) -> None:
         )
 
 
+def test_random_page_context_includes_focus_chunk_and_neighbors(monkeypatch) -> None:
+    chunks = [
+        TextChunk(number, f"chunk-{number}", (number,), "manual.pdf")
+        for number in range(1, 6)
+    ]
+    monkeypatch.setattr(evaluation_service.random, "choice", lambda pages: 3)
+
+    focus_page, context = evaluation_service.sample_random_page_context(chunks)
+
+    assert focus_page == 3
+    assert [chunk.number for chunk in context] == [2, 3, 4]
+
+
+def test_random_page_context_expands_at_document_boundaries(monkeypatch) -> None:
+    chunks = [
+        TextChunk(number, f"chunk-{number}", (number,), "manual.pdf")
+        for number in range(1, 4)
+    ]
+    monkeypatch.setattr(evaluation_service.random, "choice", lambda pages: 1)
+
+    focus_page, context = evaluation_service.sample_random_page_context(chunks)
+
+    assert focus_page == 1
+    assert [chunk.number for chunk in context] == [1, 2]
+
+
 def test_generate_evaluation_questions_tells_model_which_questions_to_avoid(
     monkeypatch,
 ) -> None:

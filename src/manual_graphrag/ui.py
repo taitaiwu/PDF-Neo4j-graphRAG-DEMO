@@ -21,6 +21,7 @@ from .evaluation_service import (
     evaluation_questions_are_similar,
     generate_evaluation_questions,
     judge_evaluation_answer,
+    sample_random_page_context,
 )
 from .graph_service import (
     RunCancelled,
@@ -850,13 +851,15 @@ def generate_evaluation_for_ui(
                 with accepted_lock:
                     excluded = list(accepted_questions)
                 try:
+                    focus_page, page_context = sample_random_page_context(selected_chunks)
                     batch = generate_evaluation_questions(
                         model_endpoint,
                         api_key,
                         generation_model,
-                        selected_chunks,
+                        page_context,
                         1,
                         excluded,
+                        focus_page,
                     )
                 except ValueError as exc:
                     last_error = str(exc)

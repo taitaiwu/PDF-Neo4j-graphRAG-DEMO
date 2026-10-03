@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+import random
 import re
 from typing import Any
 
@@ -107,6 +108,27 @@ def _evaluation_context(chunks: list[TextChunk]) -> tuple[str, set[int]]:
     return context, {chunk.number for chunk in sampled}
 
 
+def sample_random_page_context(
+    chunks: list[TextChunk], neighbor_chunks: int = 1,
+) -> tuple[int, list[TextChunk]]:
+    """Choose one source page and include its chunks plus adjacent chunk context."""
+    ordered = sorted(chunks, key=lambda chunk: chunk.number)
+    pages = sorted({page for chunk in ordered for page in chunk.pages})
+    if not ordered or not pages:
+        raise ValueError("PDF chunks 沒有可供隨機抽樣的來源頁碼")
+    if neighbor_chunks < 0:
+        raise ValueError("相鄰 chunk 數不可小於 0")
+
+    focus_page = random.choice(pages)
+    focus_indexes = [
+        index for index, chunk in enumerate(ordered)
+        if focus_page in chunk.pages
+    ]
+    start = max(0, min(focus_indexes) - neighbor_chunks)
+    end = min(len(ordered), max(focus_indexes) + neighbor_chunks + 1)
+    return focus_page, ordered[start:end]
+
+
 def generate_evaluation_questions(
     base_url: str,
     api_key: str,
@@ -114,6 +136,7 @@ def generate_evaluation_questions(
     chunks: list[TextChunk],
     question_count: int,
     excluded_questions: list[Any] | None = None,
+    focus_page: int | None = None,
 ) -> list[dict[str, Any]]:
     count = int(question_count)
     if not chunks:
@@ -127,6 +150,7 @@ def generate_evaluation_questions(
     ]
     context, available_chunk_numbers = _evaluation_context(chunks)
     chunk_lookup = {chunk.number: chunk for chunk in chunks}
+    available_pages = {page for chunk in chunks for page in chunk.pages}
 
     def validate(payload: dict[str, Any]) -> dict[str, Any]:
         questions = payload.get("questions")
@@ -141,8 +165,8 @@ def generate_evaluation_questions(
             answer = str(item.get("expected_answer", "")).strip()
             if not question or not answer:
                 raise ValueError("每一題都必須包含 question 與 expected_answer")
-            pages = item.get("source_pages", [])
-            if not isinstance(pages, list):
+            raw_pages = item.get("source_pages", [])
+            if not isinstance(raw_pages, list):
                 raise ValueError("source_pages 必須是陣列")
             raw_numbers = item.get("source_chunk_numbers", [])
             if not isinstance(raw_numbers, list):
@@ -157,6 +181,18 @@ def generate_evaluation_questions(
                     chunk_numbers.append(number)
             if not chunk_numbers:
                 raise ValueError("每一題都必須包含至少一個有效的 source_chunk_numbers")
+            pages: list[int] = []
+            for value in raw_pages:
+                try:
+                    page = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if page in available_pages and page not in pages:
+                    pages.append(page)
+            if not pages:
+                pages = list(dict.fromkeys(
+                    page for number in chunk_numbers for page in chunk_lookup[number].pages
+                ))
             candidate = {
                 "question": question,
                 "expected_answer": answer,
@@ -179,7 +215,7 @@ def generate_evaluation_questions(
                 "number": index,
                 "question": question,
                 "expected_answer": answer,
-                "source_pages": [int(page) for page in pages],
+                "source_pages": pages,
                 "source_chunk_numbers": chunk_numbers,
                 "document": document,
             })
@@ -191,6 +227,10 @@ def generate_evaluation_questions(
         exclusion_instruction = (
             "\n不得重複或改寫以下已建立題目：\n- " + "\n- ".join(excluded_text) + "\n"
         )
+    focus_instruction = (
+        f"本次隨機抽樣的焦點頁是第 {focus_page} 頁；請優先從該頁出題，必要時使用前後相鄰 chunk 補足脈絡。"
+        if focus_page is not None else ""
+    )
 
     result = _chat_json(
         base_url,
@@ -199,6 +239,7 @@ def generate_evaluation_questions(
         "你是文件問答評測資料設計師。只能根據提供的文件內容出題，並只輸出 JSON。",
         f"請建立剛好 {count} 道可由文件明確回答、彼此不重複且涵蓋不同知識點的繁體中文問題。"
         "不同措辭若詢問相同事實、操作步驟或預期答案，仍視為重複；每題必須測試不同資訊，不可只替換同義詞、語序或問句模板。"
+        f"{focus_instruction}"
         f"{exclusion_instruction}"
         "每題提供精確標準答案、來源頁碼，以及該題所依據的 CHUNK 編號"
         "（source_chunk_numbers，必須引用下方文件中標示的 CHUNK 編號）。輸出格式："
