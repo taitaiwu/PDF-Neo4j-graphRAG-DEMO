@@ -18,9 +18,9 @@ from .config import (
 )
 from .env_store import load_env, save_env
 from .evaluation_service import (
+    evaluation_questions_are_similar,
     generate_evaluation_questions,
     judge_evaluation_answer,
-    questions_are_similar,
 )
 from .graph_service import (
     RunCancelled,
@@ -834,7 +834,7 @@ def generate_evaluation_for_ui(
         if not document_chunks:
             raise ValueError("請先解析 PDF 並產生 chunks")
         existing_evaluation = dict(load_project(project_id).get("evaluation") or {})
-        accepted_questions: list[str] = []
+        accepted_questions: list[dict[str, Any]] = []
         accepted_lock = Lock()
 
         def generate_for_document(
@@ -864,11 +864,11 @@ def generate_evaluation_for_ui(
                 for question in batch:
                     with accepted_lock:
                         if any(
-                            questions_are_similar(question["question"], existing)
+                            evaluation_questions_are_similar(question, existing)
                             for existing in accepted_questions
                         ):
                             continue
-                        accepted_questions.append(question["question"])
+                        accepted_questions.append(question)
                         accepted.append(question)
                         break
             if len(accepted) < count:

@@ -8,9 +8,9 @@ def test_generate_evaluation_questions_validates_and_numbers(monkeypatch) -> Non
     def fake_chat(*args, **kwargs):
         return kwargs["validator"]({
             "questions": [
-                {"question": "CX17 系列的問題一？", "expected_answer": "答案一", "source_pages": [2],
+                {"question": "CX17 系列如何查詢網路 IP？", "expected_answer": "從網路設定頁查看 IP", "source_pages": [2],
                  "source_chunk_numbers": [1]},
-                {"question": "CX17 系列的問題二？", "expected_answer": "答案二", "source_pages": [3],
+                {"question": "CX17 系列出現 E01 時如何復歸？", "expected_answer": "長按重設鍵", "source_pages": [3],
                  "source_chunk_numbers": [1]},
             ]
         })
@@ -46,6 +46,34 @@ def test_generate_evaluation_questions_rejects_similar_questions(monkeypatch) ->
             [TextChunk(1, "容量為 100", (1,), "manual.pdf")],
             1,
             ["系統的最大容量是多少"],
+        )
+
+
+def test_question_similarity_catches_chinese_rewording_without_flagging_other_topics() -> None:
+    assert evaluation_service.questions_are_similar(
+        "馬達異音時如何檢查？", "馬達出現異常聲音要怎麼檢查？"
+    )
+    assert not evaluation_service.questions_are_similar(
+        "如何查詢目前 IP 位址？", "如何重設網路設定？"
+    )
+
+
+def test_question_dedup_rejects_same_answer_across_chunks(monkeypatch) -> None:
+    def fake_chat(*args, **kwargs):
+        return kwargs["validator"]({"questions": [
+            {"question": "列印品質不佳時如何清潔噴頭？", "expected_answer": "依照步驟清潔噴頭",
+             "source_pages": [1], "source_chunk_numbers": [8]},
+            {"question": "如何改善印出來的字跡模糊？", "expected_answer": "依照步驟清潔噴頭",
+             "source_pages": [1], "source_chunk_numbers": [1]},
+        ]})
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+    with pytest.raises(ValueError, match="重複或過度相似"):
+        evaluation_service.generate_evaluation_questions(
+            "url", "", "model", [
+                TextChunk(1, "清潔噴頭", (1,), "manual.pdf"),
+                TextChunk(8, "列印品質", (1,), "manual.pdf"),
+            ], 2
         )
 
 

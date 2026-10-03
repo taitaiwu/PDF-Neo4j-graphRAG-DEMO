@@ -636,11 +636,18 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
         exclusions_by_document[document].append(list(_excluded or []))
         requested_documents.append(document)
         sequence = requested_documents.count(document)
+        topics = {
+            ("a.pdf", 1): "network address lookup",
+            ("a.pdf", 2): "maintenance interval",
+            ("b.pdf", 1): "control panel reset",
+            ("b.pdf", 2): "warning light meaning",
+        }
         return [{
             "number": 1,
-            "question": f"{document} question {sequence}",
-            "expected_answer": "answer",
+            "question": f"{document} {topics[(document, sequence)]}?",
+            "expected_answer": f"answer: {topics[(document, sequence)]}",
             "source_pages": [1],
+            "source_chunk_numbers": [sequence if document == "a.pdf" else sequence + 2],
             "document": chunks[0].document,
         }]
 
@@ -664,8 +671,12 @@ def test_generate_evaluation_distributes_questions_across_documents(monkeypatch)
         "a.pdf", "a.pdf", "b.pdf", "b.pdf",
     ]
     assert captured["generation_workers"] == 2
-    assert "a.pdf question 1" in exclusions_by_document["a.pdf"][1]
-    assert "b.pdf question 1" in exclusions_by_document["b.pdf"][1]
+    assert "a.pdf network address lookup?" in [
+        entry["question"] for entry in exclusions_by_document["a.pdf"][1]
+    ]
+    assert "b.pdf control panel reset?" in [
+        entry["question"] for entry in exclusions_by_document["b.pdf"][1]
+    ]
 
 
 def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
@@ -673,13 +684,17 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
 
     def fake_generate(_endpoint, _key, _model, chunks, _count, excluded=None):
         calls["count"] += 1
-        question = "相同問題？" if calls["count"] <= 2 else "不同問題？"
+        question = (
+            "馬達異音時如何檢查？" if calls["count"] == 1
+            else "馬達出現異常聲音要怎麼檢查？" if calls["count"] == 2
+            else "煞車油多久需要更換一次？"
+        )
         if excluded:
-            assert "相同問題？" in excluded
+            assert any(item["question"] == "馬達異音時如何檢查？" for item in excluded)
         return [{
             "number": 1,
             "question": question,
-            "expected_answer": "答案",
+            "expected_answer": "檢查馬達固定螺絲" if calls["count"] < 3 else "每兩年更換",
             "source_pages": [1],
             "source_chunk_numbers": [1],
             "document": chunks[0].document,
@@ -699,12 +714,14 @@ def test_generate_evaluation_refills_duplicate_questions(monkeypatch) -> None:
         "基本檢索",
         8,
         [TextChunk(1, "內容", (1,), "manual.pdf")],
-        True,
+        False,
         3,
     )
 
     assert status.startswith("✅")
-    assert [item["question"] for item in state["questions"]] == ["相同問題？", "不同問題？"]
+    assert [item["question"] for item in state["questions"]] == [
+        "馬達異音時如何檢查？", "煞車油多久需要更換一次？",
+    ]
     assert calls["count"] == 3
 
 
@@ -722,13 +739,14 @@ def test_parallel_generation_refills_duplicates_across_documents(monkeypatch) ->
             first_requests.wait()
             question = "跨文件重複問題？"
         else:
-            assert "跨文件重複問題？" in (excluded or [])
-            question = f"{document} 替代問題？"
+            assert any(item["question"] == "跨文件重複問題？" for item in (excluded or []))
+            question = f"{document} {'電源檢查流程' if document == 'a.pdf' else '安全警示燈含義'}？"
         return [{
             "number": 1,
             "question": question,
             "expected_answer": "答案",
             "source_pages": [1],
+            "source_chunk_numbers": [1 if document == "a.pdf" else 2],
             "document": document,
         }]
 
@@ -760,9 +778,10 @@ def test_generate_evaluation_processes_all_documents_sequentially_when_parallel_
         requested_documents.append(document)
         return [{
             "number": 1,
-            "question": f"{document} question",
-            "expected_answer": "answer",
+            "question": f"{document} {'網路位址查詢方式' if document == 'a.pdf' else '安全鎖解除步驟'}？",
+            "expected_answer": f"answer for {document}",
             "source_pages": [1],
+            "source_chunk_numbers": [1 if document == "a.pdf" else 2],
             "document": document,
         }]
 

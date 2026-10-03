@@ -15,14 +15,77 @@ def _normalized_question(value: str) -> str:
     return re.sub(r"[^\w\u4e00-\u9fff]+", "", value.casefold())
 
 
-def questions_are_similar(first: str, second: str) -> bool:
-    left = _normalized_question(first)
-    right = _normalized_question(second)
+_QUESTION_FILLERS = (
+    "請問", "请问", "請說明", "请说明", "請問一下", "请问一下",
+    "如何", "怎麼", "怎么", "怎樣", "怎样", "為什麼", "为什么",
+    "有什麼", "有什么", "哪些", "哪一些", "哪一種", "哪种", "哪個", "哪个",
+    "是否", "能否", "可否", "可以", "能夠", "能够", "需要", "請", "请",
+    "請介紹", "请介绍", "說明", "说明", "介紹", "介绍", "告訴我", "告诉我",
+    "是什麼", "是什么", "為何", "为何", "嗎", "吗", "呢", "如何處理", "如何处理",
+)
+
+
+def _question_features(value: str) -> tuple[str, set[str]]:
+    normalized = _normalized_question(value)
+    content = normalized
+    for filler in sorted(_QUESTION_FILLERS, key=len, reverse=True):
+        content = content.replace(_normalized_question(filler), "")
+    grams = {
+        content[index:index + 2]
+        for index in range(max(0, len(content) - 1))
+    }
+    words = set(re.findall(r"[a-z0-9]+", content))
+    return content, grams | words
+
+
+def _similarity_score(first: str, second: str) -> float:
+    left, left_features = _question_features(first)
+    right, right_features = _question_features(second)
     if not left or not right:
-        return False
+        return 0.0
     if left == right:
+        return 1.0
+    if not left_features or not right_features:
+        return SequenceMatcher(None, left, right).ratio()
+    overlap = len(left_features & right_features)
+    dice = 2 * overlap / (len(left_features) + len(right_features))
+    containment = overlap / min(len(left_features), len(right_features))
+    sequence = SequenceMatcher(None, left, right).ratio()
+    return max(dice, containment * 0.82, sequence)
+
+
+def questions_are_similar(first: str, second: str) -> bool:
+    return _similarity_score(first, second) >= 0.64
+
+
+def _question_value(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("question", "")).strip()
+    return str(item).strip()
+
+
+def evaluation_questions_are_similar(first: dict[str, Any], second: Any) -> bool:
+    second_question = _question_value(second)
+    score = _similarity_score(str(first.get("question", "")), second_question)
+    if score >= 0.64:
         return True
-    return SequenceMatcher(None, left, right).ratio() >= 0.96
+    if not isinstance(second, dict):
+        return False
+    first_chunks = {str(value) for value in first.get("source_chunk_numbers", [])}
+    second_chunks = {str(value) for value in second.get("source_chunk_numbers", [])}
+    same_source = bool(first_chunks & second_chunks)
+    first_answer = _normalized_question(str(first.get("expected_answer", "")))
+    second_answer = _normalized_question(str(second.get("expected_answer", "")))
+    answer_similarity = (
+        SequenceMatcher(None, first_answer, second_answer).ratio()
+        if first_answer and second_answer else 0.0
+    )
+    same_detailed_answer = (
+        min(len(first_answer), len(second_answer)) >= 8 and answer_similarity >= 0.96
+    )
+    return same_detailed_answer or (
+        score >= 0.40 and answer_similarity >= 0.90
+    )
 
 
 def _evaluation_context(chunks: list[TextChunk]) -> tuple[str, set[int]]:
@@ -50,7 +113,7 @@ def generate_evaluation_questions(
     model: str,
     chunks: list[TextChunk],
     question_count: int,
-    excluded_questions: list[str] | None = None,
+    excluded_questions: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     count = int(question_count)
     if not chunks:
@@ -59,8 +122,8 @@ def generate_evaluation_questions(
         raise ValueError("題目數量必須介於 1 到 100")
 
     excluded = [
-        str(question).strip() for question in (excluded_questions or [])
-        if str(question).strip()
+        question for question in (excluded_questions or [])
+        if _question_value(question)
     ]
     context, available_chunk_numbers = _evaluation_context(chunks)
     chunk_lookup = {chunk.number: chunk for chunk in chunks}
@@ -78,9 +141,6 @@ def generate_evaluation_questions(
             answer = str(item.get("expected_answer", "")).strip()
             if not question or not answer:
                 raise ValueError("每一題都必須包含 question 與 expected_answer")
-            if any(questions_are_similar(question, existing) for existing in accepted_questions):
-                raise ValueError(f"題目與既有題目重複或過度相似：{question}")
-            accepted_questions.append(question)
             pages = item.get("source_pages", [])
             if not isinstance(pages, list):
                 raise ValueError("source_pages 必須是陣列")
@@ -97,6 +157,17 @@ def generate_evaluation_questions(
                     chunk_numbers.append(number)
             if not chunk_numbers:
                 raise ValueError("每一題都必須包含至少一個有效的 source_chunk_numbers")
+            candidate = {
+                "question": question,
+                "expected_answer": answer,
+                "source_chunk_numbers": chunk_numbers,
+            }
+            if any(
+                evaluation_questions_are_similar(candidate, existing)
+                for existing in accepted_questions
+            ):
+                raise ValueError(f"題目與既有題目重複或過度相似：{question}")
+            accepted_questions.append(candidate)
             document = "、".join(
                 dict.fromkeys(
                     chunk_lookup[number].document
@@ -116,8 +187,9 @@ def generate_evaluation_questions(
 
     exclusion_instruction = ""
     if excluded:
+        excluded_text = [_question_value(item) for item in excluded]
         exclusion_instruction = (
-            "\n不得重複或改寫以下已建立題目：\n- " + "\n- ".join(excluded) + "\n"
+            "\n不得重複或改寫以下已建立題目：\n- " + "\n- ".join(excluded_text) + "\n"
         )
 
     result = _chat_json(
@@ -125,7 +197,8 @@ def generate_evaluation_questions(
         api_key,
         model,
         "你是文件問答評測資料設計師。只能根據提供的文件內容出題，並只輸出 JSON。",
-        f"請建立剛好 {count} 道可由文件明確回答、彼此不重複且涵蓋不同內容的繁體中文問題。"
+        f"請建立剛好 {count} 道可由文件明確回答、彼此不重複且涵蓋不同知識點的繁體中文問題。"
+        "不同措辭若詢問相同事實、操作步驟或預期答案，仍視為重複；每題必須測試不同資訊，不可只替換同義詞、語序或問句模板。"
         f"{exclusion_instruction}"
         "每題提供精確標準答案、來源頁碼，以及該題所依據的 CHUNK 編號"
         "（source_chunk_numbers，必須引用下方文件中標示的 CHUNK 編號）。輸出格式："
