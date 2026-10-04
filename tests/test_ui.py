@@ -823,21 +823,28 @@ def test_generate_evaluation_processes_all_documents_sequentially_when_parallel_
     assert state["preferences"]["allow_parallel_generation"] is False
 
 
-def test_retrieval_rank_prefers_expected_chunk_and_supports_mrr() -> None:
+def test_retrieval_rank_uses_document_page_even_when_chunk_differs() -> None:
     question = {
         "document": "manual.pdf",
         "source_pages": [1],
         "source_chunk_numbers": [42],
     }
     rows = [
-        ["原文", "錯誤 chunk", "", "0.9", "manual.pdf：1", "manual.pdf：9", "manual.pdf"],
-        ["原文", "正確 chunk", "", "0.8", "manual.pdf：2", "manual.pdf：42", "manual.pdf"],
+        ["原文", "錯誤文件的同頁證據", "", "0.9", "other.pdf：1", "manual.pdf：42", "other.pdf、manual.pdf"],
+        ["原文", "同文件同頁但不同 chunk", "", "0.8", "manual.pdf：1", "manual.pdf：9", "manual.pdf"],
     ]
 
     rank = ui._retrieval_rank(question, rows)
 
     assert rank == 2
     assert 1 / rank == 0.5
+
+
+def test_retrieval_rank_does_not_fall_back_to_chunk_without_expected_pages() -> None:
+    question = {"document": "manual.pdf", "source_chunk_numbers": [42]}
+    rows = [["原文", "相同 chunk", "", "0.9", "manual.pdf：1", "manual.pdf：42", "manual.pdf"]]
+
+    assert ui._retrieval_rank(question, rows) is None
 
 
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:

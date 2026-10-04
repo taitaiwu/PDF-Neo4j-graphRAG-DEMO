@@ -741,16 +741,12 @@ def _source_values_for_document(display: str, documents: str, document: str) -> 
 
 def _retrieval_rank(question: dict[str, Any], rows: list[list[object]]) -> int | None:
     document = str(question.get("document") or "")
-    expected_chunks = {
-        int(value) for value in question.get("source_chunk_numbers", [])
-    }
     expected_pages = {int(value) for value in question.get("source_pages", [])}
+    if not document or not expected_pages:
+        return None
     for rank, row in enumerate(rows, start=1):
-        chunks = _source_values_for_document(row[5], row[6], document)
         pages = _source_values_for_document(row[4], row[6], document)
-        if expected_chunks and chunks & expected_chunks:
-            return rank
-        if not expected_chunks and expected_pages and pages & expected_pages:
+        if pages & expected_pages:
             return rank
     return None
 
