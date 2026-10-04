@@ -275,8 +275,17 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
         component for component in app.config["components"]
         if component.get("props", {}).get("label") in protected_labels
     ]
+    experiment_tabs = [
+        component for component in app.config["components"]
+        if component.get("props", {}).get("label") in {
+            "1-0 實驗專案", "1-1 成員專案連線測試",
+            "1-2 問題集準備", "1-3 自動實驗測試",
+        }
+    ]
 
     assert len(tabs) == 5
+    assert len(experiment_tabs) == 4
+    assert all(tab["props"]["interactive"] is False for tab in experiment_tabs)
     assert not any(
         "歷史紀錄" in str(component.get("props", {}).get("label", ""))
         for component in app.config["components"]
