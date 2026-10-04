@@ -1400,8 +1400,10 @@ def load_experiment_for_ui(
         if group and len(row) == 9:
             detail_rows.append([
                 row[0], group.get("answer_model"),
-                group.get("judge_model") or group.get("answer_model"), *row[1:],
+                group.get("judge_model") or group.get("answer_model"), *row[1:], "",
             ])
+        elif len(row) == 11:
+            detail_rows.append([*row, ""])
         else:
             detail_rows.append(row)
     if not results:
@@ -1616,6 +1618,7 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
         item.get("actual_answer", ""),
         bool(item.get("passed")),
         item.get("reason", ""),
+        item.get("note", ""),
     ] for item in results]
 
 
@@ -1645,8 +1648,9 @@ def update_manual_evaluation_for_ui(
         if len(submitted) != len(results):
             raise ValueError("結果列數與已評測題目不符")
         changed = 0
+        notes_changed = 0
         for item, row in zip(results, submitted):
-            if len(row) < 7:
+            if len(row) < 8:
                 raise ValueError("測試結果欄位不完整")
             passed = bool(row[5])
             if passed != bool(item.get("passed")):
@@ -1654,12 +1658,16 @@ def update_manual_evaluation_for_ui(
                 item["reason"] = "人工評判"
                 item["manual_judgment"] = True
                 changed += 1
+            note = str(row[7] or "")
+            if note != str(item.get("note") or ""):
+                item["note"] = note
+                notes_changed += 1
         current["results"] = results
         save_project(project_id, {"evaluation": current})
     except (OSError, TypeError, ValueError) as exc:
         return f"❌ 人工評判保存失敗：{exc}", _evaluation_result_rows(results), current
     summary = _evaluation_summary(results)
-    return (f"{summary}\n\n✅ 已保存人工評判變更 {changed} 筆。",
+    return (f"{summary}\n\n✅ 已保存人工評判變更 {changed} 筆、人工註記變更 {notes_changed} 筆。",
             _evaluation_result_rows(results), current)
 
 
@@ -2468,6 +2476,7 @@ def _single_experiment_detail_rows(results: list[dict[str, Any]]) -> list[list[o
         item["number"], item["question"], item.get("document", ""),
         item["expected_answer"], item.get("actual_answer", ""),
         bool(item.get("passed")), item.get("reason", ""), item.get("retrieval_rank"),
+        item.get("note", ""),
     ] for item in results]
 
 
@@ -2659,8 +2668,9 @@ def update_manual_experiment_result_for_ui(
         if len(submitted) != len(current):
             raise ValueError("結果列數與實驗題次不符")
         changed = 0
+        notes_changed = 0
         for item, row in zip(current, submitted):
-            if len(row) < 11:
+            if len(row) < 12:
                 raise ValueError("逐題結果欄位不完整")
             value = row[8]
             if isinstance(value, str):
@@ -2677,6 +2687,10 @@ def update_manual_experiment_result_for_ui(
                 item["reason"] = "人工評判"
                 item["manual_judgment"] = True
                 changed += 1
+            note = str(row[11] or "")
+            if note != str(item.get("note") or ""):
+                item["note"] = note
+                notes_changed += 1
         project = load_project(project_id)
         data = dict(project.get("experiment") or {})
         groups = data.get("groups") or []
@@ -2691,7 +2705,8 @@ def update_manual_experiment_result_for_ui(
         return f"❌ 人工評判保存失敗：{exc}", [], [], current
     correct = sum(bool(item.get("passed")) for item in current)
     return (
-        f"✅ 已保存人工評判變更 {changed} 筆；答對 {correct} / {len(current)} 個實驗題次。",
+        f"✅ 已保存人工評判變更 {changed} 筆、人工註記變更 {notes_changed} 筆；"
+        f"答對 {correct} / {len(current)} 個實驗題次。",
         summary, details, current,
     )
 
@@ -4078,8 +4093,8 @@ def build_app() -> gr.Blocks:
                 )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
-                headers=["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由"],
-                datatype=["number", "str", "str", "str", "str", "bool", "str"],
+                headers=["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由", "人工註記"],
+                datatype=["number", "str", "str", "str", "str", "bool", "str", "str"],
                 type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 6], wrap=True,
                 elem_classes=["evaluation-table", "evaluation-results-table"],
             )
@@ -4194,9 +4209,9 @@ def build_app() -> gr.Blocks:
             experiment_details_table = gr.Dataframe(
                 headers=[
                     "實驗組", "回答模型", "評測模型", "題號", "題目", "來源文件", "正確答案", "實際答案",
-                    "答案結果（勾選=正確）", "評判理由", "答案來源排名",
+                    "答案結果（勾選=正確）", "評判理由", "答案來源排名", "人工註記",
                 ],
-                datatype=["str", "str", "str", "number", "str", "str", "str", "str", "bool", "str", "number"],
+                datatype=["str", "str", "str", "number", "str", "str", "str", "str", "bool", "str", "number", "str"],
                 type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 5, 6, 7, 9, 10],
                 wrap=True, elem_classes=["evaluation-table", "evaluation-results-table"],
             )
