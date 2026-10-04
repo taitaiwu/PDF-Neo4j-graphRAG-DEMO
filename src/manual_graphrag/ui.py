@@ -3205,17 +3205,6 @@ def build_app() -> gr.Blocks:
                 datatype=["number", "str", "str", "str", "str"],
                 interactive=False, wrap=True,
             )
-            gr.Markdown("#### 全域評測設定（變更後自動儲存，套用至所有實驗組）")
-            with gr.Row():
-                experiment_judge_model = gr.Dropdown(
-                    choices=llm_choices, value=preferred_llm, allow_custom_value=False,
-                    label="全域評測模型", scale=2,
-                )
-                experiment_judge_effort = gr.Dropdown(
-                    choices=list(GPT_6_LUNA_REASONING_EFFORTS),
-                    value=DEFAULT_REASONING_EFFORT, label="評測推理強度",
-                    visible=preferred_llm == GPT_6_LUNA_MODEL, scale=1,
-                )
             gr.Markdown("#### 實驗組設定（直接編輯欄位；每次變更會自動儲存）")
             gr.Markdown("實驗組名稱　回答模型／推理強度　檢索模式　Top K　Reranker　擴展圖譜證據")
             experiment_group_rows: list[list[Any]] = []
@@ -3252,6 +3241,15 @@ def build_app() -> gr.Blocks:
                 experiment_max_concurrent_requests = gr.Number(
                     value=5, minimum=1, precision=0,
                     label="測試最大並行請求數", info=OLLAMA_CONCURRENCY_HINT,
+                )
+                experiment_judge_model = gr.Dropdown(
+                    choices=llm_choices, value=preferred_llm, allow_custom_value=False,
+                    label="全域評測模型", scale=2,
+                )
+                experiment_judge_effort = gr.Dropdown(
+                    choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                    value=DEFAULT_REASONING_EFFORT, label="評測推理強度",
+                    visible=preferred_llm == GPT_6_LUNA_MODEL, scale=1,
                 )
                 run_experiments_button = gr.Button("執行實驗", variant="primary")
             stop_experiments_button = gr.Button("停止實驗", variant="stop")
