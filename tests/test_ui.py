@@ -991,6 +991,51 @@ def test_import_questions_supports_json_and_csv(tmp_path, monkeypatch) -> None:
     assert csv_result[2]["dirty"] is False
     assert "已匯入並自動儲存" in csv_result[0]
 
+
+def test_import_without_file_preserves_existing_questions_and_results(monkeypatch) -> None:
+    evaluation = {
+        "questions": [{
+            "number": 1, "question": "現有題目", "expected_answer": "現有答案",
+            "source_pages": [4], "document": "manual.pdf",
+        }],
+        "results": [{
+            "number": 1, "question": "現有題目", "expected_answer": "現有答案",
+            "document": "manual.pdf", "actual_answer": "回答", "passed": True,
+            "reason": "正確",
+        }],
+    }
+    monkeypatch.setattr(ui, "save_project", lambda *_: pytest.fail("空匯入不應保存"))
+
+    status, question_rows, updated, result_rows = ui.import_evaluation_questions_for_ui(
+        "project", None, evaluation
+    )
+
+    assert status == "❌ 請選擇 JSON 或 CSV 題目檔。"
+    assert question_rows == [[1, "現有題目", "現有答案", "4", "manual.pdf"]]
+    assert updated == evaluation
+    assert result_rows[0][1:4] == ["現有題目", "現有答案", "manual.pdf"]
+
+
+def test_import_empty_file_preserves_existing_questions(tmp_path, monkeypatch) -> None:
+    empty_file = tmp_path / "empty.json"
+    empty_file.write_text("{\"questions\": []}", encoding="utf-8")
+    evaluation = {
+        "questions": [{
+            "number": 1, "question": "現有題目", "expected_answer": "現有答案",
+            "source_pages": [], "document": "",
+        }],
+        "results": [],
+    }
+    monkeypatch.setattr(ui, "save_project", lambda *_: pytest.fail("空匯入不應保存"))
+
+    status, question_rows, updated, _result_rows = ui.import_evaluation_questions_for_ui(
+        "project", str(empty_file), evaluation
+    )
+
+    assert status.startswith("❌ 匯入失敗：題目不可為空")
+    assert question_rows == [[1, "現有題目", "現有答案", "", ""]]
+    assert updated == evaluation
+
 def test_switch_document_cycles_through_documents() -> None:
     documents = [
         {"file_name": "a.pdf", "page_start": 1, "page_end": 2},

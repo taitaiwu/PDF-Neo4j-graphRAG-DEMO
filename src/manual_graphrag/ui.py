@@ -632,10 +632,22 @@ def save_evaluation_questions_for_ui(
 def import_evaluation_questions_for_ui(
     project_id: str, file_path: str | None, evaluation: dict[str, Any]
 ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
+    current = dict(evaluation or {})
+
+    def unchanged(
+        status: str,
+    ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
+        return (
+            status,
+            _evaluation_question_rows(current.get("questions") or []),
+            current,
+            _evaluation_result_rows(current.get("results") or []),
+        )
+
     if not project_id:
-        return "❌ 請先建立或載入專案。", [], evaluation or {}, []
+        return unchanged("❌ 請先建立或載入專案。")
     if not file_path:
-        return "❌ 請選擇 JSON 或 CSV 題目檔。", [], evaluation or {}, []
+        return unchanged("❌ 請選擇 JSON 或 CSV 題目檔。")
     try:
         path = Path(file_path)
         if path.suffix.lower() == ".json":
@@ -658,7 +670,7 @@ def import_evaluation_questions_for_ui(
             raise ValueError("只支援 .json 或 .csv 題目檔")
         questions = _questions_from_rows(rows)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
-        return f"❌ 匯入失敗：{exc}", [], evaluation or {}, []
+        return unchanged(f"❌ 匯入失敗：{exc}")
     updated = dict(evaluation or {})
     updated.update({"questions": questions, "results": [], "dirty": False})
     try:
