@@ -189,7 +189,7 @@ def test_all_concurrency_inputs_show_ollama_recommendation() -> None:
         if "最大並行請求數" in str(component.get("props", {}).get("label", ""))
     ]
 
-    assert len(concurrency_inputs) == 3
+    assert len(concurrency_inputs) == 4
     assert all(
         component["props"].get("info") == ui.OLLAMA_CONCURRENCY_HINT
         for component in concurrency_inputs
@@ -231,14 +231,14 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
         "2. PDF 與參數", "3. 建圖",
-        "4. 問答測試", "5. 自動問答測試", "6. 歷史紀錄",
+        "4. 問答測試", "5. 自動問答測試", "6. 實驗", "7. 歷史紀錄",
     }
     tabs = [
         component for component in app.config["components"]
         if component.get("props", {}).get("label") in protected_labels
     ]
 
-    assert len(tabs) == 5
+    assert len(tabs) == 6
     connection_tab = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("label") == "1. 連線設定"
@@ -257,7 +257,7 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
         if str(dependency.get("api_name", "")).startswith("workflow_tabs_for_ui")
     ]
     assert len(gate_dependencies) >= 5
-    assert all(len(dependency["outputs"]) == 5 for dependency in gate_dependencies)
+    assert all(len(dependency["outputs"]) == 6 for dependency in gate_dependencies)
 
 
 
@@ -370,7 +370,8 @@ def test_build_app_has_automatic_evaluation_page() -> None:
         component.get("props", {}).get("label") for component in app.config["components"]
     ]
     assert labels.index("4. 問答測試") < labels.index("5. 自動問答測試")
-    assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
+    assert labels.index("5. 自動問答測試") < labels.index("6. 實驗")
+    assert labels.index("6. 實驗") < labels.index("7. 歷史紀錄")
     components = app.config["components"]
     question_table_index = next(
         index for index, component in enumerate(components)
@@ -947,7 +948,7 @@ def test_edit_questions_auto_save_and_clear_results(monkeypatch) -> None:
     assert status.startswith("✅ 已自動儲存")
     assert state["dirty"] is False
     assert state["results"] == []
-    assert state["questions"][0]["number"] == 1
+    assert state["questions"][0]["number"] == 9
     assert state["questions"][0]["source_pages"] == [2, 3]
     assert captured["evaluation"] == state
     assert results == []
@@ -1055,6 +1056,100 @@ def test_import_empty_file_preserves_existing_questions(tmp_path, monkeypatch) -
     assert status.startswith("❌ 匯入失敗：題目不可為空")
     assert question_rows == [[1, "現有題目", "現有答案", "", "", ""]]
     assert updated == evaluation
+
+
+def test_import_experiment_questions_supports_question_set_fields(tmp_path) -> None:
+    question_file = tmp_path / "experiment.json"
+    question_file.write_text(json.dumps({"questions": [{
+        "number": 3,
+        "question": "問題？",
+        "expected_answer": "答案",
+        "question_source_pages": [1, 2],
+        "answer_source_pages": [3, 4],
+        "document": "manual.pdf",
+    }]}), encoding="utf-8")
+
+    status, rows, questions = ui.import_experiment_questions_for_ui(str(question_file))
+
+    assert status.startswith("✅ 已匯入 1 道")
+    assert rows == [[3, "問題？", "答案", "1, 2", "3, 4", "manual.pdf"]]
+    assert questions[0]["answer_source_pages"] == [3, 4]
+
+
+def test_experiment_import_without_file_preserves_current_question_set() -> None:
+    current = [{
+        "number": 1, "question": "保留題目", "expected_answer": "答案",
+        "question_source_pages": [1], "answer_source_pages": [2],
+        "document": "manual.pdf",
+    }]
+
+    status, rows, questions = ui.import_experiment_questions_for_ui(None, current)
+
+    assert status == "❌ 請選擇 JSON 或 CSV 題目集。"
+    assert rows == [[1, "保留題目", "答案", "1", "2", "manual.pdf"]]
+    assert questions == current
+
+
+def test_add_experiment_group_for_ui_stores_selected_settings() -> None:
+    status, rows, groups = ui.add_experiment_group_for_ui(
+        "混合擴展", "model-a", "混合檢索", 12, True, True, [],
+    )
+
+    assert status == "✅ 已加入「混合擴展」。"
+    assert rows == [["混合擴展", "model-a", "混合檢索", 12, "是", "是"]]
+    assert groups[0] == {
+        "name": "混合擴展", "answer_model": "model-a", "retrieval_mode": "混合檢索",
+        "top_k": 12, "use_reranker": True, "expand_evidence": True,
+    }
+
+
+def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatch) -> None:
+    captured = {"calls": [], "workers": 0}
+    real_executor = ui.ThreadPoolExecutor
+
+    def recording_executor(max_workers):
+        captured["workers"] = max_workers
+        return real_executor(max_workers=max_workers)
+
+    def fake_answer(*args):
+        captured["calls"].append(args)
+        page = 2 if args[9] == "題目一" else 3
+        return "✅ 完成", "實際答案", [[
+            "原文", "證據", "retriever", "0.9", f"manual.pdf：{page}",
+            "manual.pdf：99", "manual.pdf",
+        ]]
+
+    monkeypatch.setattr(ui, "resolve_model_credentials_for_ui", lambda _state, model: (model, "key"))
+    monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
+    monkeypatch.setattr(ui, "answer_question_for_ui", fake_answer)
+    monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *_: {"passed": True, "reason": "正確"})
+    questions = [
+        {"number": 1, "question": "題目一", "expected_answer": "答案一",
+         "answer_source_pages": [2], "document": "manual.pdf"},
+        {"number": 2, "question": "題目二", "expected_answer": "答案二",
+         "answer_source_pages": [3], "document": "manual.pdf"},
+    ]
+    groups = [
+        {"name": "向量", "answer_model": "model-a", "retrieval_mode": "基本向量檢索",
+         "top_k": 3, "use_reranker": False, "expand_evidence": False},
+        {"name": "混合擴展", "answer_model": "model-b", "retrieval_mode": "混合檢索",
+         "top_k": 12, "use_reranker": True, "expand_evidence": True},
+    ]
+
+    status, summaries, details, results = ui.run_experiment_groups_for_ui(
+        "project", questions, groups, 2, {}, "embed", "embed-key",
+        "bolt", "database", "user", "pass",
+    )
+
+    assert status.startswith("✅ 已完成 2 個實驗組")
+    assert summaries == [
+        ["向量", 2, "100.0%", "100.0%", "100.0%", "1.000"],
+        ["混合擴展", 2, "100.0%", "100.0%", "100.0%", "1.000"],
+    ]
+    assert len(details) == len(results) == 4
+    assert captured["workers"] == 2
+    assert {call[8] for call in captured["calls"]} == {"model-a", "model-b"}
+    assert {call[11] for call in captured["calls"]} == {3, 12}
 
 def test_switch_document_cycles_through_documents() -> None:
     documents = [

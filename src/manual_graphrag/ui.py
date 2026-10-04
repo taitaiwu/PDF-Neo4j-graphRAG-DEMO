@@ -307,12 +307,12 @@ def workflow_tabs_for_ui(
         and has_available_service(llm_state)
         and has_available_service(embedding_state)
     )
-    return tuple(gr.update(interactive=enabled) for _ in range(5))
+    return tuple(gr.update(interactive=enabled) for _ in range(6))
 
 
 def lock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
     """Keep delete-project output compatibility; successful setup uses workflow_tabs_for_ui."""
-    return tuple(gr.update(interactive=False) for _ in range(5))
+    return tuple(gr.update(interactive=False) for _ in range(6))
 
 
 def delete_project_for_ui(
@@ -606,6 +606,13 @@ def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, (list, tuple)) or len(row) < 3:
             raise ValueError(f"第 {index} 列格式不正確")
+        raw_number = row[0] if row else index
+        try:
+            number = int(raw_number) if str(raw_number or "").strip() else index
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"第 {index} 題的題號必須是正整數") from exc
+        if number < 1:
+            raise ValueError(f"第 {index} 題的題號必須是正整數")
         question = str(row[1] or "").strip()
         answer = str(row[2] or "").strip()
         if not question or not answer:
@@ -625,7 +632,7 @@ def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
             if len(row) > document_index and row[document_index] is not None else ""
         )
         questions.append({
-            "number": index, "question": question,
+            "number": number, "question": question,
             "expected_answer": answer,
             "question_source_pages": question_pages,
             "answer_source_pages": answer_pages,
@@ -633,6 +640,92 @@ def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
             "document": document,
         })
     return questions
+
+
+def _questions_from_file(file_path: str) -> list[dict[str, Any]]:
+    path = Path(file_path)
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        items = payload.get("questions") if isinstance(payload, dict) else payload
+        if not isinstance(items, list):
+            raise ValueError("JSON 必須是題目陣列或包含 questions 陣列")
+        rows = [[
+            item.get("number", index), item.get("question", ""),
+            item.get("expected_answer", ""),
+            item.get("question_source_pages", item.get("source_pages", [])),
+            item.get("answer_source_pages", item.get("source_pages", [])),
+            item.get("document", ""),
+        ] for index, item in enumerate(items, start=1) if isinstance(item, dict)]
+    elif path.suffix.lower() == ".csv":
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            items = list(csv.DictReader(handle))
+        rows = [[
+            item.get("number", index), item.get("question", ""),
+            item.get("expected_answer", ""),
+            item.get("question_source_pages", item.get("source_pages", "")),
+            item.get("answer_source_pages", item.get("source_pages", "")),
+            item.get("document", ""),
+        ] for index, item in enumerate(items, start=1)]
+    else:
+        raise ValueError("只支援 .json 或 .csv 題目檔")
+    return _questions_from_rows(rows)
+
+
+def import_experiment_questions_for_ui(
+    file_path: str | None,
+    current_questions: list[dict[str, Any]] | None = None,
+) -> tuple[str, list[list[object]], list[dict[str, Any]]]:
+    current = list(current_questions or [])
+    if not file_path:
+        return "❌ 請選擇 JSON 或 CSV 題目集。", _evaluation_question_rows(current), current
+    try:
+        questions = _questions_from_file(file_path)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        return f"❌ 匯入失敗：{exc}", _evaluation_question_rows(current), current
+    return f"✅ 已匯入 {len(questions)} 道題目。", _evaluation_question_rows(questions), questions
+
+
+def _experiment_group_rows(groups: list[dict[str, Any]]) -> list[list[object]]:
+    return [[
+        item["name"], item["answer_model"], item["retrieval_mode"], item["top_k"],
+        "是" if item["use_reranker"] else "否",
+        "是" if item["expand_evidence"] else "否",
+    ] for item in groups]
+
+
+def add_experiment_group_for_ui(
+    name: str | None,
+    answer_model: str | None,
+    retrieval_mode: str,
+    top_k: int | float,
+    use_reranker: bool,
+    expand_evidence: bool,
+    groups: list[dict[str, Any]] | None,
+) -> tuple[str, list[list[object]], list[dict[str, Any]]]:
+    current = list(groups or [])
+    model = str(answer_model or "").strip()
+    if not model:
+        return "❌ 請選擇回答模型。", _experiment_group_rows(current), current
+    group_name = str(name or "").strip() or f"實驗組 {len(current) + 1}"
+    if any(item["name"] == group_name for item in current):
+        return f"❌ 實驗組名稱「{group_name}」已存在。", _experiment_group_rows(current), current
+    if retrieval_mode not in {"基本向量檢索", "混合檢索"}:
+        return "❌ 請選擇有效的檢索模式。", _experiment_group_rows(current), current
+    try:
+        selected_top_k = int(top_k)
+    except (TypeError, ValueError, OverflowError):
+        return "❌ Top K 必須是整數。", _experiment_group_rows(current), current
+    if not 1 <= selected_top_k <= 50:
+        return "❌ Top K 必須介於 1 到 50。", _experiment_group_rows(current), current
+    current.append({
+        "name": group_name,
+        "answer_model": model,
+        "retrieval_mode": retrieval_mode,
+        "top_k": selected_top_k,
+        "use_reranker": bool(use_reranker),
+        "expand_evidence": bool(expand_evidence),
+    })
+    return f"✅ 已加入「{group_name}」。", _experiment_group_rows(current), current
 
 
 def save_evaluation_questions_for_ui(
@@ -673,30 +766,7 @@ def import_evaluation_questions_for_ui(
     if not file_path:
         return unchanged("❌ 請選擇 JSON 或 CSV 題目檔。")
     try:
-        path = Path(file_path)
-        if path.suffix.lower() == ".json":
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            items = payload.get("questions") if isinstance(payload, dict) else payload
-            if not isinstance(items, list):
-                raise ValueError("JSON 必須是題目陣列或包含 questions 陣列")
-            rows = [[item.get("number", index), item.get("question", ""),
-                     item.get("expected_answer", ""),
-                     item.get("question_source_pages", item.get("source_pages", [])),
-                     item.get("answer_source_pages", item.get("source_pages", [])),
-                     item.get("document", "")]
-                    for index, item in enumerate(items, start=1) if isinstance(item, dict)]
-        elif path.suffix.lower() == ".csv":
-            with path.open(encoding="utf-8-sig", newline="") as handle:
-                items = list(csv.DictReader(handle))
-            rows = [[item.get("number", index), item.get("question", ""),
-                     item.get("expected_answer", ""),
-                     item.get("question_source_pages", item.get("source_pages", "")),
-                     item.get("answer_source_pages", item.get("source_pages", "")),
-                     item.get("document", "")]
-                    for index, item in enumerate(items, start=1)]
-        else:
-            raise ValueError("只支援 .json 或 .csv 題目檔")
-        questions = _questions_from_rows(rows)
+        questions = _questions_from_file(file_path)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return unchanged(f"❌ 匯入失敗：{exc}")
     updated = dict(evaluation or {})
@@ -1062,6 +1132,119 @@ def run_evaluation_for_ui(
     except (OSError, ValueError) as exc:
         return f"❌ 測試已完成，但保存失敗：{exc}", _evaluation_result_rows(results), updated
     return _evaluation_summary(results), _evaluation_result_rows(results), updated
+
+
+def run_experiment_groups_for_ui(
+    project_id: str,
+    questions: list[dict[str, Any]],
+    groups: list[dict[str, Any]],
+    max_concurrent_requests: int | float,
+    llm_state: dict[str, Any],
+    embedding_api_base: str,
+    embedding_api_key: str,
+    neo4j_uri: str,
+    neo4j_database: str,
+    neo4j_username: str,
+    neo4j_password: str,
+    progress=gr.Progress(),
+) -> tuple[str, list[list[object]], list[list[object]], list[dict[str, Any]]]:
+    if not project_id:
+        return "❌ 請先建立或載入專案。", [], [], []
+    if not questions:
+        return "❌ 請先匯入題目集。", [], [], []
+    if not groups:
+        return "❌ 請至少加入一個實驗組。", [], [], []
+    try:
+        concurrency = int(max_concurrent_requests)
+    except (TypeError, ValueError, OverflowError):
+        return "❌ 測試最大並行請求數必須是整數。", [], [], []
+    if concurrency < 1:
+        return "❌ 測試最大並行請求數必須大於 0。", [], [], []
+
+    credentials: list[tuple[str, str]] = []
+    for group in groups:
+        endpoint, key = resolve_model_credentials_for_ui(llm_state, group["answer_model"])
+        if not endpoint:
+            return f"❌ 無法解析實驗組「{group['name']}」的回答模型服務。", [], [], []
+        credentials.append((endpoint, key))
+
+    tasks = [
+        (group_index, question_index)
+        for group_index in range(len(groups))
+        for question_index in range(len(questions))
+    ]
+    results: list[dict[str, Any] | None] = [None] * len(tasks)
+
+    def evaluate(task_index: int) -> dict[str, Any]:
+        group_index, question_index = tasks[task_index]
+        group = groups[group_index]
+        item = questions[question_index]
+        endpoint, key = credentials[group_index]
+        status, actual, evidence_rows = answer_question_for_ui(
+            endpoint, key, embedding_api_base, embedding_api_key,
+            neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            group["answer_model"], item["question"], group["retrieval_mode"],
+            int(group["top_k"]), group["use_reranker"], group["expand_evidence"],
+        )
+        rank = _retrieval_rank(item, evidence_rows)
+        if status.startswith("✅"):
+            try:
+                judgment = judge_evaluation_answer(
+                    endpoint, key, group["answer_model"], item["question"],
+                    item["expected_answer"], actual,
+                )
+            except ValueError as exc:
+                judgment = {"passed": False, "reason": f"評判失敗：{exc}"}
+        else:
+            judgment = {"passed": False, "reason": status}
+        return {
+            "group_index": group_index,
+            "group_name": group["name"],
+            "number": item.get("number", question_index + 1),
+            "question": item["question"],
+            "expected_answer": item["expected_answer"],
+            "document": item.get("document", ""),
+            "actual_answer": actual,
+            "retrieval_rank": rank,
+            "recall_at_5": rank is not None and rank <= 5,
+            "recall_at_10": rank is not None and rank <= 10,
+            "reciprocal_rank": 1 / rank if rank else 0.0,
+            **judgment,
+        }
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(tasks))) as executor:
+            futures = {
+                executor.submit(evaluate, index): index
+                for index in range(len(tasks))
+            }
+            for completed, future in enumerate(as_completed(futures), start=1):
+                results[futures[future]] = future.result()
+                progress(completed / len(tasks), desc=f"已完成 {completed} / {len(tasks)} 個實驗題次")
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ 實驗執行失敗：{exc}", [], [], []
+
+    completed_results = [result for result in results if result is not None]
+    summary_rows = []
+    for group_index, group in enumerate(groups):
+        group_results = [
+            item for item in completed_results if item["group_index"] == group_index
+        ]
+        total = len(group_results)
+        summary_rows.append([
+            group["name"], total,
+            f"{sum(bool(item['passed']) for item in group_results) / total:.1%}",
+            f"{sum(bool(item['recall_at_5']) for item in group_results) / total:.1%}",
+            f"{sum(bool(item['recall_at_10']) for item in group_results) / total:.1%}",
+            f"{sum(float(item['reciprocal_rank']) for item in group_results) / total:.3f}",
+        ])
+    detail_rows = [[
+        item["group_name"], item["number"], item["question"], item["document"],
+        item["expected_answer"], item["actual_answer"],
+        "✅ 通過" if item["passed"] else "❌ 未通過", item["reason"],
+        item["retrieval_rank"],
+    ] for item in completed_results]
+    return f"✅ 已完成 {len(groups)} 個實驗組，共 {len(tasks)} 個題次。", summary_rows, detail_rows, completed_results
 
 
 def _add_single_document(
@@ -2098,7 +2281,68 @@ def build_app() -> gr.Blocks:
                 elem_classes=["evaluation-table", "evaluation-results-table"],
             )
 
-        with gr.Tab("6. 歷史紀錄", interactive=False) as history_tab:
+        with gr.Tab("6. 實驗", interactive=False) as experiment_tab:
+            gr.Markdown(
+                "匯入同一份題目集，建立多個不同回答／檢索設定的實驗組，"
+                "再以相同題目比較答案正確率、Recall@5、Recall@10 與 MRR。"
+            )
+            experiment_questions_state = gr.State([])
+            experiment_groups_state = gr.State([])
+            experiment_results_state = gr.State([])
+            with gr.Row():
+                experiment_question_file = gr.File(
+                    label="題目集（JSON／CSV）", file_types=[".json", ".csv"], type="filepath"
+                )
+                import_experiment_questions_button = gr.Button("匯入實驗題目集")
+                experiment_question_status = gr.Markdown("尚未匯入題目集。")
+            experiment_questions_table = gr.Dataframe(
+                headers=["題號", "題目", "正確答案", "題目來源頁碼", "答案來源頁碼", "來源文件"],
+                datatype=["number", "str", "str", "str", "str", "str"],
+                interactive=False, wrap=True,
+            )
+            gr.Markdown("#### 新增實驗組")
+            with gr.Row():
+                experiment_group_name = gr.Textbox(label="實驗組名稱", placeholder="例如：向量檢索 Top 5")
+                experiment_answer_model = gr.Dropdown(
+                    choices=llm_choices, value=preferred_llm,
+                    allow_custom_value=False, label="回答模型",
+                )
+                experiment_retrieval_mode = gr.Radio(
+                    ["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式",
+                )
+                experiment_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
+            with gr.Row():
+                experiment_use_reranker = gr.Checkbox(value=False, label="使用 Reranker")
+                experiment_expand_evidence = gr.Checkbox(value=False, label="擴展圖譜證據")
+                add_experiment_group_button = gr.Button("加入實驗組")
+            experiment_groups_table = gr.Dataframe(
+                headers=["實驗組", "回答模型", "檢索模式", "Top K", "Reranker", "擴展圖譜證據"],
+                interactive=False, wrap=True,
+            )
+            experiment_group_status = gr.Markdown()
+            with gr.Row():
+                experiment_max_concurrent_requests = gr.Number(
+                    value=1, minimum=1, precision=0,
+                    label="測試最大並行請求數", info=OLLAMA_CONCURRENCY_HINT,
+                )
+                run_experiments_button = gr.Button("執行實驗", variant="primary")
+            experiment_status = gr.Markdown()
+            gr.Markdown("#### 實驗組摘要")
+            experiment_summary_table = gr.Dataframe(
+                headers=["實驗組", "題數", "答案正確率", "Recall@5", "Recall@10", "MRR"],
+                interactive=False, wrap=True,
+            )
+            gr.Markdown("#### 逐題結果")
+            experiment_details_table = gr.Dataframe(
+                headers=[
+                    "實驗組", "題號", "題目", "來源文件", "正確答案", "實際答案",
+                    "答案結果", "評判理由", "答案來源排名",
+                ],
+                interactive=False, wrap=True,
+                elem_classes=["evaluation-table", "evaluation-results-table"],
+            )
+
+        with gr.Tab("7. 歷史紀錄", interactive=False) as history_tab:
             gr.Markdown("目前專案的問答紀錄；成功問答後會自動追加並保存。")
             project_history_status = gr.Markdown()
             history_table = gr.Dataframe(
@@ -2182,6 +2426,37 @@ def build_app() -> gr.Blocks:
                     evaluation_use_reranker, evaluation_expand_evidence],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
         )
+        import_experiment_questions_button.click(
+            import_experiment_questions_for_ui,
+            inputs=[experiment_question_file, experiment_questions_state],
+            outputs=[
+                experiment_question_status,
+                experiment_questions_table,
+                experiment_questions_state,
+            ],
+        )
+        add_experiment_group_button.click(
+            add_experiment_group_for_ui,
+            inputs=[
+                experiment_group_name, experiment_answer_model, experiment_retrieval_mode,
+                experiment_top_k, experiment_use_reranker, experiment_expand_evidence,
+                experiment_groups_state,
+            ],
+            outputs=[experiment_group_status, experiment_groups_table, experiment_groups_state],
+        )
+        run_experiments_button.click(
+            run_experiment_groups_for_ui,
+            inputs=[
+                project_selector, experiment_questions_state, experiment_groups_state,
+                experiment_max_concurrent_requests, llm_service_state,
+                selected_embedding_endpoint, selected_embedding_key,
+                neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            ],
+            outputs=[
+                experiment_status, experiment_summary_table, experiment_details_table,
+                experiment_results_state,
+            ],
+        )
 
         project_setting_inputs = [
             project_selector, documents_state, chunk_state, graph_state,
@@ -2251,12 +2526,14 @@ def build_app() -> gr.Blocks:
             outputs=schema_documents,
             show_progress="hidden",
         )
-        protected_tabs = [pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab]
+        protected_tabs = [
+            pdf_tab, graph_tab, qa_tab, evaluation_tab, experiment_tab, history_tab,
+        ]
         delete_project_event = delete_project_button.click(
             delete_project_for_ui,
             inputs=project_selector,
             outputs=[project_selector, project_state, project_status,
-                     pdf_tab, graph_tab, evaluation_tab, qa_tab, history_tab,
+                     pdf_tab, graph_tab, qa_tab, evaluation_tab, experiment_tab, history_tab,
                      delete_project_completed],
             js="""(projectId) => {
                 if (!window.confirm('確定要刪除此專案嗎？專案設定、PDF、圖譜、題庫與紀錄都會永久刪除。')) {
@@ -2319,7 +2596,7 @@ def build_app() -> gr.Blocks:
             )
         llm_model_fields = [
             graph_llm_model, extraction_llm_model, evaluation_generation_model,
-            evaluation_test_model, answer_model,
+            evaluation_test_model, answer_model, experiment_answer_model,
         ]
         llm_service_outputs = [
             llm_service_state, model_endpoint, api_key, llm_models_table,
