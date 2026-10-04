@@ -198,19 +198,19 @@ def test_evaluation_cannot_restore_unapproved_models(monkeypatch):
     assert loaded[4]["value"] == "gpt-4o-mini"
 
 
-def test_load_trims_removed_summary_model_role(tmp_path, monkeypatch):
+def test_load_migrates_profiles_for_experiment_model_role(tmp_path, monkeypatch):
     document = settings._default_document()
     for profile in document["services"]["llm"]["profiles"].values():
-        profile["models"] = ["legacy-model"] * 6
+        profile["models"] = ["legacy-model"] * 5
     path = tmp_path / "model_settings.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     monkeypatch.setattr(settings, "MODEL_SETTINGS_PATH", path)
 
     loaded = settings.load_service_settings("llm", dict(DEFAULTS))
 
-    assert settings.MODEL_COUNTS["llm"] == 5
-    assert loaded["profiles"]["OpenAI"]["models"] == ["legacy-model"] * 5
-    assert loaded["profiles"]["Ollama"]["models"] == ["legacy-model"] * 5
+    assert settings.MODEL_COUNTS["llm"] == 6
+    assert loaded["profiles"]["OpenAI"]["models"] == ["legacy-model"] * 6
+    assert loaded["profiles"]["Ollama"]["models"] == ["legacy-model"] * 6
 
 
 def test_profile_load_rejects_invalid_yaml_without_exposing_keys(tmp_path, monkeypatch):
@@ -288,10 +288,10 @@ def test_reload_restores_both_profiles_and_revokes_openai_connection(monkeypatch
     loaded = ui.reload_env_with_services_for_ui()
     assert loaded[3] == "OpenAI"
     assert loaded[6] == "llm-key"
-    assert loaded[16] == "OpenAI"
-    assert loaded[19] == "embedding-key"
+    assert loaded[17] == "OpenAI"
+    assert loaded[20] == "embedding-key"
     assert loaded[11]["choices"] == []
-    assert loaded[24]["choices"] == []
+    assert loaded[25]["choices"] == []
 
 
 def test_invalid_yaml_after_successful_connection_revokes_models(tmp_path, monkeypatch):

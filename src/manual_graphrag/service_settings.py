@@ -13,7 +13,7 @@ from .env_store import load_env, save_env
 
 
 MODEL_SETTINGS_PATH = Path("config/model_settings.yaml")
-MODEL_COUNTS = {"llm": 5, "embedding": 1}
+MODEL_COUNTS = {"llm": 6, "embedding": 1}
 PROVIDERS_BY_KIND = {"llm": ("OpenAI", "Ollama"), "embedding": ("OpenAI", "Ollama", "Voyage")}
 _SETTINGS_LOCK = RLock()
 DEFAULT_OPENAI_MODELS = {
@@ -25,7 +25,7 @@ DEFAULT_VOYAGE_MODELS = [
     "voyage-finance-2", "voyage-law-2",
 ]
 DEFAULT_SELECTIONS = {
-    "llm": ["gpt-4.1-mini"] * 5,
+    "llm": ["gpt-4.1-mini"] * 6,
     "embedding": ["text-embedding-3-small"],
 }
 
@@ -135,8 +135,9 @@ def load_service_settings(kind: str, env: dict[str, str] | None = None) -> dict[
         for provider in PROVIDERS_BY_KIND[kind]:
             profile = saved["profiles"][provider]
             rows, models = profile["rows"], profile["models"]
-            if kind == "llm" and isinstance(models, list) and len(models) == 6:
-                models = models[:5]
+            if kind == "llm" and isinstance(models, list) and len(models) == 5:
+                # Older profiles predate the experiment answer-model selector.
+                models = [*models, models[4]]
             if not isinstance(models, list) or len(models) != MODEL_COUNTS[kind] or any(model is not None and not isinstance(model, str) for model in models):
                 raise ValueError()
             if not isinstance(rows, list) or any(not isinstance(row, list) or len(row) != 2 or not isinstance(row[0], bool) or not isinstance(row[1], str) for row in rows):

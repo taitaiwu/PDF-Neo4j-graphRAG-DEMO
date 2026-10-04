@@ -284,6 +284,8 @@ def test_ollama_models_require_current_successful_fetch(tmp_path, monkeypatch) -
         "fetch", "Ollama", state, profile["base_url"], profile["api_key"],
         profile["rows"], *profile["models"],
     )
+    assert len(fetched) == 13
+    assert len(fetched[7:]) == 6
     assert settings.service_choices(fetched[0]) == ["local-model"]
     monkeypatch.setattr(ui, "list_models", lambda *args: (_ for _ in ()).throw(ValueError("offline")))
     failed = ui.service_action_for_ui(
