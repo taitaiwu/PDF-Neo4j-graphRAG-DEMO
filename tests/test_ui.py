@@ -1,3 +1,4 @@
+import csv
 import json
 from pathlib import Path
 from threading import Barrier, Lock
@@ -356,7 +357,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     question_table = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("headers")
-        == ["題號", "題目", "正確答案", "題目來源頁碼", "答案來源頁碼", "來源文件"]
+        == ["題號", "題目", "正確答案", "題目來源（文件與頁碼）", "答案來源（文件與頁碼）"]
     )
     assert any(
         str(dependency.get("api_name", "")).startswith("save_evaluation_questions_for_ui")
@@ -378,7 +379,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     question_table_index = next(
         index for index, component in enumerate(components)
         if component.get("props", {}).get("headers")
-        == ["題號", "題目", "正確答案", "題目來源頁碼", "答案來源頁碼", "來源文件"]
+        == ["題號", "題目", "正確答案", "題目來源（文件與頁碼）", "答案來源（文件與頁碼）"]
     )
     metrics_box_index = next(
         index for index, component in enumerate(components)
@@ -474,7 +475,7 @@ def test_build_app_has_independent_provider_switches_and_ollama_tables() -> None
     assert "⚡ 套用 Ollama 本機預設（省 token）" not in buttons
     assert not {"重新整理模型清單", "重新整理 Embedding 模型清單"} & buttons.keys()
     for label, provider_label, fetch_label, test_label, count in [
-        ("LLM 模型清單", "模型服務來源", "獲得模型清單", "測試模型服務連線", 5),
+        ("LLM 模型清單", "模型服務來源", "獲得模型清單", "測試模型服務連線", 6),
         ("Embedding 模型清單", "Embedding 服務來源", "獲得 Embedding 模型清單", "測試 Embedding 服務連線", 1),
     ]:
         table = next(c for c in components if c.get("props", {}).get("label") == label)
@@ -978,9 +979,8 @@ def test_save_and_export_edited_questions(tmp_path, monkeypatch) -> None:
         "number": 1,
         "question": "問題",
         "expected_answer": "答案",
-        "question_source_pages": [1],
-        "answer_source_pages": [2, 4],
-        "document": "manual.pdf",
+        "question_sources": [{"document_id": "", "document_name": "manual.pdf", "pages": [1]}],
+        "answer_sources": [{"document_id": "", "document_name": "manual.pdf", "pages": [2, 4]}],
     }
 
 
@@ -1034,7 +1034,7 @@ def test_import_without_file_preserves_existing_questions_and_results(monkeypatc
     )
 
     assert status == "❌ 請選擇 JSON 或 CSV 題目檔。"
-    assert question_rows == [[1, "現有題目", "現有答案", "4", "4", "manual.pdf"]]
+    assert question_rows == [[1, "現有題目", "現有答案", "manual.pdf：4", "manual.pdf：4"]]
     assert updated == evaluation
     assert result_rows[0][1:4] == ["現有題目", "現有答案", "manual.pdf"]
 
@@ -1056,7 +1056,7 @@ def test_import_empty_file_preserves_existing_questions(tmp_path, monkeypatch) -
     )
 
     assert status.startswith("❌ 匯入失敗：題目不可為空")
-    assert question_rows == [[1, "現有題目", "現有答案", "", "", ""]]
+    assert question_rows == [[1, "現有題目", "現有答案", "", ""]]
     assert updated == evaluation
 
 
@@ -1074,8 +1074,50 @@ def test_import_experiment_questions_supports_question_set_fields(tmp_path) -> N
     status, rows, questions = ui.import_experiment_questions_for_ui(str(question_file))
 
     assert status.startswith("✅ 已匯入 1 道")
-    assert rows == [[3, "問題？", "答案", "1, 2", "3, 4", "manual.pdf"]]
+    assert rows == [[3, "問題？", "答案", "manual.pdf：1, 2", "manual.pdf：3, 4"]]
     assert questions[0]["answer_source_pages"] == [3, 4]
+
+
+def test_import_and_roundtrip_cross_document_provenance(tmp_path) -> None:
+    question_file = tmp_path / "cross-document.json"
+    sources = [
+        {"document_id": "a" * 36, "document_name": "part-a.pdf", "pages": [2]},
+        {"document_id": "b" * 36, "document_name": "part-b.pdf", "pages": [7, 8]},
+    ]
+    question_file.write_text(json.dumps({"questions": [{
+        "number": 1, "question": "跨文件問題？", "expected_answer": "跨文件答案",
+        "question_sources": sources, "answer_sources": [sources[1]],
+    }]}), encoding="utf-8")
+
+    questions = ui._questions_from_file(str(question_file))
+    rows = ui._evaluation_question_rows(questions)
+    reparsed = ui._questions_from_rows(rows)
+
+    assert reparsed[0]["question_sources"] == sources
+    assert reparsed[0]["answer_sources"] == [sources[1]]
+    ranked = ui._retrieval_rank(reparsed[0], [
+        ["原文", "錯誤文件同頁", "", "0.9", "other.pdf：7", "other.pdf：2", "other.pdf"],
+        ["原文", "命中答案來源", "", "0.8", "part-b.pdf：7, 8", "part-b.pdf：9", "part-b.pdf"],
+    ])
+    assert ranked == 2
+    renamed_rank = ui._retrieval_rank(
+        reparsed[0], [["原文", "相同內容的新檔名", "", "0.9", "renamed.pdf：7, 8", "renamed.pdf：9", "renamed.pdf"]],
+        {"renamed.pdf": sources[1]["document_id"]},
+    )
+    assert renamed_rank == 1
+
+    csv_file = tmp_path / "cross-document.csv"
+    with csv_file.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[
+            "number", "question", "expected_answer", "question_sources", "answer_sources",
+        ])
+        writer.writeheader()
+        writer.writerow({
+            "number": 1, "question": "跨文件問題？", "expected_answer": "跨文件答案",
+            "question_sources": json.dumps(sources, ensure_ascii=False),
+            "answer_sources": json.dumps([sources[1]], ensure_ascii=False),
+        })
+    assert ui._questions_from_file(str(csv_file))[0]["answer_sources"] == [sources[1]]
 
 
 def test_experiment_import_without_file_preserves_current_question_set() -> None:
@@ -1088,7 +1130,7 @@ def test_experiment_import_without_file_preserves_current_question_set() -> None
     status, rows, questions = ui.import_experiment_questions_for_ui(None, current)
 
     assert status == "❌ 請選擇 JSON 或 CSV 題目集。"
-    assert rows == [[1, "保留題目", "答案", "1", "2", "manual.pdf"]]
+    assert rows == [[1, "保留題目", "答案", "manual.pdf：1", "manual.pdf：2"]]
     assert questions == current
 
 
@@ -1190,16 +1232,24 @@ def test_switch_document_wraps_around_and_handles_empty_list() -> None:
     assert status == "尚未解析任何 PDF。"
 
 
-def test_add_document_for_ui_initializes_active_document(monkeypatch) -> None:
+def test_add_document_for_ui_initializes_active_document(tmp_path, monkeypatch) -> None:
+    pdf_path = tmp_path / "manual.pdf"
+    pdf_path.write_bytes(b"pdf bytes")
     pages = [PageText(2, "two"), PageText(3, "three")]
     chunks = [
         TextChunk(1, "two", (2,), "manual.pdf"),
         TextChunk(2, "three", (3,), "manual.pdf"),
     ]
     monkeypatch.setattr(ui, "extract_pdf", lambda path: (pages, []))
-    monkeypatch.setattr(ui, "chunk_pages", lambda *args, **kwargs: chunks)
+    monkeypatch.setattr(
+        ui, "chunk_pages",
+        lambda *args, **kwargs: [
+            TextChunk(chunk.number, chunk.text, chunk.pages, kwargs["document"], kwargs["document_id"])
+            for chunk in chunks
+        ],
+    )
 
-    result = ui.add_document_for_ui("manual.pdf", 100, 0, [], [])
+    result = ui.add_document_for_ui(str(pdf_path), 100, 0, [], [])
     (
         status, rows, documents, stored_chunks, active_preview, active_chunks,
         document_status, documents_rows, pdf_reset, remove_choices,
@@ -1211,8 +1261,10 @@ def test_add_document_for_ui_initializes_active_document(monkeypatch) -> None:
     assert documents[0]["page_count"] == 2
     assert documents[0]["page_start"] == 2
     assert documents[0]["page_end"] == 3
-    assert stored_chunks == chunks
-    assert active_chunks == chunks
+    assert len(documents[0]["document_id"]) == 64
+    assert all(chunk.document_id == documents[0]["document_id"] for chunk in stored_chunks)
+    assert [chunk.text for chunk in stored_chunks] == [chunk.text for chunk in chunks]
+    assert active_chunks == stored_chunks
     assert active_preview["file_name"] == "manual.pdf"
     assert document_status == "文件 1 / 1：manual.pdf（第 2–3 頁），共 2 個 chunk。"
     assert documents_rows == [[False, "manual.pdf", "2–3", 2]]
@@ -1341,7 +1393,10 @@ def test_remove_document_for_ui_supports_multi_select(monkeypatch) -> None:
     assert "2 份文件" in status
 
 
-def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None:
+def test_add_document_for_ui_accepts_multiple_files_at_once(tmp_path, monkeypatch) -> None:
+    paths = [tmp_path / "a.pdf", tmp_path / "b.pdf"]
+    for path in paths:
+        path.write_bytes(path.name.encode())
     def fake_extract_pdf(path):
         name = Path(path).stem
         return [PageText(1, name)], []
@@ -1349,7 +1404,7 @@ def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None
     monkeypatch.setattr(ui, "extract_pdf", fake_extract_pdf)
 
     result = ui.add_document_for_ui(
-        ["a.pdf", "b.pdf"], 1500, 200, [], []
+        [str(path) for path in paths], 1500, 200, [], []
     )
     (
         status, rows, documents, chunks, active_preview, active_chunks,
@@ -1359,6 +1414,7 @@ def test_add_document_for_ui_accepts_multiple_files_at_once(monkeypatch) -> None
     assert [doc["file_name"] for doc in documents] == ["a.pdf", "b.pdf"]
     assert [chunk.number for chunk in chunks] == [1, 2]
     assert [chunk.document for chunk in chunks] == ["a.pdf", "b.pdf"]
+    assert len({chunk.document_id for chunk in chunks}) == 2
     assert active_preview["file_name"] == "b.pdf"
     assert "a.pdf" in status and "b.pdf" in status
     assert "2 份文件" in status

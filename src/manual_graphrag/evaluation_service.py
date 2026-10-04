@@ -243,6 +243,30 @@ def generate_evaluation_questions(
                 ))
             answer_pages = valid_pages(raw_answer_pages) or cited_chunk_pages
             question_pages = valid_pages(raw_question_pages) or answer_pages
+            def source_references(pages: list[int]) -> list[dict[str, Any]]:
+                references: list[dict[str, Any]] = []
+                for number in chunk_numbers:
+                    chunk = chunk_lookup[number]
+                    selected_pages = [page for page in chunk.pages if page in pages]
+                    if not selected_pages:
+                        continue
+                    key = (chunk.document_id, chunk.document)
+                    reference = next((
+                        value for value in references
+                        if (value["document_id"], value["document_name"]) == key
+                    ), None)
+                    if reference is None:
+                        reference = {
+                            "document_id": chunk.document_id,
+                            "document_name": chunk.document,
+                            "pages": [],
+                        }
+                        references.append(reference)
+                    reference["pages"] = list(dict.fromkeys([*reference["pages"], *selected_pages]))
+                return references
+
+            question_sources = source_references(question_pages)
+            answer_sources = source_references(answer_pages)
             candidate = {
                 "question": question,
                 "expected_answer": answer,
@@ -268,6 +292,8 @@ def generate_evaluation_questions(
                 "question_source_pages": question_pages,
                 "answer_source_pages": answer_pages,
                 "source_pages": answer_pages,
+                "question_sources": question_sources,
+                "answer_sources": answer_sources,
                 "source_chunk_numbers": chunk_numbers,
                 "document": document,
             })

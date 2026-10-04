@@ -15,6 +15,7 @@ class TextChunk:
     text: str
     pages: tuple[int, ...]
     document: str = ""
+    document_id: str = ""
 
 
 def chunk_pages(
@@ -23,6 +24,7 @@ def chunk_pages(
     chunk_overlap: int,
     *,
     document: str = "",
+    document_id: str = "",
     start_number: int = 1,
 ) -> list[TextChunk]:
     if chunk_size <= 0:
@@ -49,7 +51,9 @@ def chunk_pages(
         text = "".join(char for char, _ in section).strip()
         pages_in_chunk = tuple(dict.fromkeys(page for _, page in section))
         if text:
-            chunks.append(TextChunk(start_number + len(chunks), text, pages_in_chunk, document))
+            chunks.append(TextChunk(
+                start_number + len(chunks), text, pages_in_chunk, document, document_id
+            ))
         start += step
     return chunks
 

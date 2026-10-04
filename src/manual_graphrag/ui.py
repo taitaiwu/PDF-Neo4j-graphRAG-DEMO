@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -364,7 +365,8 @@ def reset_new_project_pdf_status_for_ui() -> str:
 
 def _chunk_dicts(chunks: list[TextChunk]) -> list[dict[str, Any]]:
     return [
-        {"number": c.number, "text": c.text, "pages": list(c.pages), "document": c.document}
+        {"number": c.number, "text": c.text, "pages": list(c.pages),
+         "document": c.document, "document_id": c.document_id}
         for c in chunks
     ]
 
@@ -373,10 +375,27 @@ def _stored_chunks(items: list[dict[str, Any]]) -> list[TextChunk]:
     return [
         TextChunk(
             int(i["number"]), str(i["text"]), tuple(i.get("pages") or []),
-            str(i.get("document", "")),
+            str(i.get("document", "")), str(i.get("document_id", "")),
         )
         for i in items
     ]
+
+
+def _document_ids_from_project(project: dict[str, Any]) -> dict[str, str]:
+    paths = {item.get("name"): item.get("path") for item in project.get("documents", [])}
+    result = {}
+    for document in project.get("documents_meta", []):
+        name = str(document.get("file_name") or "")
+        document_id = str(document.get("document_id") or "")
+        path = paths.get(name) or document.get("file_path")
+        if not document_id and path:
+            try:
+                document_id = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            except OSError:
+                pass
+        if name and document_id:
+            result[name] = document_id
+    return result
 
 
 def _document_rows(documents: list[dict[str, Any]]) -> list[list[object]]:
@@ -512,6 +531,14 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
     embedding_profile = embedding_settings["profiles"][embedding_settings["active"]]
     documents = project.get("documents_meta") or []
     chunks = _stored_chunks(project.get("chunks") or [])
+    document_ids = _document_ids_from_project(project)
+    chunks = [
+        chunk if chunk.document_id or chunk.document not in document_ids else TextChunk(
+            chunk.number, chunk.text, chunk.pages, chunk.document,
+            document_ids[chunk.document],
+        )
+        for chunk in chunks
+    ]
     graph = project.get("graph_state") or {}
     active_preview = documents[-1] if documents else {}
     active_chunks = [
@@ -577,9 +604,8 @@ def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ..
 def _evaluation_question_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
     return [[
         item["number"], item["question"], item["expected_answer"],
-        ", ".join(map(str, item.get("question_source_pages", item.get("source_pages", [])))),
-        ", ".join(map(str, item.get("answer_source_pages", item.get("source_pages", [])))),
-        item.get("document", ""),
+        _source_references_cell(item.get("question_sources") or _legacy_question_sources(item)),
+        _source_references_cell(item.get("answer_sources") or _legacy_answer_sources(item)),
     ] for item in questions]
 
 
@@ -595,6 +621,82 @@ def _parse_source_pages(value: Any, question_number: int, label: str) -> list[in
         raise ValueError(
             f"第 {question_number} 題的{label}必須是逗號分隔的整數"
         ) from exc
+
+
+def _source_references_cell(references: list[dict[str, Any]]) -> str:
+    lines = []
+    for reference in references:
+        name = str(reference.get("document_name") or reference.get("document") or "未標示文件")
+        document_id = str(reference.get("document_id") or "")
+        identity = f" [{document_id}]" if document_id else ""
+        pages = ", ".join(map(str, reference.get("pages", [])))
+        lines.append(f"{name}{identity}：{pages}")
+    return "\n".join(lines)
+
+
+def _legacy_question_sources(item: dict[str, Any]) -> list[dict[str, Any]]:
+    return _legacy_sources(item.get("question_source_pages", item.get("source_pages", [])), item.get("document", ""))
+
+
+def _legacy_answer_sources(item: dict[str, Any]) -> list[dict[str, Any]]:
+    return _legacy_sources(item.get("answer_source_pages", item.get("source_pages", [])), item.get("document", ""))
+
+
+def _legacy_sources(pages: Any, document: Any) -> list[dict[str, Any]]:
+    names = [name.strip() for name in re.split(r"[、\n]", str(document or "")) if name.strip()]
+    values = list(pages or []) if isinstance(pages, (list, tuple)) else [
+        value.strip() for value in str(pages or "").replace("，", ",").split(",") if value.strip()
+    ]
+    if values and not names:
+        names = [""]
+    return [{"document_id": "", "document_name": name, "pages": values} for name in names]
+
+
+def _parse_source_references(
+    value: Any, question_number: int, label: str, legacy_document: str = "",
+) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                pass
+        if isinstance(value, str):
+            parsed = []
+            for line in value.replace("\r", "").splitlines():
+                if not line.strip():
+                    continue
+                prefix, separator, page_text = line.rpartition("：")
+                if not separator:
+                    return _legacy_sources(
+                        _parse_source_pages(value, question_number, label), legacy_document
+                    )
+                match = re.fullmatch(r"(.*?)\s+\[([^\]]+)\]", prefix)
+                name, document_id = (match.group(1), match.group(2)) if match else (prefix, "")
+                parsed.append({
+                    "document_id": document_id, "document_name": name,
+                    "pages": _parse_source_pages(page_text, question_number, label),
+                })
+            value = parsed
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"第 {question_number} 題的{label}必須是文件與頁碼清單")
+    references = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            raise ValueError(f"第 {question_number} 題的{label}格式不正確")
+        name = str(raw.get("document_name", raw.get("document", "")) or "").strip()
+        document_id = str(raw.get("document_id", "") or "").strip()
+        pages = _parse_source_pages(raw.get("pages", []), question_number, label)
+        if not name and not document_id:
+            raise ValueError(f"第 {question_number} 題的{label}缺少來源文件")
+        reference = {"document_id": document_id, "document_name": name, "pages": pages}
+        existing = next((item for item in references if item["document_id"] == document_id and item["document_name"] == name), None)
+        if existing:
+            existing["pages"] = list(dict.fromkeys([*existing["pages"], *pages]))
+        else:
+            references.append(reference)
+    return references
 
 
 def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
@@ -617,27 +719,33 @@ def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
         answer = str(row[2] or "").strip()
         if not question or not answer:
             raise ValueError(f"第 {index} 題的問題與標準答案不可為空")
-        if len(row) >= 6:
+        if len(row) == 5:
+            question_sources = _parse_source_references(row[3], index, "題目來源")
+            answer_sources = _parse_source_references(row[4], index, "答案來源")
+        elif len(row) >= 6:
+            document = str(row[5] or "")
             question_pages = _parse_source_pages(row[3], index, "題目來源頁碼")
             answer_pages = _parse_source_pages(row[4], index, "答案來源頁碼")
-            document_index = 5
+            question_sources = _legacy_sources(question_pages, document)
+            answer_sources = _legacy_sources(answer_pages, document)
         else:
             legacy_pages = _parse_source_pages(
                 row[3] if len(row) > 3 else "", index, "來源頁碼"
             )
-            question_pages = answer_pages = legacy_pages
-            document_index = 4
-        document = (
-            str(row[document_index]).strip()
-            if len(row) > document_index and row[document_index] is not None else ""
-        )
+            document = str(row[4] or "") if len(row) > 4 else ""
+            question_sources = answer_sources = _legacy_sources(legacy_pages, document)
+        question_pages = list(dict.fromkeys(page for ref in question_sources for page in ref["pages"]))
+        answer_pages = list(dict.fromkeys(page for ref in answer_sources for page in ref["pages"]))
+        documents = list(dict.fromkeys(ref["document_name"] for ref in [*question_sources, *answer_sources] if ref["document_name"]))
         questions.append({
             "number": number, "question": question,
             "expected_answer": answer,
             "question_source_pages": question_pages,
             "answer_source_pages": answer_pages,
             "source_pages": answer_pages,
-            "document": document,
+            "question_sources": question_sources,
+            "answer_sources": answer_sources,
+            "document": "、".join(documents),
         })
     return questions
 
@@ -649,23 +757,25 @@ def _questions_from_file(file_path: str) -> list[dict[str, Any]]:
         items = payload.get("questions") if isinstance(payload, dict) else payload
         if not isinstance(items, list):
             raise ValueError("JSON 必須是題目陣列或包含 questions 陣列")
-        rows = [[
-            item.get("number", index), item.get("question", ""),
-            item.get("expected_answer", ""),
-            item.get("question_source_pages", item.get("source_pages", [])),
-            item.get("answer_source_pages", item.get("source_pages", [])),
-            item.get("document", ""),
-        ] for index, item in enumerate(items, start=1) if isinstance(item, dict)]
+        rows = [(
+            [item.get("number", index), item.get("question", ""), item.get("expected_answer", ""),
+             item.get("question_sources", []), item.get("answer_sources", [])]
+            if "question_sources" in item or "answer_sources" in item else
+            [item.get("number", index), item.get("question", ""), item.get("expected_answer", ""),
+             item.get("question_source_pages", item.get("source_pages", [])),
+             item.get("answer_source_pages", item.get("source_pages", [])), item.get("document", "")]
+        ) for index, item in enumerate(items, start=1) if isinstance(item, dict)]
     elif path.suffix.lower() == ".csv":
         with path.open(encoding="utf-8-sig", newline="") as handle:
             items = list(csv.DictReader(handle))
-        rows = [[
-            item.get("number", index), item.get("question", ""),
-            item.get("expected_answer", ""),
-            item.get("question_source_pages", item.get("source_pages", "")),
-            item.get("answer_source_pages", item.get("source_pages", "")),
-            item.get("document", ""),
-        ] for index, item in enumerate(items, start=1)]
+        rows = [(
+            [item.get("number", index), item.get("question", ""), item.get("expected_answer", ""),
+             item.get("question_sources", ""), item.get("answer_sources", "")]
+            if "question_sources" in item or "answer_sources" in item else
+            [item.get("number", index), item.get("question", ""), item.get("expected_answer", ""),
+             item.get("question_source_pages", item.get("source_pages", "")),
+             item.get("answer_source_pages", item.get("source_pages", "")), item.get("document", "")]
+        ) for index, item in enumerate(items, start=1)]
     else:
         raise ValueError("只支援 .json 或 .csv 題目檔")
     return _questions_from_rows(rows)
@@ -674,12 +784,14 @@ def _questions_from_file(file_path: str) -> list[dict[str, Any]]:
 def import_experiment_questions_for_ui(
     file_path: str | None,
     current_questions: list[dict[str, Any]] | None = None,
+    project_id: str = "",
 ) -> tuple[str, list[list[object]], list[dict[str, Any]]]:
     current = list(current_questions or [])
     if not file_path:
         return "❌ 請選擇 JSON 或 CSV 題目集。", _evaluation_question_rows(current), current
     try:
         questions = _questions_from_file(file_path)
+        questions = _attach_project_document_ids(questions, project_id)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return f"❌ 匯入失敗：{exc}", _evaluation_question_rows(current), current
     return f"✅ 已匯入 {len(questions)} 道題目。", _evaluation_question_rows(questions), questions
@@ -735,6 +847,7 @@ def save_evaluation_questions_for_ui(
         return "❌ 請先建立或載入專案。", evaluation or {}, []
     try:
         questions = _questions_from_rows(rows)
+        questions = _attach_project_document_ids(questions, project_id)
         updated = dict(evaluation or {})
         updated.update({"questions": questions, "results": [], "dirty": False})
         save_project(project_id, {"evaluation": updated})
@@ -767,6 +880,7 @@ def import_evaluation_questions_for_ui(
         return unchanged("❌ 請選擇 JSON 或 CSV 題目檔。")
     try:
         questions = _questions_from_file(file_path)
+        questions = _attach_project_document_ids(questions, project_id)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return unchanged(f"❌ 匯入失敗：{exc}")
     updated = dict(evaluation or {})
@@ -789,10 +903,7 @@ def export_evaluation_questions_for_ui(
         questions = _questions_from_rows(rows)
         export_questions = [{
             key: question[key]
-            for key in (
-                "number", "question", "expected_answer", "question_source_pages",
-                "answer_source_pages", "document",
-            )
+            for key in ("number", "question", "expected_answer", "question_sources", "answer_sources")
         } for question in questions]
         output = write_json(
             Path("data/projects") / project_id / "exports" / "questions.json",
@@ -864,28 +975,77 @@ def _source_values_for_document(display: str, documents: str, document: str) -> 
     return set()
 
 
-def _retrieval_rank(question: dict[str, Any], rows: list[list[object]]) -> int | None:
-    document = str(question.get("document") or "")
-    expected_pages = {
-        int(value) for value in question.get(
-            "answer_source_pages", question.get("source_pages", [])
-        )
-    }
-    if not document or not expected_pages:
+def _project_document_ids(project_id: str) -> dict[str, str]:
+    try:
+        project = load_project(project_id)
+    except (OSError, ValueError):
+        return {}
+    return _document_ids_from_project(project)
+
+
+def _attach_project_document_ids(
+    questions: list[dict[str, Any]], project_id: str,
+) -> list[dict[str, Any]]:
+    ids_by_name = _project_document_ids(project_id)
+    if not ids_by_name:
+        return questions
+    for question in questions:
+        for field in ("question_sources", "answer_sources"):
+            for reference in question.get(field, []):
+                name = str(reference.get("document_name") or "")
+                if not reference.get("document_id") and name in ids_by_name:
+                    reference["document_id"] = ids_by_name[name]
+    return questions
+
+
+def _retrieval_rank(
+    question: dict[str, Any], rows: list[list[object]],
+    document_ids_by_name: dict[str, str] | None = None,
+) -> int | None:
+    document_ids_by_name = document_ids_by_name or {}
+    references = question.get("answer_sources") or _legacy_answer_sources(question)
+    expected_sources: set[tuple[tuple[str, str], int]] = set()
+    for reference in references:
+        name = str(reference.get("document_name") or "")
+        document_id = str(reference.get("document_id") or "")
+        for page in reference.get("pages", []):
+            if document_id:
+                expected_sources.add((("id", document_id), int(page)))
+            if name:
+                expected_sources.add((("name", name), int(page)))
+    if not expected_sources:
+        document = str(question.get("document") or "")
+        expected_pages = {
+            int(value) for value in question.get(
+                "answer_source_pages", question.get("source_pages", [])
+            )
+        }
+        if document and expected_pages:
+            identity = (
+                ("id", document_ids_by_name[document])
+                if document in document_ids_by_name else ("name", document)
+            )
+            expected_sources = {(identity, page) for page in expected_pages}
+    if not expected_sources:
         return None
-    ranked_pages: list[tuple[str, int]] = []
-    seen_pages: set[tuple[str, int]] = set()
+    ranked_pages: list[tuple[tuple[str, str], int]] = []
+    seen_pages: set[tuple[tuple[str, str], int]] = set()
     for row in rows:
         documents = [value for value in re.split(r"[、\n]", str(row[6])) if value]
         for source_document in documents:
             pages = _source_values_for_document(row[4], row[6], source_document)
             for page in sorted(pages):
-                source = (source_document, page)
+                identity = (
+                    ("id", document_ids_by_name[source_document])
+                    if source_document in document_ids_by_name
+                    else ("name", source_document)
+                )
+                source = (identity, page)
                 if source not in seen_pages:
                     seen_pages.add(source)
                     ranked_pages.append(source)
-    for rank, (source_document, page) in enumerate(ranked_pages, start=1):
-        if source_document == document and page in expected_pages:
+    for rank, source in enumerate(ranked_pages, start=1):
+        if source in expected_sources:
             return rank
     return None
 
@@ -1085,6 +1245,7 @@ def run_evaluation_for_ui(
     concurrency = int(max_concurrent_requests)
     if concurrency < 1:
         return "❌ 測試最大並行請求數必須大於 0", [], evaluation
+    document_ids_by_name = _project_document_ids(project_id)
     def evaluate(item: dict[str, Any]) -> dict[str, Any]:
         status, actual, evidence_rows = answer_question_for_ui(
             model_endpoint, api_key, embedding_api_base, embedding_api_key,
@@ -1092,7 +1253,7 @@ def run_evaluation_for_ui(
             model, item["question"], retrieval_mode, max(int(top_k), 10),
             use_reranker, expand_evidence,
         )
-        retrieval_rank = _retrieval_rank(item, evidence_rows)
+        retrieval_rank = _retrieval_rank(item, evidence_rows, document_ids_by_name)
         if status.startswith("✅"):
             try:
                 judgment = judge_evaluation_answer(
@@ -1162,6 +1323,7 @@ def run_experiment_groups_for_ui(
         return "❌ 測試最大並行請求數必須大於 0。", [], [], []
 
     credentials: list[tuple[str, str]] = []
+    document_ids_by_name = _project_document_ids(project_id)
     for group in groups:
         endpoint, key = resolve_model_credentials_for_ui(llm_state, group["answer_model"])
         if not endpoint:
@@ -1186,7 +1348,7 @@ def run_experiment_groups_for_ui(
             group["answer_model"], item["question"], group["retrieval_mode"],
             int(group["top_k"]), group["use_reranker"], group["expand_evidence"],
         )
-        rank = _retrieval_rank(item, evidence_rows)
+        rank = _retrieval_rank(item, evidence_rows, document_ids_by_name)
         if status.startswith("✅"):
             try:
                 judgment = judge_evaluation_answer(
@@ -1258,11 +1420,12 @@ def _add_single_document(
     if any(doc.get("file_name") == file_name for doc in documents):
         return f"❌「{file_name}」：專案中已有同名文件，請先移除或重新命名後再上傳。", None, []
     try:
+        document_id = hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
         pages, empty_pages = extract_pdf(file_path)
         next_number = max((chunk.number for chunk in chunks), default=0) + 1
         new_chunks = chunk_pages(
             pages, parsed_chunk_size, parsed_chunk_overlap,
-            document=file_name, start_number=next_number,
+            document=file_name, document_id=document_id, start_number=next_number,
         )
         if not new_chunks:
             raise ValueError("PDF 沒有可解析文字；掃描文件需在後續版本加入 OCR。")
@@ -1272,6 +1435,7 @@ def _add_single_document(
     doc_state = {
         "file_path": file_path,
         "file_name": file_name,
+        "document_id": document_id,
         "page_count": len(pages),
         "page_start": parsed_start,
         "page_end": parsed_end,
@@ -1639,6 +1803,7 @@ def extract_graph_for_ui(
             {
                 "number": chunk.number, "text": chunk.text,
                 "pages": list(chunk.pages), "document": chunk.document,
+                "document_id": chunk.document_id,
             }
             for chunk in chunks
         ],
@@ -1700,6 +1865,7 @@ def _build_graph_evidence(
             "source_chunk_numbers": [number],
             "source_documents": [document] if document else [],
             "source_references": [{
+                "document_id": str(item.get("document_id", "")),
                 "document": document,
                 "chunk_numbers": [number],
                 "pages": item.get("pages", []),
@@ -2265,8 +2431,8 @@ def build_app() -> gr.Blocks:
             )
             gr.Markdown("#### 測試題目")
             evaluation_questions_table = gr.Dataframe(
-                headers=["題號", "題目", "正確答案", "題目來源頁碼", "答案來源頁碼", "來源文件"],
-                datatype=["number", "str", "str", "str", "str", "str"],
+                headers=["題號", "題目", "正確答案", "題目來源（文件與頁碼）", "答案來源（文件與頁碼）"],
+                datatype=["number", "str", "str", "str", "str"],
                 type="array", interactive=True, wrap=True,
                 elem_classes="evaluation-table",
             )
@@ -2296,8 +2462,8 @@ def build_app() -> gr.Blocks:
                 import_experiment_questions_button = gr.Button("匯入實驗題目集")
                 experiment_question_status = gr.Markdown("尚未匯入題目集。")
             experiment_questions_table = gr.Dataframe(
-                headers=["題號", "題目", "正確答案", "題目來源頁碼", "答案來源頁碼", "來源文件"],
-                datatype=["number", "str", "str", "str", "str", "str"],
+                headers=["題號", "題目", "正確答案", "題目來源（文件與頁碼）", "答案來源（文件與頁碼）"],
+                datatype=["number", "str", "str", "str", "str"],
                 interactive=False, wrap=True,
             )
             gr.Markdown("#### 新增實驗組")
@@ -2428,7 +2594,7 @@ def build_app() -> gr.Blocks:
         )
         import_experiment_questions_button.click(
             import_experiment_questions_for_ui,
-            inputs=[experiment_question_file, experiment_questions_state],
+            inputs=[experiment_question_file, experiment_questions_state, project_selector],
             outputs=[
                 experiment_question_status,
                 experiment_questions_table,

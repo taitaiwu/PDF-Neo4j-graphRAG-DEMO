@@ -866,18 +866,23 @@ def _merge_sources(
             if page not in item["source_pages"]:
                 item["source_pages"].append(page)
         document = chunk_lookup[number].document
+        document_id = chunk_lookup[number].document_id
         if document and document not in item["source_documents"]:
             item["source_documents"].append(document)
         reference = next(
             (
                 value
                 for value in item["source_references"]
-                if value["document"] == document
+                if value.get("document_id", "") == document_id
+                and value.get("document", "") == document
             ),
             None,
         )
         if reference is None:
-            reference = {"document": document, "chunk_numbers": [], "pages": []}
+            reference = {
+                "document_id": document_id, "document": document,
+                "chunk_numbers": [], "pages": [],
+            }
             item["source_references"].append(reference)
         if number not in reference["chunk_numbers"]:
             reference["chunk_numbers"].append(number)

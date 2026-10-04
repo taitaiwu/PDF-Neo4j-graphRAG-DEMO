@@ -200,10 +200,14 @@ def test_generate_evaluation_questions_joins_multiple_source_documents(monkeypat
     monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
     questions = evaluation_service.generate_evaluation_questions(
         "http://models", "key", "model",
-        [TextChunk(1, "文件一", (1,), "a.pdf"), TextChunk(2, "文件二", (1,), "b.pdf")], 1
+        [TextChunk(1, "文件一", (1,), "a.pdf", "id-a"), TextChunk(2, "文件二", (1,), "b.pdf", "id-b")], 1
     )
 
     assert questions[0]["document"] == "a.pdf、b.pdf"
+    assert questions[0]["answer_sources"] == [
+        {"document_id": "id-a", "document_name": "a.pdf", "pages": [1]},
+        {"document_id": "id-b", "document_name": "b.pdf", "pages": [1]},
+    ]
 
 
 def test_generate_evaluation_questions_rejects_invalid_input() -> None:
