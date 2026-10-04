@@ -1304,6 +1304,64 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         str(dependency.get("api_name", "")).startswith("load_experiment_for_ui")
         for dependency in app.config["dependencies"]
     )
+    export_button = next(
+        component for component in components
+        if component.get("props", {}).get("value") == "匯出實驗結果 JSON"
+    )
+    assert any(
+        target[0] == export_button["id"]
+        for dependency in app.config["dependencies"]
+        if str(dependency.get("api_name", "")).startswith("export_experiment_results_for_ui")
+        for target in dependency["targets"]
+    )
+
+
+def test_export_experiment_results_includes_group_parameters_summary_and_details(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("experiment-export")
+    groups = [{
+        "name": "向量組", "answer_model": "model-a",
+        "retrieval_mode": "基本向量檢索", "top_k": 6,
+        "use_reranker": False, "expand_evidence": True,
+    }]
+    result = {
+        "group_index": 0, "group_name": "向量組", "number": 2,
+        "question": "問題二", "document": "manual.pdf", "expected_answer": "標準答案",
+        "actual_answer": "模型答案", "passed": True, "reason": "正確",
+        "retrieval_rank": 1, "recall_at_5": True, "recall_at_10": True,
+        "reciprocal_rank": 1.0,
+    }
+    ui.save_project(project["project_id"], {"experiment": {
+        "questions": [{"question": "問題二"}], "groups": groups,
+        "max_concurrent_requests": 5, "status": "實驗已完成",
+        "results": [result],
+        "summary_rows": [["向量組", 1, "100.0%", "100.0%", "100.0%", "1.000"]],
+        "detail_rows": [["向量組", 2, "問題二"]],
+    }})
+
+    status, file_path = ui.export_experiment_results_for_ui(project["project_id"])
+    payload = json.loads(Path(file_path).read_text(encoding="utf-8"))
+
+    assert status.startswith("✅ 已匯出 1 個實驗組")
+    assert payload["project"] == {
+        "project_id": project["project_id"], "name": "experiment-export",
+    }
+    assert payload["max_concurrent_requests"] == 5
+    assert payload["groups"][0] == {
+        "name": "向量組",
+        "parameters": {
+            "answer_model": "model-a", "retrieval_mode": "基本向量檢索",
+            "top_k": 6, "use_reranker": False, "expand_evidence": True,
+        },
+        "summary": {
+            "question_count": 1, "accuracy": "100.0%", "recall_at_5": "100.0%",
+            "recall_at_10": "100.0%", "mrr": "1.000",
+        },
+        "results": [{
+            key: value for key, value in result.items()
+            if key not in {"group_index", "group_name"}
+        }],
+    }
 
 
 def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatch) -> None:

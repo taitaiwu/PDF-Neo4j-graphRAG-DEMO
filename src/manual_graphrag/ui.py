@@ -1697,6 +1697,70 @@ def run_experiment_groups_for_ui(
     return status, summary_rows, detail_rows, completed_results
 
 
+def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
+    if not project_id:
+        return "❌ 請先建立或載入專案。", None
+    try:
+        project = load_project(project_id)
+        experiment = project.get("experiment") or {}
+        groups = experiment.get("groups") or []
+        results = experiment.get("results") or []
+        summary_rows = experiment.get("summary_rows") or []
+        if not summary_rows and not results:
+            return "❌ 尚無實驗結果可匯出。", None
+
+        summaries = {
+            str(row[0]): {
+                "question_count": row[1] if len(row) > 1 else 0,
+                "accuracy": row[2] if len(row) > 2 else None,
+                "recall_at_5": row[3] if len(row) > 3 else None,
+                "recall_at_10": row[4] if len(row) > 4 else None,
+                "mrr": row[5] if len(row) > 5 else None,
+            }
+            for row in summary_rows if row
+        }
+        result_fields = (
+            "number", "question", "document", "expected_answer", "actual_answer",
+            "passed", "reason", "retrieval_rank", "recall_at_5", "recall_at_10",
+            "reciprocal_rank",
+        )
+        exported_groups = []
+        for group_index, group in enumerate(groups):
+            name = str(group.get("name", ""))
+            group_results = [
+                {key: result.get(key) for key in result_fields if key in result}
+                for result in results
+                if result.get("group_index") == group_index
+                or ("group_index" not in result and result.get("group_name") == name)
+            ]
+            exported_groups.append({
+                "name": name,
+                "parameters": {
+                    key: group.get(key)
+                    for key in (
+                        "answer_model", "retrieval_mode", "top_k",
+                        "use_reranker", "expand_evidence",
+                    )
+                },
+                "summary": summaries.get(name, {"question_count": len(group_results)}),
+                "results": group_results,
+            })
+        payload = {
+            "project": {"project_id": project_id, "name": project.get("name", "")},
+            "status": experiment.get("status", ""),
+            "max_concurrent_requests": experiment.get("max_concurrent_requests", 5),
+            "question_count": len(experiment.get("questions") or []),
+            "groups": exported_groups,
+        }
+        output = write_json(
+            Path("data/projects") / project_id / "exports" / "experiment-results.json",
+            payload,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ 匯出失敗：{exc}", None
+    return f"✅ 已匯出 {len(exported_groups)} 個實驗組的結果 JSON。", str(output)
+
+
 def _add_single_document(
     file_path: str,
     parsed_chunk_size: int,
@@ -2815,6 +2879,10 @@ def build_app() -> gr.Blocks:
                 interactive=False, wrap=True,
                 elem_classes=["evaluation-table", "evaluation-results-table"],
             )
+            with gr.Row():
+                export_experiment_results_button = gr.Button("匯出實驗結果 JSON")
+                experiment_export_file = gr.File(label="實驗結果 JSON", interactive=False)
+            experiment_export_status = gr.Markdown()
 
         with gr.Tab("7. 歷史紀錄", interactive=False) as history_tab:
             gr.Markdown("目前專案的問答紀錄；成功問答後會自動追加並保存。")
@@ -2973,6 +3041,12 @@ def build_app() -> gr.Blocks:
             request_stop_for_ui,
             inputs=[experiment_run_control_state], outputs=experiment_status,
             queue=False,
+        )
+        export_experiment_results_button.click(
+            export_experiment_results_for_ui,
+            inputs=[project_selector],
+            outputs=[experiment_export_status, experiment_export_file],
+            show_progress="hidden",
         )
 
         project_setting_inputs = [
