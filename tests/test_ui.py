@@ -1731,16 +1731,16 @@ def test_evaluate_experiment_answers_and_manual_edit_recompute_summary(monkeypat
 
     assert status.startswith("✅ 評測完成")
     assert summaries[0][4:6] == ["1 / 1", "100.0%"]
-    assert details[0][8] is True
+    assert details[0][6] is True
     edited = [list(details[0])]
-    edited[0][8] = False
+    edited[0][6] = False
     manual_status, manual_summary, manual_details, updated = ui.update_manual_experiment_result_for_ui(
         "project", edited, results,
     )
 
     assert "人工評判變更 1 筆" in manual_status
     assert manual_summary[0][4:6] == ["0 / 1", "0.0%"]
-    assert manual_details[0][8] is False
+    assert manual_details[0][6] is False
     assert updated[0]["reason"] == "人工評判"
     assert saved["experiment"]["results"] == updated
 
@@ -1835,8 +1835,11 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         if "答案結果（勾選=正確）" in item.get("props", {}).get("headers", [])
     )
     assert result_table["props"]["interactive"] is True
-    assert result_table["props"]["datatype"][8] == "bool"
-    assert 8 not in result_table["props"]["static_columns"]
+    assert result_table["props"]["datatype"][6] == "bool"
+    assert "回答模型" not in result_table["props"]["headers"]
+    assert "評測模型" not in result_table["props"]["headers"]
+    assert len(result_table["props"]["headers"]) == 9
+    assert 6 not in result_table["props"]["static_columns"]
     assert any(
         str(dependency.get("api_name", "")).startswith("update_manual_experiment_result_for_ui")
         and any(tuple(target) == (result_table["id"], "input") for target in dependency.get("targets", []))
@@ -1978,14 +1981,18 @@ def test_experiment_reload_migrates_legacy_summary_rows_to_show_models(monkeypat
     monkeypatch.setattr(ui, "load_project", lambda _project_id: {"experiment": {
         "groups": groups,
         "summary_rows": [["舊組", 2, "50.0%", "100.0%", "100.0%", "1.000"]],
-        "detail_rows": [["舊組", 1, "Q", "manual.pdf", "A", "A", "✅ 通過", "正確", 1]],
+        "detail_rows": [[
+            "舊組", "answer-model", "answer-model", 1, "Q", "manual.pdf",
+            "A", "A", "✅ 通過", "正確", 1,
+        ]],
     }})
     monkeypatch.setattr(ui, "service_choice_items", lambda _state: [("answer-model", "answer-model")])
 
     loaded = ui.load_experiment_for_ui("project", {})
 
     assert loaded[6] == [["舊組", "answer-model", "answer-model", 2, "1 / 2", "50.0%", "100.0%", "100.0%", "1.000"]]
-    assert loaded[7][0][:3] == ["舊組", "answer-model", "answer-model"]
+    assert loaded[7][0][:3] == ["舊組", 1, "Q"]
+    assert loaded[7][0][6] is True
 
 
 def test_run_experiment_groups_stops_after_current_tasks_and_saves_partial_results(monkeypatch) -> None:

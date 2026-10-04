@@ -1396,18 +1396,16 @@ def load_experiment_for_ui(
         summary_rows.append(row)
     detail_rows = []
     for row in data.get("detail_rows", []):
-        group = group_by_name.get(str(row[0])) if row else None
-        if group and len(row) == 9:
-            detail_rows.append([
-                row[0], group.get("answer_model"),
-                group.get("judge_model") or group.get("answer_model"), *row[1:],
-            ])
+        if row and len(row) == 11:
+            # Older saved UI rows included the two model columns. Keep them in
+            # the result objects/export, but omit them from the visible table.
+            detail_rows.append([row[0], *row[3:]])
         else:
             detail_rows.append(row)
     if not results:
         for row in detail_rows:
-            if len(row) > 8 and isinstance(row[8], str):
-                row[8] = row[8].strip() in {"✅ 通過", "正確", "通過", "True", "true", "1"}
+            if len(row) > 6 and isinstance(row[6], str):
+                row[6] = row[6].strip() in {"✅ 通過", "正確", "通過", "True", "true", "1"}
     groups = [{
         key: value for key, value in group.items()
         if key not in {"judge_model", "judge_reasoning_effort"}
@@ -2464,8 +2462,7 @@ def _single_experiment_summary_rows(
 
 def _single_experiment_detail_rows(results: list[dict[str, Any]]) -> list[list[object]]:
     return [[
-        item["group_name"], item["answer_model"], item.get("judge_model", ""),
-        item["number"], item["question"], item.get("document", ""),
+        item["group_name"], item["number"], item["question"], item.get("document", ""),
         item["expected_answer"], item.get("actual_answer", ""),
         bool(item.get("passed")), item.get("reason", ""), item.get("retrieval_rank"),
     ] for item in results]
@@ -2660,9 +2657,9 @@ def update_manual_experiment_result_for_ui(
             raise ValueError("結果列數與實驗題次不符")
         changed = 0
         for item, row in zip(current, submitted):
-            if len(row) < 11:
+            if len(row) < 9:
                 raise ValueError("逐題結果欄位不完整")
-            value = row[8]
+            value = row[6]
             if isinstance(value, str):
                 normalized = value.strip().casefold()
                 if normalized in {"正確", "通過", "✅ 通過", "true", "1"}:
@@ -4193,11 +4190,11 @@ def build_app() -> gr.Blocks:
             gr.Markdown("#### 逐題結果")
             experiment_details_table = gr.Dataframe(
                 headers=[
-                    "實驗組", "回答模型", "評測模型", "題號", "題目", "來源文件", "正確答案", "實際答案",
+                    "實驗組", "題號", "題目", "來源文件", "正確答案", "實際答案",
                     "答案結果（勾選=正確）", "評判理由", "答案來源排名",
                 ],
-                datatype=["str", "str", "str", "number", "str", "str", "str", "str", "bool", "str", "number"],
-                type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 5, 6, 7, 9, 10],
+                datatype=["str", "number", "str", "str", "str", "str", "bool", "str", "number"],
+                type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 5, 7, 8],
                 wrap=True, elem_classes=["evaluation-table", "evaluation-results-table"],
             )
             with gr.Row():
