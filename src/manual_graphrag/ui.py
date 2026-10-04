@@ -138,6 +138,62 @@ def check_embedding_service_for_ui(base_url: str, api_key: str, model: str) -> s
     return "✅ Embedding 服務連線成功。"
 
 
+def test_all_connections_for_ui(
+    project_id: str,
+    neo4j_uri: str,
+    neo4j_database: str,
+    neo4j_username: str,
+    neo4j_password: str,
+    llm_provider: str,
+    llm_state: dict[str, Any],
+    model_endpoint: str,
+    api_key: str,
+    llm_rows: list[list[Any]],
+    embedding_provider: str,
+    embedding_state: dict[str, Any],
+    embedding_api_base: str,
+    embedding_api_key: str,
+    embedding_rows: list[list[Any]],
+    *models: str | None,
+) -> tuple[Any, ...]:
+    database = neo4j_database
+    if project_id:
+        try:
+            project = load_project(project_id)
+            database = project.get("neo4j_database") or project_database_name(project_id)
+            neo4j_status, neo4j_connected = check_neo4j_for_ui(
+                neo4j_uri, database, neo4j_username, neo4j_password,
+            )
+        except (OSError, ValueError) as exc:
+            neo4j_status, neo4j_connected = f"❌ {exc}", False
+    else:
+        neo4j_status = "❌ 請先選擇專案以測試專案專屬 Neo4j Database。"
+        neo4j_connected = False
+
+    llm_models = list(models[:6])
+    embedding_models = list(models[6:7])
+    llm_state = dict(llm_state)
+    if llm_provider in llm_state.get("profiles", {}):
+        llm_state["active"] = llm_provider
+    embedding_state = dict(embedding_state)
+    if embedding_provider in embedding_state.get("profiles", {}):
+        embedding_state["active"] = embedding_provider
+    llm_action = "fetch" if llm_state.get("active") == "Ollama" else "test"
+    embedding_action = "fetch" if embedding_state.get("active") == "Ollama" else "test"
+    llm_outputs = service_action_for_ui(
+        llm_action, llm_provider, llm_state, model_endpoint, api_key,
+        llm_rows, *llm_models,
+    )
+    embedding_outputs = service_action_for_ui(
+        embedding_action, embedding_provider, embedding_state,
+        embedding_api_base, embedding_api_key, embedding_rows, *embedding_models,
+    )
+    return (
+        gr.update(value=database), neo4j_status, neo4j_connected,
+        *llm_outputs, *embedding_outputs,
+    )
+
+
 def selected_models_for_ui(rows: list[list[Any]] | None) -> list[str]:
     return list(dict.fromkeys(
         str(row[1]) for row in (rows or []) if len(row) == 2 and row[0] is True
@@ -325,8 +381,9 @@ def delete_project_for_ui(
             gr.update(), gr.update(), f"❌ {exc}",
             *lock_project_tabs_for_ui(project_id), False,
         )
+    choices = _project_choices()
     return (
-        gr.update(choices=_project_choices(), value=None), {},
+        gr.update(choices=choices, value=choices[0][1] if choices else None), {},
         f"✅ 已刪除專案「{name}」。", *lock_project_tabs_for_ui(""), True,
     )
 
@@ -334,7 +391,8 @@ def delete_project_for_ui(
 def refresh_projects_after_delete_for_ui(deleted: bool) -> dict[str, Any]:
     if not deleted:
         return gr.update()
-    return gr.update(choices=_project_choices(), value=None)
+    choices = _project_choices()
+    return gr.update(choices=choices, value=choices[0][1] if choices else None)
 
 
 def _project_choices() -> list[tuple[str, str]]:
@@ -354,7 +412,18 @@ def refresh_projects_for_ui(project: dict[str, Any] | None = None) -> dict[str, 
     available_ids = {project_id for _, project_id in choices}
     selected_id = str((project or {}).get("project_id") or "")
     return gr.update(
-        choices=choices, value=selected_id if selected_id in available_ids else None
+        choices=choices,
+        value=selected_id if selected_id in available_ids else choices[0][1] if choices else None,
+    )
+
+
+def ensure_project_selection_for_ui(project_id: str | None) -> dict[str, Any]:
+    choices = _project_choices()
+    available_ids = {available_id for _, available_id in choices}
+    selected_id = str(project_id or "")
+    return gr.update(
+        choices=choices,
+        value=selected_id if selected_id in available_ids else choices[0][1] if choices else None,
     )
 
 
@@ -2401,6 +2470,7 @@ def build_app() -> gr.Blocks:
     llm_profile = llm_settings["profiles"][llm_settings["active"]]
     embedding_profile = embedding_settings["profiles"][embedding_settings["active"]]
     preferred_llm = preferred_service_model(llm_settings)
+    project_choices = _project_choices()
     initial_llm_credentials = [
         resolve_model_credentials_for_ui(llm_settings, preferred_llm)
         for _ in llm_profile["models"]
@@ -2430,7 +2500,9 @@ def build_app() -> gr.Blocks:
             gr.Markdown("### 專案工作區\n建立或載入專案後，可保存本頁面所有連線、模型、參數、Chunk、文件、建圖狀態與問答紀錄。")
             with gr.Row():
                 project_selector = gr.Dropdown(
-                    choices=_project_choices(), label="現有專案", interactive=True
+                    choices=project_choices,
+                    value=project_choices[0][1] if project_choices else None,
+                    label="現有專案", interactive=True,
                 )
                 load_project_button = gr.Button("載入專案", variant="primary")
             with gr.Row():
@@ -2442,6 +2514,7 @@ def build_app() -> gr.Blocks:
             gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Neo4j Password 為明文；模型 API Key 僅保存在 `.env`。")
 
         with gr.Tab("1. 連線設定"):
+            one_click_connection_test_button = gr.Button("一鍵測試", variant="primary")
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Neo4j")
@@ -3062,6 +3135,11 @@ def build_app() -> gr.Blocks:
         ]
         project_tab.select(refresh_projects_for_ui, inputs=project_state, outputs=project_selector)
         app.load(refresh_projects_for_ui, inputs=project_state, outputs=project_selector)
+        project_selector.input(
+            ensure_project_selection_for_ui,
+            inputs=project_selector, outputs=project_selector,
+            show_progress="hidden",
+        )
         create_project_event = create_project_button.click(
             create_project_for_ui, inputs=new_project_name,
             outputs=[project_selector, project_state, project_status],
@@ -3206,6 +3284,30 @@ def build_app() -> gr.Blocks:
                     outputs=[row[1] for row in experiment_group_rows],
                     show_progress="hidden",
                 )
+        all_connection_test_event = one_click_connection_test_button.click(
+            test_all_connections_for_ui,
+            inputs=[
+                project_selector, neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+                llm_provider, llm_service_state, model_endpoint, api_key, llm_models_table,
+                embedding_provider, embedding_service_state,
+                embedding_api_base, embedding_api_key, embedding_models_table,
+                *llm_model_fields, graph_embedding_model,
+            ],
+            outputs=[
+                neo4j_database, neo4j_connection_status, neo4j_connected_state,
+                *llm_service_outputs, *embedding_service_outputs,
+            ],
+            concurrency_id="service-settings",
+        )
+        all_connection_test_event.then(
+            workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
+            show_progress="hidden",
+        ).then(
+            refresh_experiment_model_choices_for_ui,
+            inputs=[llm_service_state, *[row[1] for row in experiment_group_rows]],
+            outputs=[row[1] for row in experiment_group_rows],
+            show_progress="hidden",
+        )
         for field, endpoint_state, key_state in [
             (graph_llm_model, schema_model_endpoint, schema_model_key),
             (extraction_llm_model, extraction_model_endpoint, extraction_model_key),
