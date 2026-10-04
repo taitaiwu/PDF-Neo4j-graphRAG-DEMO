@@ -847,6 +847,17 @@ def test_retrieval_rank_does_not_fall_back_to_chunk_without_expected_pages() -> 
     assert ui._retrieval_rank(question, rows) is None
 
 
+def test_retrieval_rank_counts_unique_document_pages() -> None:
+    question = {"document": "manual.pdf", "source_pages": [1]}
+    rows = [
+        ["原文", "第 2 頁證據 A", "", "0.9", "manual.pdf：2", "manual.pdf：4", "manual.pdf"],
+        ["原文", "第 2 頁證據 B", "", "0.8", "manual.pdf：2", "manual.pdf：5", "manual.pdf"],
+        ["原文", "第 1 頁證據", "", "0.7", "manual.pdf：1", "manual.pdf：6", "manual.pdf"],
+    ]
+
+    assert ui._retrieval_rank(question, rows) == 2
+
+
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(
         ui, "answer_question_for_ui",
@@ -883,6 +894,7 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     assert "答錯：0 題" in status
     assert "答案正確率：100.0%" in status
     assert "Recall@5：100.0%" in status
+    assert "Recall@10：100.0%" in status
     assert "MRR：1.000" in status
     assert rows[0][3:] == ["manual.pdf", "實際答案", "✅ 通過", "正確"]
     assert captured["test_workers"] == 2
@@ -916,7 +928,7 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
     assert captured["args"] == (
         "endpoint", "key", "embed-endpoint", "embed-key",
         "bolt", "neo4j", "user", "pass",
-        "model", "Q", "關聯擴展檢索", 8, False, False,
+        "model", "Q", "關聯擴展檢索", 10, False, False,
     )
 
 
@@ -1571,11 +1583,13 @@ def test_load_evaluation_restores_saved_summary(monkeypatch) -> None:
                     "number": 1, "question": "Q1", "expected_answer": "A1",
                     "document": "manual.pdf", "actual_answer": "A1", "passed": True,
                     "reason": "正確", "recall_at_5": True, "reciprocal_rank": 0.5,
+                    "retrieval_rank": 2,
                 },
                 {
                     "number": 2, "question": "Q2", "expected_answer": "A2",
                     "document": "manual.pdf", "actual_answer": "", "passed": False,
                     "reason": "錯誤", "recall_at_5": False, "reciprocal_rank": 0.0,
+                    "retrieval_rank": None,
                 },
             ],
         }
@@ -1586,6 +1600,7 @@ def test_load_evaluation_restores_saved_summary(monkeypatch) -> None:
     assert "已載入測試結果" in loaded[-1]
     assert "答案正確率：50.0%" in loaded[-1]
     assert "Recall@5：50.0%" in loaded[-1]
+    assert "Recall@10：50.0%" in loaded[-1]
     assert "MRR：0.250" in loaded[-1]
     assert len(loaded[2]) == 2
 

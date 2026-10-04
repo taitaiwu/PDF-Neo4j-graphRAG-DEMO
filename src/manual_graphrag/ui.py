@@ -702,6 +702,14 @@ def _evaluation_summary(results: list[dict[str, Any]], *, loaded: bool = False) 
     passed = sum(bool(item.get("passed")) for item in results)
     total = len(results)
     recall_at_5 = sum(bool(item.get("recall_at_5")) for item in results) / total
+    recall_at_10 = sum(
+        bool(item.get(
+            "recall_at_10",
+            item.get("retrieval_rank") is not None
+            and int(item["retrieval_rank"]) <= 10,
+        ))
+        for item in results
+    ) / total
     mrr = sum(float(item.get("reciprocal_rank", 0)) for item in results) / total
 
     document_totals: dict[str, list[int]] = {}
@@ -722,7 +730,7 @@ def _evaluation_summary(results: list[dict[str, Any]], *, loaded: bool = False) 
         f"## {heading}｜總共答對 {passed} 題 / {total} 題  "
         f"\n答錯：{failed} 題｜答案正確率：{accuracy:.1f}%"
         f"\n\n### 各 PDF 結果\n{document_summary}"
-        f"  \nRecall@5：{recall_at_5:.1%}｜MRR：{mrr:.3f}"
+        f"  \nRecall@5：{recall_at_5:.1%}｜Recall@10：{recall_at_10:.1%}｜MRR：{mrr:.3f}"
     )
 
 
@@ -744,9 +752,19 @@ def _retrieval_rank(question: dict[str, Any], rows: list[list[object]]) -> int |
     expected_pages = {int(value) for value in question.get("source_pages", [])}
     if not document or not expected_pages:
         return None
-    for rank, row in enumerate(rows, start=1):
-        pages = _source_values_for_document(row[4], row[6], document)
-        if pages & expected_pages:
+    ranked_pages: list[tuple[str, int]] = []
+    seen_pages: set[tuple[str, int]] = set()
+    for row in rows:
+        documents = [value for value in re.split(r"[、\n]", str(row[6])) if value]
+        for source_document in documents:
+            pages = _source_values_for_document(row[4], row[6], source_document)
+            for page in sorted(pages):
+                source = (source_document, page)
+                if source not in seen_pages:
+                    seen_pages.add(source)
+                    ranked_pages.append(source)
+    for rank, (source_document, page) in enumerate(ranked_pages, start=1):
+        if source_document == document and page in expected_pages:
             return rank
     return None
 
@@ -950,7 +968,7 @@ def run_evaluation_for_ui(
         status, actual, evidence_rows = answer_question_for_ui(
             model_endpoint, api_key, embedding_api_base, embedding_api_key,
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
-            model, item["question"], retrieval_mode, max(int(top_k), 5),
+            model, item["question"], retrieval_mode, max(int(top_k), 10),
             use_reranker, expand_evidence,
         )
         retrieval_rank = _retrieval_rank(item, evidence_rows)
@@ -969,6 +987,7 @@ def run_evaluation_for_ui(
             "actual_answer": actual,
             "retrieval_rank": retrieval_rank,
             "recall_at_5": retrieval_rank is not None and retrieval_rank <= 5,
+            "recall_at_10": retrieval_rank is not None and retrieval_rank <= 10,
             "reciprocal_rank": 1 / retrieval_rank if retrieval_rank else 0.0,
             **judgment,
         }
