@@ -1497,12 +1497,12 @@ def save_evaluation_questions_for_ui(
         questions = _preserve_source_document_ids(questions, (evaluation or {}).get("questions"))
         questions = _attach_project_document_ids(questions, project_id)
         updated = dict(evaluation or {})
-        updated.update({"questions": questions, "results": [], "dirty": False})
+        updated.update({"questions": questions, "results": [], "pending_answers": [], "dirty": False})
         save_project(project_id, {"evaluation": updated})
     except (OSError, ValueError) as exc:
         failed = dict(evaluation or {})
         if "questions" in locals():
-            failed.update({"questions": questions, "results": [], "dirty": True})
+            failed.update({"questions": questions, "results": [], "pending_answers": [], "dirty": True})
         return f"❌ {exc}；自動儲存失敗。", failed, []
     return f"✅ 已自動儲存 {len(questions)} 道題目。", updated, []
 
@@ -1532,7 +1532,7 @@ def import_evaluation_questions_for_ui(
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return unchanged(f"❌ 匯入失敗：{exc}")
     updated = dict(evaluation or {})
-    updated.update({"questions": questions, "results": [], "dirty": False})
+    updated.update({"questions": questions, "results": [], "pending_answers": [], "dirty": False})
     try:
         save_project(project_id, {"evaluation": updated})
     except (OSError, ValueError) as exc:
@@ -1572,9 +1572,40 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
         item["expected_answer"],
         item.get("document", ""),
         item.get("actual_answer", ""),
-        "✅ 通過" if item.get("passed") else "❌ 未通過",
+        bool(item.get("passed")),
         item.get("reason", ""),
     ] for item in results]
+
+
+def update_manual_evaluation_for_ui(
+    project_id: str, rows: Any, evaluation: dict[str, Any],
+) -> tuple[str, list[list[object]], dict[str, Any]]:
+    """Persist checkbox edits as manual judgments and refresh aggregate metrics."""
+    current = dict(evaluation or {})
+    results = [dict(item) for item in current.get("results") or []]
+    if not project_id or not results:
+        return "❌ 尚無可修改的測試結果。", _evaluation_result_rows(results), current
+    try:
+        submitted = rows.tolist() if hasattr(rows, "tolist") else list(rows or [])
+        if len(submitted) != len(results):
+            raise ValueError("結果列數與已評測題目不符")
+        changed = 0
+        for item, row in zip(results, submitted):
+            if len(row) < 7:
+                raise ValueError("測試結果欄位不完整")
+            passed = bool(row[5])
+            if passed != bool(item.get("passed")):
+                item["passed"] = passed
+                item["reason"] = "人工評判"
+                item["manual_judgment"] = True
+                changed += 1
+        current["results"] = results
+        save_project(project_id, {"evaluation": current})
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ 人工評判保存失敗：{exc}", _evaluation_result_rows(results), current
+    summary = _evaluation_summary(results)
+    return (f"{summary}\n\n✅ 已保存人工評判變更 {changed} 筆。",
+            _evaluation_result_rows(results), current)
 
 
 def _evaluation_summary(results: list[dict[str, Any]], *, loaded: bool = False) -> str:
@@ -1926,7 +1957,7 @@ def generate_evaluation_for_ui(
                             "expand_evidence": bool(expand_evidence),
                             "test_max_concurrent_requests": int(test_max_concurrent_requests),
                             "generation_reasoning_effort": reasoning_effort or DEFAULT_REASONING_EFFORT},
-            "questions": questions, "results": [], "dirty": False,
+            "questions": questions, "results": [], "pending_answers": [], "dirty": False,
         }
         save_project(project_id, {"evaluation": evaluation})
     except (OSError, TypeError, ValueError) as exc:
@@ -1935,6 +1966,125 @@ def generate_evaluation_for_ui(
         f"✅ 已從 {len(document_chunks)} 份 PDF 各建立 {count} 道題目，共 {len(questions)} 道。",
         _evaluation_question_rows(questions), evaluation, [],
     )
+
+
+def generate_evaluation_answers_for_ui(
+    project_id: str, model_endpoint: str, api_key: str,
+    embedding_api_base: str, embedding_api_key: str,
+    neo4j_uri: str, neo4j_database: str, neo4j_username: str, neo4j_password: str,
+    model: str, retrieval_mode: str, top_k: int, evaluation: dict[str, Any],
+    max_concurrent_requests: int = 3,
+    use_reranker: bool = False,
+    expand_evidence: bool = False,
+    answer_reasoning_effort: str | None = None,
+    progress=gr.Progress(),
+) -> tuple[str, dict[str, Any], list[list[object]]]:
+    """Generate and persist answers without exposing them in the results table."""
+    questions = (evaluation or {}).get("questions") or []
+    if not project_id:
+        return "❌ 請先建立或載入專案。", evaluation or {}, []
+    if not questions:
+        return "❌ 請先建立測試題目。", evaluation or {}, []
+    if (evaluation or {}).get("dirty"):
+        return "❌ 題目尚未完成自動儲存，請稍後再試。", evaluation, []
+    if not model:
+        return "❌ 請選擇回答模型。", evaluation, []
+    try:
+        concurrency = int(max_concurrent_requests)
+        if concurrency < 1:
+            raise ValueError("測試最大並行請求數必須大於 0")
+    except (TypeError, ValueError) as exc:
+        return f"❌ {exc}", evaluation, []
+
+    document_ids_by_name = _project_document_ids(project_id)
+
+    def answer(item: dict[str, Any]) -> dict[str, Any]:
+        status, actual, evidence_rows = answer_question_for_ui(
+            model_endpoint, api_key, embedding_api_base, embedding_api_key,
+            neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
+            model, item["question"], retrieval_mode, max(int(top_k), 10),
+            use_reranker, expand_evidence,
+            **_reasoning_effort_kwargs(model, answer_reasoning_effort),
+        )
+        rank = _retrieval_rank(item, evidence_rows, document_ids_by_name)
+        return {
+            **item,
+            "answer_model": model,
+            **_reasoning_effort_record(model, answer_reasoning_effort, "answer_reasoning_effort"),
+            "actual_answer": actual,
+            "answer_status": status,
+            "retrieval_rank": rank,
+            "recall_at_5": rank is not None and rank <= 5,
+            "recall_at_10": rank is not None and rank <= 10,
+            "reciprocal_rank": 1 / rank if rank else 0.0,
+        }
+
+    answers: list[dict[str, Any] | None] = [None] * len(questions)
+    try:
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {executor.submit(answer, item): index for index, item in enumerate(questions)}
+            for completed, future in enumerate(as_completed(futures), start=1):
+                answers[futures[future]] = future.result()
+                progress(completed / len(questions), desc=f"已生成 {completed} / {len(questions)} 題回答")
+        updated = dict(evaluation)
+        updated["pending_answers"] = [item for item in answers if item is not None]
+        updated["results"] = []
+        save_project(project_id, {"evaluation": updated})
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ 回答生成或保存失敗：{exc}", evaluation, []
+    return f"✅ 已生成並保存 {len(answers)} 題回答；尚未顯示，請按「進行評測」。", updated, []
+
+
+def evaluate_generated_answers_for_ui(
+    project_id: str, judge_model_endpoint: str, judge_api_key: str,
+    judge_model: str, evaluation: dict[str, Any],
+    judge_reasoning_effort: str | None = None,
+    progress=gr.Progress(),
+) -> tuple[str, list[list[object]], dict[str, Any]]:
+    """Judge saved answers and only then display the complete per-question results."""
+    current = dict(evaluation or {})
+    pending = current.get("pending_answers") or []
+    if not project_id:
+        return "❌ 請先建立或載入專案。", [], current
+    if not pending:
+        return "❌ 請先按「生成回答」完成回答生成。", [], current
+    if not judge_model or not judge_model_endpoint:
+        return "❌ 請選擇可用的評測模型。", [], current
+
+    def evaluate(item: dict[str, Any]) -> dict[str, Any]:
+        status = str(item.get("answer_status") or "")
+        if status.startswith("✅"):
+            try:
+                judgment = judge_evaluation_answer(
+                    judge_model_endpoint, judge_api_key, judge_model,
+                    item["question"], item["expected_answer"], item.get("actual_answer", ""),
+                    **_reasoning_effort_kwargs(judge_model, judge_reasoning_effort),
+                )
+            except ValueError as exc:
+                judgment = {"passed": False, "reason": f"評判失敗：{exc}"}
+        else:
+            judgment = {"passed": False, "reason": status or "回答生成失敗"}
+        return {
+            **item,
+            "judge_model": judge_model,
+            **_reasoning_effort_record(judge_model, judge_reasoning_effort, "judge_reasoning_effort"),
+            **judgment,
+        }
+
+    results: list[dict[str, Any] | None] = [None] * len(pending)
+    try:
+        with ThreadPoolExecutor(max_workers=min(8, len(pending))) as executor:
+            futures = {executor.submit(evaluate, item): index for index, item in enumerate(pending)}
+            for completed, future in enumerate(as_completed(futures), start=1):
+                results[futures[future]] = future.result()
+                progress(completed / len(pending), desc=f"已評測 {completed} / {len(pending)} 題")
+        final_results = [item for item in results if item is not None]
+        current["results"] = final_results
+        current["judge_model"] = judge_model
+        save_project(project_id, {"evaluation": current})
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ 評測或保存失敗：{exc}", [], current
+    return _evaluation_summary(final_results), _evaluation_result_rows(final_results), current
 
 
 def run_evaluation_for_ui(
@@ -3490,7 +3640,7 @@ def build_app() -> gr.Blocks:
         with gr.Tab("0-5 自動問答測試", interactive=False) as evaluation_tab:
             gr.Markdown(
                 "### 從 PDF 自動建立問答測試集\n"
-                "每份 PDF 建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
+                "每份 PDF 建立指定數量的題目與標準答案；先生成測試回答，再獨立進行模型評測。"
                 "勾選允許並行時，不同 PDF 可同時生題，但同一份 PDF 同時只會送出一個請求；未勾選時全部依序處理。"
             )
             with gr.Group():
@@ -3551,7 +3701,9 @@ def build_app() -> gr.Blocks:
                         label="測試最大並行請求數",
                         info=OLLAMA_CONCURRENCY_HINT,
                     )
-                run_evaluation_button = gr.Button("一鍵測試", variant="primary")
+                with gr.Row():
+                    generate_evaluation_answers_button = gr.Button("生成回答", variant="primary")
+                    run_evaluation_button = gr.Button("進行評測")
             with gr.Row():
                 evaluation_import_file = gr.File(
                     label="匯入題目（JSON／CSV）", file_types=[".json", ".csv"], type="filepath"
@@ -3590,8 +3742,9 @@ def build_app() -> gr.Blocks:
                 )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
-                headers=["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案結果", "評判理由"],
-                interactive=False, wrap=True,
+                headers=["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由"],
+                datatype=["number", "str", "str", "str", "str", "bool", "str"],
+                type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 6], wrap=True,
                 elem_classes=["evaluation-table", "evaluation-results-table"],
             )
 
@@ -3874,17 +4027,27 @@ def build_app() -> gr.Blocks:
             outputs=[evaluation_status, evaluation_questions_table,
                      evaluation_state, evaluation_results_table],
         )
-        run_evaluation_button.click(
-            run_evaluation_for_ui,
-            inputs=[project_selector, evaluation_model_endpoint, evaluation_model_key,
+        generate_evaluation_answers_button.click(
+            generate_evaluation_answers_for_ui,
+            inputs=[project_selector, answer_model_endpoint, answer_model_key,
                     selected_embedding_endpoint, selected_embedding_key,
                     neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
                     evaluation_test_model, evaluation_retrieval_mode,
                     evaluation_top_k, evaluation_state, evaluation_test_max_concurrent_requests,
-                    evaluation_use_reranker, evaluation_expand_evidence,
-                    evaluation_judge_endpoint, evaluation_judge_key, evaluation_judge_model,
-                    evaluation_test_effort, evaluation_judge_effort],
+                    evaluation_use_reranker, evaluation_expand_evidence, evaluation_test_effort],
+            outputs=[evaluation_status, evaluation_state, evaluation_results_table],
+        )
+        run_evaluation_button.click(
+            evaluate_generated_answers_for_ui,
+            inputs=[project_selector, evaluation_judge_endpoint, evaluation_judge_key,
+                    evaluation_judge_model, evaluation_state, evaluation_judge_effort],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
+        )
+        evaluation_results_table.input(
+            update_manual_evaluation_for_ui,
+            inputs=[project_selector, evaluation_results_table, evaluation_state],
+            outputs=[evaluation_status, evaluation_results_table, evaluation_state],
+            show_progress="hidden",
         )
         import_experiment_questions_button.click(
             import_experiment_questions_for_ui,

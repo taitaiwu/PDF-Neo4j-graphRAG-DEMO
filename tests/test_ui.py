@@ -252,7 +252,7 @@ def test_evaluation_results_table_uses_smaller_font_class() -> None:
         component
         for component in app.config["components"]
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案結果", "評判理由"]
+        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由"]
     )
     html_styles = "\n".join(
         str(component.get("props", {}).get("value", ""))
@@ -411,7 +411,8 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     ]
 
     assert "從 PDF 建立題目與答案" in values
-    assert "一鍵測試" in values
+    assert "生成回答" in values
+    assert "進行評測" in values
     assert "匯入題目" in values
     assert "儲存題目" not in values
     assert "匯出題目" in values
@@ -459,9 +460,18 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     result_table_index = next(
         index for index, component in enumerate(components)
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案結果", "評判理由"]
+        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由"]
     )
     assert question_table_index < metrics_box_index < result_title_index < result_table_index
+    results_table = components[result_table_index]
+    assert results_table["props"]["interactive"] is True
+    assert results_table["props"]["datatype"][5] == "bool"
+    assert 5 not in results_table["props"]["static_columns"]
+    assert any(
+        str(dependency.get("api_name", "")).startswith("update_manual_evaluation_for_ui")
+        and any(tuple(target) == (results_table["id"], "input") for target in dependency.get("targets", []))
+        for dependency in app.config["dependencies"]
+    )
 
 
 def test_build_app_has_manual_neo4j_import_button() -> None:
@@ -1013,9 +1023,80 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     assert "Recall@5：100.0%" in status
     assert "Recall@10：100.0%" in status
     assert "MRR：1.000" in status
-    assert rows[0][3:] == ["manual.pdf", "實際答案", "✅ 通過", "正確"]
+    assert rows[0][3:] == ["manual.pdf", "實際答案", True, "正確"]
     assert captured["test_workers"] == 2
     assert updated["results"][0]["passed"] is True
+    assert captured["evaluation"] == updated
+
+
+def test_generate_answers_defers_display_and_evaluation(monkeypatch) -> None:
+    captured = {}
+    answer_calls = []
+    monkeypatch.setattr(
+        ui, "answer_question_for_ui",
+        lambda *args: answer_calls.append(args) or ("✅ 完成", "隱藏的回答", []),
+    )
+    monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
+    evaluation = {"questions": [{"number": 1, "question": "Q", "expected_answer": "A"}]}
+
+    status, pending, rows = ui.generate_evaluation_answers_for_ui(
+        "project", "endpoint", "key", "embed", "embed-key", "bolt", "database",
+        "user", "pass", "answer-model", "基本向量檢索", 5, evaluation,
+    )
+
+    assert status.startswith("✅ 已生成並保存 1 題回答")
+    assert rows == []
+    assert pending["results"] == []
+    assert pending["pending_answers"][0]["actual_answer"] == "隱藏的回答"
+    assert len(answer_calls) == 1
+    assert captured["evaluation"] == pending
+
+
+def test_evaluation_judges_saved_answers_without_generating_again(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(ui, "answer_question_for_ui", lambda *_args: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *args: {"passed": True, "reason": "正確"})
+    monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
+    evaluation = {
+        "questions": [{"number": 1, "question": "Q", "expected_answer": "A"}],
+        "pending_answers": [{
+            "number": 1, "question": "Q", "expected_answer": "A",
+            "actual_answer": "回答內容", "answer_status": "✅ 完成",
+            "retrieval_rank": 1, "recall_at_5": True, "recall_at_10": True,
+            "reciprocal_rank": 1.0,
+        }],
+    }
+
+    status, rows, updated = ui.evaluate_generated_answers_for_ui(
+        "project", "judge-endpoint", "judge-key", "judge-model", evaluation,
+    )
+
+    assert "總共答對 1 題 / 1 題" in status
+    assert rows[0][4] == "回答內容"
+    assert rows[0][5] is True
+    assert updated["results"][0]["reason"] == "正確"
+    assert captured["evaluation"] == updated
+
+
+def test_manual_evaluation_edit_updates_reason_and_accuracy(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
+    evaluation = {"results": [
+        {"number": 1, "question": "Q1", "expected_answer": "A1", "passed": True, "reason": "正確"},
+        {"number": 2, "question": "Q2", "expected_answer": "A2", "passed": True, "reason": "正確"},
+    ]}
+    rows = ui._evaluation_result_rows(evaluation["results"])
+    rows[1][5] = False
+
+    status, updated_rows, updated = ui.update_manual_evaluation_for_ui("project", rows, evaluation)
+
+    assert "總共答對 1 題 / 2 題" in status
+    assert "答案正確率：50.0%" in status
+    assert "人工評判變更 1 筆" in status
+    assert updated["results"][0]["reason"] == "正確"
+    assert updated["results"][1]["passed"] is False
+    assert updated["results"][1]["reason"] == "人工評判"
+    assert updated_rows[1][5] is False
     assert captured["evaluation"] == updated
 
 
