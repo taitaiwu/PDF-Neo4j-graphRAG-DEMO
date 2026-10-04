@@ -1,7 +1,7 @@
 import csv
 import json
 from pathlib import Path
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock, Thread
 
 import gradio as gr
 import pytest
@@ -110,15 +110,26 @@ def test_pause_and_stop_buttons_bypass_the_queue() -> None:
         item for item in app.config["dependencies"]
         if str(item.get("api_name", "")).startswith("toggle_pause_for_ui")
     )
-    stop_dependency = next(
+    stop_dependencies = [
         item for item in app.config["dependencies"]
         if str(item.get("api_name", "")).startswith("request_stop_for_ui")
-    )
+    ]
     assert stop_button["props"]["variant"] == "stop"
     assert pause_dependency["queue"] is False
-    assert stop_dependency["queue"] is False
+    assert all(dependency["queue"] is False for dependency in stop_dependencies)
     assert any(target[0] == pause_button["id"] for target in pause_dependency["targets"])
-    assert any(target[0] == stop_button["id"] for target in stop_dependency["targets"])
+    assert any(
+        target[0] == stop_button["id"]
+        for dependency in stop_dependencies for target in dependency["targets"]
+    )
+    experiment_stop_button = next(
+        component for component in app.config["components"]
+        if component.get("props", {}).get("value") == "停止實驗"
+    )
+    assert any(
+        target[0] == experiment_stop_button["id"]
+        for dependency in stop_dependencies for target in dependency["targets"]
+    )
 
 
 def test_plan_schema_button_uses_primary_variant() -> None:
@@ -1238,6 +1249,21 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert restored[8]["value"] == "向量組"
 
 
+def test_experiment_default_concurrency_is_five(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("experiment-default-concurrency")
+
+    restored = ui.load_experiment_for_ui(project["project_id"], settings.load_service_settings("llm"))
+
+    assert restored[4] == 5
+    app = build_app()
+    concurrency_defaults = [
+        component for component in app.config["components"]
+        if component.get("props", {}).get("label") == "測試最大並行請求數"
+    ]
+    assert 5 in [component["props"]["value"] for component in concurrency_defaults]
+
+
 def test_inline_experiment_group_add_and_remove(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("experiment-rows")
@@ -1333,6 +1359,57 @@ def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatc
     assert saved["experiment"]["groups"] == groups
     assert saved["experiment"]["results"] == results
     assert saved["experiment"]["summary_rows"] == summaries
+
+
+def test_run_experiment_groups_stops_after_current_tasks_and_saves_partial_results(monkeypatch) -> None:
+    control = ui.RunControl()
+    started = Event()
+    release = Event()
+    calls = []
+    monkeypatch.setattr(ui, "resolve_model_credentials_for_ui", lambda *_: ("endpoint", "key"))
+
+    def blocking_answer(*args):
+        calls.append(args[9])
+        started.set()
+        assert release.wait(timeout=5)
+        return "✅ 完成", "答案", []
+
+    monkeypatch.setattr(ui, "answer_question_for_ui", blocking_answer)
+    monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *_: {"passed": True, "reason": "正確"})
+    saved = {}
+    monkeypatch.setattr(ui, "load_project", lambda _project_id: {"experiment": {}})
+    monkeypatch.setattr(ui, "save_project", lambda _project_id, payload: saved.update(payload) or {})
+    questions = [
+        {"number": i, "question": f"Q{i}", "expected_answer": "A"}
+        for i in range(1, 4)
+    ]
+    groups = [{
+        "name": "測試組", "answer_model": "model-a", "retrieval_mode": "混合檢索",
+        "top_k": 5, "use_reranker": False, "expand_evidence": False,
+    }]
+    returned = []
+
+    def run():
+        returned.extend(ui.run_experiment_groups_for_ui(
+            "project", questions, groups, 1, {}, "embed", "key",
+            "bolt", "database", "user", "pass", control,
+        ))
+
+    runner = Thread(target=run)
+    runner.start()
+    assert started.wait(timeout=5)
+    assert ui.request_stop_for_ui(control).startswith("⏹")
+    release.set()
+    runner.join(timeout=5)
+
+    assert not runner.is_alive()
+    assert returned[0].startswith("⏹ 實驗已停止")
+    assert "1 / 3" in returned[0]
+    assert len(returned[3]) == 1
+    assert len(calls) == 1
+    assert saved["experiment"]["results"] == returned[3]
+    assert saved["experiment"]["summary_rows"][0][1] == 1
+
 
 def test_switch_document_cycles_through_documents() -> None:
     documents = [
