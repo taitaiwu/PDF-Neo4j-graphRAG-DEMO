@@ -58,7 +58,10 @@ def test_model_fields_only_offer_initially_checked_models() -> None:
     assert all(not field["props"]["allow_custom_value"] for field in fields.values())
     for field in fields.values():
         for display, value in field["props"]["choices"]:
-            assert display in {f"OpenAI｜{value}", f"Ollama｜{value}"}
+            assert display in {
+                f"OpenAI｜{value}", f"Ollama｜{value}",
+                f"OpenAI｜{value}（目前不可用）" if value == "gpt-6-luna" else "",
+            }
 
 
 def test_graph_controls_are_above_schema_and_type_limit_fields_are_removed() -> None:
@@ -77,7 +80,7 @@ def test_graph_controls_are_above_schema_and_type_limit_fields_are_removed() -> 
     assert "最大關係類型數" not in labels
 
 
-def test_pages_three_through_five_default_all_llm_fields_to_gpt_4_1_mini(monkeypatch) -> None:
+def test_pages_three_through_five_default_judge_fields_to_luna(monkeypatch) -> None:
     monkeypatch.setattr(ui, "service_choices", lambda state: ["gpt-4.1-mini", "gpt-4o-mini"])
     monkeypatch.setattr(
         ui, "service_choice_items",
@@ -94,7 +97,12 @@ def test_pages_three_through_five_default_all_llm_fields_to_gpt_4_1_mini(monkeyp
         and component.get("props", {}).get("visible", True)
     ]
     assert len(fields) == 6
-    assert all(field["props"]["value"] == "gpt-4.1-mini" for field in fields)
+    assert all(
+        field["props"]["value"] == (
+            "gpt-6-luna" if field["props"].get("label") == "評測模型" else "gpt-4.1-mini"
+        )
+        for field in fields
+    )
 
 
 def test_pause_and_stop_buttons_bypass_the_queue() -> None:
@@ -453,6 +461,16 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     assert "#### 回答模型設定" in values
     assert "#### 評測模型設定" in values
     components = app.config["components"]
+    evaluation_judge_model = next(
+        component for component in components
+        if component.get("props", {}).get("label") == "評測模型"
+    )
+    experiment_judge_model = next(
+        component for component in components
+        if component.get("props", {}).get("label") == "全域評測模型"
+    )
+    assert evaluation_judge_model["props"]["value"] == "gpt-6-luna"
+    assert experiment_judge_model["props"]["value"] == "gpt-6-luna"
     labels = [component.get("props", {}).get("label") for component in components]
     values_by_component = [component.get("props", {}).get("value") for component in components]
     import_button_index = values_by_component.index("匯入題目")
@@ -1565,7 +1583,7 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert restored[13]["value"] is False
     assert restored[14]["value"] is True
     assert restored[15]["visible"] is True
-    assert restored[8 + ui.EXPERIMENT_GROUP_LIMIT * 8]["value"] == "gpt-4.1-mini"
+    assert restored[8 + ui.EXPERIMENT_GROUP_LIMIT * 8]["value"] == "gpt-6-luna"
 
 
 def test_luna_reasoning_controls_are_visible_only_for_luna_and_default_low() -> None:
@@ -1687,6 +1705,9 @@ def test_experiment_default_concurrency_is_five(tmp_path, monkeypatch) -> None:
     restored = ui.load_experiment_for_ui(project["project_id"], settings.load_service_settings("llm"))
 
     assert restored[4] == 5
+    judge_index = 8 + ui.EXPERIMENT_GROUP_LIMIT * 8
+    assert restored[judge_index]["value"] == "gpt-6-luna"
+    assert ("OpenAI｜gpt-6-luna（目前不可用）", "gpt-6-luna") in restored[judge_index]["choices"]
     app = build_app()
     components = app.config["components"]
     values = [component.get("props", {}).get("value") for component in components]
@@ -2806,8 +2827,17 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     assert loaded[10] is False
     assert loaded[11] == 3
     assert loaded[3:5] == ("legacy-model", "legacy-model")
-    assert loaded[12] == "legacy-model"
+    assert loaded[12] == "gpt-6-luna"
     assert loaded[6] == "混合檢索"
+
+
+def test_evaluation_judge_defaults_to_luna_without_saved_preference(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "load_project", lambda _project_id: {"evaluation": {}})
+
+    loaded = ui.load_evaluation_for_ui("project")
+
+    assert loaded[12] == "gpt-6-luna"
+    assert loaded[16]["visible"] is True
 
 
 def test_project_list_refreshes_on_page_load_and_tab_select_without_focus_rerender(tmp_path, monkeypatch) -> None:

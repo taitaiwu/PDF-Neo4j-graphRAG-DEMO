@@ -86,8 +86,22 @@ from .service_settings import (
 from .storage import write_json
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_EVALUATION_MODEL = GPT_6_LUNA_MODEL
 DEFAULT_REASONING_EFFORT = "low"
 OLLAMA_CONCURRENCY_HINT = "使用 Ollama 時建議設為 1。"
+
+
+def _model_choices_with_fallback(
+    choices: list[tuple[str, str]], model: str | None,
+) -> list[tuple[str, str]]:
+    result = list(choices)
+    if model and model not in {value for _, value in result}:
+        display = (
+            f"OpenAI｜{model}（目前不可用）" if model.casefold() == GPT_6_LUNA_MODEL
+            else f"{model}（目前不可用）"
+        )
+        result.append((display, model))
+    return result
 
 
 def reasoning_effort_visibility(model: str | None) -> dict[str, Any]:
@@ -329,9 +343,13 @@ def load_evaluation_with_services_for_ui(
     for index in (3, 4, 12):
         if not isinstance(values[index], dict):
             selected = values[index]
+            model_choices = (
+                _model_choices_with_fallback(choice_items, selected)
+                if index == 12 else list(choice_items)
+            )
             values[index] = gr.update(
-                choices=list(choice_items),
-                value=selected if selected in allowed else None,
+                choices=model_choices,
+                value=selected if index == 12 or selected in allowed else None,
             )
     answer_status, evaluate_update = _evaluation_answer_availability(values[0])
     return (*values, answer_status, evaluate_update)
@@ -1406,7 +1424,7 @@ def load_experiment_for_ui(
     groups = data.get("groups") or project.get("experiment_group_settings") or []
     global_judge_model = data.get("judge_model") or next(
         (group.get("judge_model") for group in groups if group.get("judge_model")),
-        groups[0].get("answer_model") if groups else preferred_service_model(llm_state),
+        DEFAULT_EVALUATION_MODEL,
     )
     global_judge_effort = data.get("judge_reasoning_effort") or next(
         (group.get("judge_reasoning_effort") for group in groups if group.get("judge_reasoning_effort")),
@@ -1476,9 +1494,9 @@ def load_experiment_for_ui(
             _save_experiment_data(project_id, migrated)
         except (OSError, TypeError, ValueError) as exc:
             status = f"⚠️ 已載入舊實驗設定，但自動轉為全域評測模型設定失敗：{exc}"
-    judge_choices = service_choice_items(llm_state)
-    if global_judge_model and global_judge_model not in {value for _, value in judge_choices}:
-        judge_choices.append((f"{global_judge_model}（目前不可用）", global_judge_model))
+    judge_choices = _model_choices_with_fallback(
+        service_choice_items(llm_state), global_judge_model,
+    )
     if results and all(
         "group_name" in item and "answer_model" in item
         and "question" in item and "expected_answer" in item
@@ -1904,6 +1922,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     questions = evaluation.get("questions") or []
     results = evaluation.get("results") or []
     legacy_model = preferences.get("model", DEFAULT_LLM_MODEL)
+    judge_model = preferences.get("judge_model") or DEFAULT_EVALUATION_MODEL
     return (
         evaluation, _evaluation_question_rows(questions), _evaluation_result_rows(results),
         preferences.get("generation_model", legacy_model),
@@ -1913,7 +1932,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         preferences.get("use_reranker", False),
         preferences.get("expand_evidence", False),
         preferences.get("test_max_concurrent_requests", 3),
-        preferences.get("judge_model", preferences.get("test_model", legacy_model)),
+        judge_model,
         preferences.get("judge_max_concurrent_requests", 3),
         gr.update(value=preferences.get("generation_reasoning_effort", DEFAULT_REASONING_EFFORT),
                   visible=str(preferences.get("generation_model", legacy_model) or "").casefold() == GPT_6_LUNA_MODEL,
@@ -1922,7 +1941,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
                   visible=str(preferences.get("test_model", legacy_model) or "").casefold() == GPT_6_LUNA_MODEL,
                   choices=list(GPT_6_LUNA_REASONING_EFFORTS)),
         gr.update(value=preferences.get("judge_reasoning_effort", DEFAULT_REASONING_EFFORT),
-                  visible=str(preferences.get("judge_model", preferences.get("test_model", legacy_model)) or "").casefold() == GPT_6_LUNA_MODEL,
+                  visible=str(judge_model or "").casefold() == GPT_6_LUNA_MODEL,
                   choices=list(GPT_6_LUNA_REASONING_EFFORTS)),
         (_evaluation_summary(results, loaded=True) if results else
          f"已載入 {len(questions)} 道題目與 0 筆測試結果。"),
@@ -3737,6 +3756,9 @@ def build_app() -> gr.Blocks:
     llm_settings = load_service_settings("llm", env)
     embedding_settings = load_service_settings("embedding", env)
     llm_choices = service_choice_items(llm_settings)
+    evaluation_judge_choices = _model_choices_with_fallback(
+        llm_choices, DEFAULT_EVALUATION_MODEL,
+    )
     embedding_choices = service_choice_items(embedding_settings)
     embedding_allowed = service_choices(embedding_settings)
     llm_profile = llm_settings["profiles"][llm_settings["active"]]
@@ -4181,13 +4203,13 @@ def build_app() -> gr.Blocks:
                 gr.Markdown("#### 評測模型設定")
                 with gr.Row():
                     evaluation_judge_model = gr.Dropdown(
-                        choices=llm_choices, value=preferred_llm,
+                        choices=evaluation_judge_choices, value=DEFAULT_EVALUATION_MODEL,
                         allow_custom_value=False, label="評測模型",
                     )
                     evaluation_judge_effort = gr.Dropdown(
                         choices=list(GPT_6_LUNA_REASONING_EFFORTS),
                         value=DEFAULT_REASONING_EFFORT, label="推理強度",
-                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
+                        visible=True,
                     )
                     evaluation_judge_max_concurrent_requests = gr.Number(
                         value=3, minimum=1, precision=0, label="最大並行請求數",
@@ -4287,13 +4309,13 @@ def build_app() -> gr.Blocks:
                 gr.Markdown("#### 評測模型設定")
                 with gr.Row():
                     experiment_judge_model = gr.Dropdown(
-                        choices=llm_choices, value=preferred_llm, allow_custom_value=False,
+                        choices=evaluation_judge_choices, value=DEFAULT_EVALUATION_MODEL, allow_custom_value=False,
                         label="全域評測模型", scale=2,
                     )
                     experiment_judge_effort = gr.Dropdown(
                         choices=list(GPT_6_LUNA_REASONING_EFFORTS),
                         value=DEFAULT_REASONING_EFFORT, label="評測推理強度",
-                        visible=preferred_llm == GPT_6_LUNA_MODEL, scale=1,
+                        visible=True, scale=1,
                     )
                     experiment_judge_max_concurrent_requests = gr.Number(
                         value=5, minimum=1, precision=0,
