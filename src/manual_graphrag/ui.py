@@ -1684,6 +1684,18 @@ def update_manual_evaluation_for_ui(
             _evaluation_result_rows(results), current)
 
 
+def manual_result_editability_for_ui(enabled: bool) -> dict[str, Any]:
+    """Unlock the result table only after an explicit user opt-in."""
+    return gr.update(interactive=bool(enabled))
+
+
+def reset_manual_result_editability_for_ui() -> tuple[dict[str, Any], ...]:
+    return (
+        gr.update(value=False), gr.update(interactive=False),
+        gr.update(value=False), gr.update(interactive=False),
+    )
+
+
 def _evaluation_summary(results: list[dict[str, Any]], *, loaded: bool = False) -> str:
     passed = sum(bool(item.get("passed")) for item in results)
     total = len(results)
@@ -4100,10 +4112,14 @@ def build_app() -> gr.Blocks:
                     elem_classes="evaluation-judge-button",
                 )
             gr.Markdown("#### 測試結果")
+            evaluation_manual_edit_enabled = gr.Checkbox(
+                value=False, label="啟用答案結果人工修改",
+                info="預設鎖定判定欄；勾選後才可修改逐題正確／錯誤結果。",
+            )
             evaluation_results_table = gr.Dataframe(
                 headers=["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由"],
                 datatype=["number", "str", "str", "str", "str", "bool", "str"],
-                type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 6], wrap=True,
+                type="array", interactive=False, static_columns=[0, 1, 2, 3, 4, 6], wrap=True,
                 elem_classes=["evaluation-table", "evaluation-results-table"],
             )
             with gr.Group(elem_classes="evaluation-metrics-box"):
@@ -4216,13 +4232,17 @@ def build_app() -> gr.Blocks:
                 interactive=False, wrap=True,
             )
             gr.Markdown("#### 逐題結果")
+            experiment_manual_edit_enabled = gr.Checkbox(
+                value=False, label="啟用答案結果人工修改",
+                info="預設鎖定判定欄；勾選後才可修改逐題正確／錯誤結果。",
+            )
             experiment_details_table = gr.Dataframe(
                 headers=[
                     "實驗組", "題號", "來源文件", "題目", "正確答案", "實際答案",
                     "答案結果（勾選=正確）", "評判理由",
                 ],
                 datatype=["str", "number", "str", "str", "str", "str", "bool", "str"],
-                type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 5, 7],
+                type="array", interactive=False, static_columns=[0, 1, 2, 3, 4, 5, 7],
                 wrap=True, elem_classes=["evaluation-table", "evaluation-results-table"],
             )
             with gr.Row():
@@ -4452,6 +4472,12 @@ def build_app() -> gr.Blocks:
                     evaluation_judge_max_concurrent_requests, evaluation_judge_effort],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
         )
+        evaluation_manual_edit_enabled.change(
+            manual_result_editability_for_ui,
+            inputs=evaluation_manual_edit_enabled,
+            outputs=evaluation_results_table,
+            show_progress="hidden",
+        )
         evaluation_results_table.input(
             update_manual_evaluation_for_ui,
             inputs=[project_selector, evaluation_results_table, evaluation_state],
@@ -4574,6 +4600,12 @@ def build_app() -> gr.Blocks:
             inputs=[project_selector, experiment_details_table, experiment_results_state],
             outputs=[experiment_status, experiment_summary_table,
                      experiment_details_table, experiment_results_state],
+            show_progress="hidden",
+        )
+        experiment_manual_edit_enabled.change(
+            manual_result_editability_for_ui,
+            inputs=experiment_manual_edit_enabled,
+            outputs=experiment_details_table,
             show_progress="hidden",
         )
         stop_experiments_button.click(
@@ -4750,6 +4782,11 @@ def build_app() -> gr.Blocks:
         project_selector.input(
             ensure_project_selection_for_ui,
             inputs=project_selector, outputs=project_selector,
+            show_progress="hidden",
+        ).then(
+            reset_manual_result_editability_for_ui,
+            outputs=[evaluation_manual_edit_enabled, evaluation_results_table,
+                     experiment_manual_edit_enabled, experiment_details_table],
             show_progress="hidden",
         )
         create_project_event = create_project_button.click(

@@ -261,6 +261,12 @@ def test_evaluation_results_table_uses_smaller_font_class() -> None:
     )
 
     assert "evaluation-results-table" in results_table["props"]["elem_classes"]
+    assert results_table["props"]["interactive"] is False
+    assert any(
+        component.get("props", {}).get("label") == "啟用答案結果人工修改"
+        and component.get("props", {}).get("value") is False
+        for component in app.config["components"]
+    )
     assert ".evaluation-results-table table" in html_styles
     assert "font-size: 14px !important" in html_styles
 
@@ -507,7 +513,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     )
     assert question_table_index < answer_heading_index < answer_availability_index < judge_heading_index < result_title_index < result_table_index
     results_table = components[result_table_index]
-    assert results_table["props"]["interactive"] is True
+    assert results_table["props"]["interactive"] is False
     assert results_table["props"]["datatype"][5] == "bool"
     assert 5 not in results_table["props"]["static_columns"]
     judge_button = next(
@@ -1846,7 +1852,7 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         item for item in components
         if "答案結果（勾選=正確）" in item.get("props", {}).get("headers", [])
     )
-    assert result_table["props"]["interactive"] is True
+    assert result_table["props"]["interactive"] is False
     assert result_table["props"]["datatype"][6] == "bool"
     assert "回答模型" not in result_table["props"]["headers"]
     assert "評測模型" not in result_table["props"]["headers"]
@@ -1854,6 +1860,20 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
     assert "答案來源排名" not in result_table["props"]["headers"]
     assert len(result_table["props"]["headers"]) == 8
     assert 6 not in result_table["props"]["static_columns"]
+    assert any(
+        component.get("props", {}).get("label") == "啟用答案結果人工修改"
+        and component.get("props", {}).get("value") is False
+        for component in components
+    )
+    edit_toggle = next(
+        component for component in components
+        if component.get("props", {}).get("label") == "啟用答案結果人工修改"
+    )
+    assert any(
+        str(dependency.get("api_name", "")).startswith("manual_result_editability_for_ui")
+        and any(tuple(target) == (edit_toggle["id"], "change") for target in dependency.get("targets", []))
+        for dependency in app.config["dependencies"]
+    )
     assert any(
         str(dependency.get("api_name", "")).startswith("update_manual_experiment_result_for_ui")
         and any(tuple(target) == (result_table["id"], "input") for target in dependency.get("targets", []))
