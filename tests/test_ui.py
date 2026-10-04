@@ -227,7 +227,7 @@ def test_all_concurrency_inputs_show_ollama_recommendation() -> None:
         if "最大並行請求數" in str(component.get("props", {}).get("label", ""))
     ]
 
-    assert len(concurrency_inputs) == 6
+    assert len(concurrency_inputs) == 7
     assert all(
         component["props"].get("info") == ui.OLLAMA_CONCURRENCY_HINT
         for component in concurrency_inputs
@@ -1392,7 +1392,7 @@ def test_import_experiment_questions_supports_question_set_fields(tmp_path, monk
         "groups": [{"name": "existing"}], "results": [{"passed": True}],
         "summary_rows": [["existing", 1]], "detail_rows": [["existing", 1]],
     }})
-    status, rows, questions, results, summaries, details, experiment_status = ui.import_experiment_questions_for_ui(
+    status, rows, questions, results, summaries, details, experiment_status, pending = ui.import_experiment_questions_for_ui(
         str(question_file), project_id=project["project_id"]
     )
 
@@ -1405,6 +1405,8 @@ def test_import_experiment_questions_supports_question_set_fields(tmp_path, monk
     assert persisted["questions"] == questions
     assert persisted["groups"] == [{"name": "existing"}]
     assert persisted["results"] == []
+    assert persisted["pending_answers"] == []
+    assert pending == []
 
 
 def test_import_and_roundtrip_cross_document_provenance(tmp_path) -> None:
@@ -1462,12 +1464,13 @@ def test_experiment_import_without_file_preserves_current_question_set() -> None
         "document": "manual.pdf",
     }]
 
-    status, rows, questions, results, summaries, details, _experiment_status = ui.import_experiment_questions_for_ui(None, current)
+    status, rows, questions, results, summaries, details, _experiment_status, pending = ui.import_experiment_questions_for_ui(None, current)
 
     assert status == "❌ 請選擇 JSON 或 CSV 題目集。"
     assert rows == [[1, "保留題目", "答案", "manual.pdf：1", "manual.pdf：2"]]
     assert questions == current
     assert results == summaries == details == []
+    assert pending == []
 
 
 def test_add_experiment_group_for_ui_stores_selected_settings() -> None:
@@ -1579,7 +1582,7 @@ def test_experiment_global_judge_settings_save_and_reload(tmp_path, monkeypatch)
     ui.save_project(project["project_id"], {"experiment": {"groups": groups}})
 
     assert ui.save_experiment_judge_settings_for_ui(
-        project["project_id"], "gpt-6-luna", "high",
+        project["project_id"], "gpt-6-luna", "high", 7,
     ).startswith("✅")
     loaded = ui.load_experiment_for_ui(
         project["project_id"], settings.load_service_settings("llm"),
@@ -1588,6 +1591,7 @@ def test_experiment_global_judge_settings_save_and_reload(tmp_path, monkeypatch)
     assert loaded[8 + ui.EXPERIMENT_GROUP_LIMIT * 8]["value"] == "gpt-6-luna"
     assert loaded[9 + ui.EXPERIMENT_GROUP_LIMIT * 8]["value"] == "high"
     assert loaded[9 + ui.EXPERIMENT_GROUP_LIMIT * 8]["visible"] is True
+    assert loaded[10 + ui.EXPERIMENT_GROUP_LIMIT * 8] == 7
     assert ui.load_project(project["project_id"])["experiment"]["groups"] == groups
     assert ui.load_project(project["project_id"])["experiment"]["judge_model"] == "gpt-6-luna"
 
@@ -1651,11 +1655,85 @@ def test_experiment_default_concurrency_is_five(tmp_path, monkeypatch) -> None:
 
     assert restored[4] == 5
     app = build_app()
+    components = app.config["components"]
+    values = [component.get("props", {}).get("value") for component in components]
+    answer_heading = values.index("#### 回答模型設定｜實驗組（直接編輯欄位；每次變更會自動儲存）")
+    summary_heading = values.index("#### 實驗組摘要")
     concurrency_defaults = [
-        component for component in app.config["components"]
-        if component.get("props", {}).get("label") == "測試最大並行請求數"
+        component["props"]["value"] for component in components[answer_heading:summary_heading]
+        if component.get("props", {}).get("label") == "最大並行請求數"
     ]
-    assert 5 in [component["props"]["value"] for component in concurrency_defaults]
+    assert concurrency_defaults == [5, 5]
+
+
+def test_experiment_answer_availability_tracks_pending_answers() -> None:
+    no_answers, disabled = ui._experiment_answer_availability([])
+    has_answers, enabled = ui._experiment_answer_availability([{"actual_answer": "A"}])
+
+    assert "尚未生成" in no_answers
+    assert disabled["interactive"] is False
+    assert "有 1 個實驗題次" in has_answers
+    assert enabled["interactive"] is True
+
+
+def test_generate_experiment_answers_does_not_judge_or_display(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(ui, "resolve_model_credentials_for_ui", lambda *_: ("answer-endpoint", "key"))
+    monkeypatch.setattr(ui, "answer_question_for_ui", lambda *_args: ("✅ 完成", "隱藏答案", []))
+    monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *_args: pytest.fail("回答生成階段不應評測"))
+    monkeypatch.setattr(ui, "load_project", lambda _project_id: {"experiment": {}})
+    monkeypatch.setattr(ui, "save_project", lambda _project_id, payload: captured.update(payload) or {})
+    questions = [{"number": 1, "question": "Q", "expected_answer": "A"}]
+    groups = [{
+        "name": "G", "answer_model": "answer-model", "retrieval_mode": "混合檢索",
+        "top_k": 8, "use_reranker": False, "expand_evidence": False,
+    }]
+
+    status, pending, results, summaries, details = ui.generate_experiment_answers_for_ui(
+        "project", questions, groups, 2, {}, "embed", "key", "bolt", "database", "user", "pass",
+    )
+
+    assert status.startswith("✅ 已生成 1 個實驗題次回答")
+    assert pending[0]["actual_answer"] == "隱藏答案"
+    assert results == summaries == details == []
+    assert captured["experiment"]["pending_answers"] == pending
+    assert captured["experiment"]["results"] == []
+
+
+def test_evaluate_experiment_answers_and_manual_edit_recompute_summary(monkeypatch) -> None:
+    group = {
+        "name": "G", "answer_model": "answer-model", "retrieval_mode": "混合檢索",
+        "top_k": 8, "use_reranker": False, "expand_evidence": False,
+    }
+    saved = {}
+    monkeypatch.setattr(ui, "load_project", lambda _project_id: {"experiment": {"groups": [group]}})
+    monkeypatch.setattr(ui, "save_project", lambda _project_id, payload: saved.update(payload) or {})
+    monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *_args: {"passed": True, "reason": "正確"})
+    pending = [{
+        "group_index": 0, "group_name": "G", "answer_model": "answer-model",
+        "number": 1, "question": "Q", "expected_answer": "A", "actual_answer": "答案",
+        "answer_status": "✅ 完成", "retrieval_rank": 1, "recall_at_5": True,
+        "recall_at_10": True, "reciprocal_rank": 1.0,
+    }]
+
+    status, results, summaries, details = ui.evaluate_experiment_answers_for_ui(
+        "project", pending, [group], "judge-model", "low", 3, "judge-endpoint", "judge-key",
+    )
+
+    assert status.startswith("✅ 評測完成")
+    assert summaries[0][4:6] == ["1 / 1", "100.0%"]
+    assert details[0][8] is True
+    edited = [list(details[0])]
+    edited[0][8] = False
+    manual_status, manual_summary, manual_details, updated = ui.update_manual_experiment_result_for_ui(
+        "project", edited, results,
+    )
+
+    assert "人工評判變更 1 筆" in manual_status
+    assert manual_summary[0][4:6] == ["0 / 1", "0.0%"]
+    assert manual_details[0][8] is False
+    assert updated[0]["reason"] == "人工評判"
+    assert saved["experiment"]["results"] == updated
 
 
 def test_inline_experiment_group_add_and_remove(tmp_path, monkeypatch) -> None:
@@ -1704,6 +1782,41 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         for component in components
     ) == 1
     assert any(component.get("props", {}).get("value") == "新增實驗組" for component in components)
+    answer_heading = next(
+        item for item in components
+        if item.get("props", {}).get("value") == "#### 回答模型設定｜實驗組（直接編輯欄位；每次變更會自動儲存）"
+    )
+    import_button = next(item for item in components if item.get("props", {}).get("value") == "匯入實驗題目集")
+    question_table = next(
+        item for item in components
+        if item.get("props", {}).get("headers")
+        == ["題號", "題目", "正確答案", "題目來源（文件與頁碼）", "答案來源（文件與頁碼）"]
+        and item["id"] > import_button["id"]
+    )
+    judge_heading = next(
+        item for item in components
+        if item.get("props", {}).get("value") == "#### 評測模型設定"
+        and item["id"] > answer_heading["id"]
+    )
+    summary_heading = next(
+        item for item in components if item.get("props", {}).get("value") == "#### 實驗組摘要"
+    )
+    assert question_table["id"] < answer_heading["id"] < judge_heading["id"] < summary_heading["id"]
+    evaluate_button = next(item for item in components if item.get("props", {}).get("value") == "進行評測")
+    assert evaluate_button["props"]["interactive"] is False
+    assert "evaluation-judge-button" in evaluate_button["props"]["elem_classes"]
+    result_table = next(
+        item for item in components
+        if "答案結果（勾選=正確）" in item.get("props", {}).get("headers", [])
+    )
+    assert result_table["props"]["interactive"] is True
+    assert result_table["props"]["datatype"][8] == "bool"
+    assert 8 not in result_table["props"]["static_columns"]
+    assert any(
+        str(dependency.get("api_name", "")).startswith("update_manual_experiment_result_for_ui")
+        and any(tuple(target) == (result_table["id"], "input") for target in dependency.get("targets", []))
+        for dependency in app.config["dependencies"]
+    )
     assert any(
         str(dependency.get("api_name", "")).startswith("load_experiment_for_ui")
         for dependency in app.config["dependencies"]
