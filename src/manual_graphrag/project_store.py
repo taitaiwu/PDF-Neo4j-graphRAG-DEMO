@@ -5,6 +5,7 @@ import hashlib
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from .storage import read_json, write_json
 
 PROJECTS_DIR = Path("data/projects")
 PROJECT_CONNECTION_SETTINGS = {"model_endpoint", "api_key"}
+_PROJECT_WRITE_LOCK = RLock()
 
 
 def project_database_name(project_id: str) -> str:
@@ -113,6 +115,16 @@ def save_project(
     document_paths: list[str] | None = None,
     root: str | Path = PROJECTS_DIR,
 ) -> dict[str, Any]:
+    with _PROJECT_WRITE_LOCK:
+        return _save_project_unlocked(project_id, payload, document_paths, root)
+
+
+def _save_project_unlocked(
+    project_id: str,
+    payload: dict[str, Any],
+    document_paths: list[str] | None = None,
+    root: str | Path = PROJECTS_DIR,
+) -> dict[str, Any]:
     current = load_project(project_id, root)
     project_dir = Path(root) / project_id
     documents = list(payload.get("documents", current.get("documents") or []))
@@ -167,4 +179,4 @@ def append_question(
     project = load_project(project_id, root)
     questions = list(project.get("questions") or [])
     questions.append({"asked_at": datetime.now(timezone.utc).isoformat(), **record})
-    return save_project(project_id, {**project, "questions": questions}, root=root)
+    return save_project(project_id, {"questions": questions}, root=root)

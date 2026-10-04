@@ -1315,6 +1315,7 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert status.startswith("✅")
     assert saved_groups == groups
     assert stored["groups"] == groups
+    assert ui.load_project(project["project_id"])["experiment_group_settings"] == groups
     assert stored["questions"] == questions
     assert restored[0] == questions
     assert restored[2] == groups
@@ -1325,6 +1326,53 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert restored[7] == [["向量組", 1]]
     assert restored[8]["visible"] is True
     assert restored[8]["value"] == "向量組"
+    assert restored[9]["value"] == "gpt-4.1-mini"
+    assert restored[10]["value"] == "基本向量檢索"
+    assert restored[11]["value"] == 5
+    assert restored[12]["value"] is False
+    assert restored[13]["value"] is True
+    assert restored[14]["visible"] is True
+
+
+def test_empty_inline_autosave_cannot_erase_saved_experiment_groups(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("protect-experiment-groups")
+    groups = [{
+        "name": "保留組", "answer_model": "model-a",
+        "retrieval_mode": "混合檢索", "top_k": 7,
+        "use_reranker": True, "expand_evidence": False,
+    }]
+    ui.save_project(project["project_id"], {"experiment": {"groups": groups}})
+
+    status, _state_groups, _result_status = ui.save_inline_experiment_groups_for_ui(
+        project["project_id"], [], 5, [], *ui._inline_group_values([]),
+    )
+
+    assert status.startswith("❌ 實驗設定儲存失敗：已保存的實驗組不可由空欄位覆蓋")
+    assert ui.load_project(project["project_id"])["experiment"]["groups"] == groups
+
+
+def test_experiment_reload_recovers_saved_group_settings_backup(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("experiment-group-backup")
+    groups = [{
+        "name": "備援組", "answer_model": "disconnected-model",
+        "retrieval_mode": "基本向量檢索", "top_k": 4,
+        "use_reranker": False, "expand_evidence": True,
+    }]
+    ui.save_project(project["project_id"], {
+        "experiment": {"groups": [], "summary_rows": [["備援組", 1]]},
+        "experiment_group_settings": groups,
+    })
+
+    restored = ui.load_experiment_for_ui(
+        project["project_id"], settings.load_service_settings("llm"),
+    )
+
+    assert restored[2] == groups
+    assert restored[8]["value"] == "備援組"
+    assert restored[9]["value"] == "disconnected-model"
+    assert ("disconnected-model（目前不可用）", "disconnected-model") in restored[9]["choices"]
 
 
 def test_experiment_default_concurrency_is_five(tmp_path, monkeypatch) -> None:
@@ -1362,6 +1410,7 @@ def test_inline_experiment_group_add_and_remove(tmp_path, monkeypatch) -> None:
     assert removed[-3] == []
     assert removed[0]["visible"] is False
     assert ui.load_project(project["project_id"])["experiment"]["groups"] == []
+    assert ui.load_project(project["project_id"])["experiment_group_settings"] == []
 
 
 def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:

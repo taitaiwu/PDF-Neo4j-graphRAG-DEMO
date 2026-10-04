@@ -905,13 +905,20 @@ def _inline_group_values(groups: list[dict[str, Any]]) -> list[Any]:
 def _inline_group_updates(
     groups: list[dict[str, Any]], model_choices: list[tuple[str, str]] | None = None,
 ) -> list[Any]:
+    choices = list(model_choices or [])
+    available_models = {value for _, value in choices}
+    for item in groups:
+        model = item.get("answer_model")
+        if model and model not in available_models:
+            choices.append((f"{model}（目前不可用）", model))
+            available_models.add(model)
     values = []
     for index in range(EXPERIMENT_GROUP_LIMIT):
         item = groups[index] if index < len(groups) else {}
         visible = bool(item)
         model_update = gr.update(value=item.get("answer_model"), visible=visible)
-        if model_choices is not None:
-            model_update["choices"] = model_choices
+        if model_choices is not None or choices:
+            model_update["choices"] = choices
         values.extend([
             gr.update(value=item.get("name", ""), visible=visible),
             model_update,
@@ -963,12 +970,16 @@ def _groups_from_inline_values(values: tuple[Any, ...]) -> list[dict[str, Any]]:
 def _save_experiment_data(project_id: str, data: dict[str, Any]) -> None:
     if not project_id:
         raise ValueError("請先建立或載入專案")
-    save_project(project_id, {"experiment": data})
+    payload: dict[str, Any] = {"experiment": data}
+    if "groups" in data:
+        payload["experiment_group_settings"] = data["groups"]
+    save_project(project_id, payload)
 
 
 def save_inline_experiment_groups_for_ui(
     project_id: str, questions: list[dict[str, Any]], max_concurrent_requests: int | float,
     current_groups: list[dict[str, Any]] | None, *values: Any,
+    allow_empty: bool = False,
 ) -> tuple[str, list[dict[str, Any]], str]:
     try:
         groups = _groups_from_inline_values(values)
@@ -977,6 +988,9 @@ def save_inline_experiment_groups_for_ui(
             raise ValueError("測試最大並行請求數必須大於 0")
         project = load_project(project_id)
         previous = project.get("experiment") or {}
+        saved_groups = previous.get("groups") or project.get("experiment_group_settings") or []
+        if (current_groups or saved_groups) and not groups and not allow_empty:
+            raise ValueError("已保存的實驗組不可由空欄位覆蓋；請使用該列的「移除」按鈕刪除")
         result_status = (
             "⚠️ 實驗設定已變更；畫面保留的是最近一次執行結果。"
             if previous.get("results") else "實驗組設定已自動儲存。"
@@ -1036,7 +1050,7 @@ def remove_inline_experiment_group_for_ui(
         groups.pop(row_index)
     status, saved_groups, result_status = save_inline_experiment_groups_for_ui(
         project_id, questions, max_concurrent_requests, current_groups,
-        *_inline_group_values(groups)
+        *_inline_group_values(groups), allow_empty=True,
     )
     return (*_inline_group_updates(saved_groups), saved_groups, status, result_status)
 
@@ -1044,15 +1058,17 @@ def remove_inline_experiment_group_for_ui(
 def load_experiment_for_ui(
     project_id: str, llm_state: dict[str, Any],
 ) -> tuple[Any, ...]:
+    project: dict[str, Any] = {}
     try:
-        data = (load_project(project_id).get("experiment") or {}) if project_id else {}
+        project = load_project(project_id) if project_id else {}
+        data = project.get("experiment") or {}
     except (OSError, ValueError) as exc:
         data = {}
         status = f"❌ 實驗資料載入失敗：{exc}"
     else:
         status = data.get("status", "請匯入題目集並設定實驗組。")
     questions = data.get("questions", [])
-    groups = data.get("groups", [])
+    groups = data.get("groups") or project.get("experiment_group_settings") or []
     results = data.get("results", [])
     return (
         questions, _evaluation_question_rows(questions), groups, results,
