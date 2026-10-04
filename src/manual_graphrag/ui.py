@@ -2732,6 +2732,21 @@ def evaluate_experiment_answers_for_ui(
     return status, results, summary, details
 
 
+def evaluate_experiment_answers_with_services_for_ui(
+    project_id: str, pending_answers: list[dict[str, Any]], groups: list[dict[str, Any]],
+    judge_model: str, judge_reasoning_effort: str, max_concurrent_requests: int | float,
+    llm_state: dict[str, Any], run_control: RunControl | None = None,
+    progress=gr.Progress(),
+) -> tuple[str, list[dict[str, Any]], list[list[Any]], list[list[Any]]]:
+    judge_endpoint, judge_key = resolve_model_credentials_for_ui(llm_state, judge_model)
+    if not judge_endpoint:
+        return "❌ 無法取得評測模型連線設定；請先測試模型服務連線並確認該模型可用。", [], [], []
+    return evaluate_experiment_answers_for_ui(
+        project_id, pending_answers, groups, judge_model, judge_reasoning_effort,
+        max_concurrent_requests, judge_endpoint, judge_key, run_control, progress,
+    )
+
+
 def update_manual_experiment_result_for_ui(
     project_id: str, rows: Any, results: list[dict[str, Any]],
 ) -> tuple[str, list[list[Any]], list[list[Any]], list[dict[str, Any]]]:
@@ -4511,8 +4526,6 @@ def build_app() -> gr.Blocks:
         evaluation_model_key = gr.State(initial_llm_credentials[3][1])
         evaluation_judge_endpoint = gr.State(initial_llm_credentials[3][0])
         evaluation_judge_key = gr.State(initial_llm_credentials[3][1])
-        experiment_judge_endpoint = gr.State(initial_llm_credentials[4][0])
-        experiment_judge_key = gr.State(initial_llm_credentials[4][1])
         answer_model_endpoint = gr.State(initial_llm_credentials[4][0])
         answer_model_key = gr.State(initial_llm_credentials[4][1])
         selected_embedding_endpoint = gr.State(initial_embedding_credentials[0])
@@ -4687,12 +4700,6 @@ def build_app() -> gr.Blocks:
             inputs=experiment_judge_model, outputs=experiment_judge_effort,
             show_progress="hidden",
         )
-        experiment_judge_model.change(
-            resolve_model_credentials_for_ui,
-            inputs=[llm_service_state, experiment_judge_model],
-            outputs=[experiment_judge_endpoint, experiment_judge_key],
-            show_progress="hidden",
-        )
         for row_index, row in enumerate(experiment_group_rows):
             row[-1].click(
                 partial(remove_inline_experiment_group_for_ui, row_index),
@@ -4735,12 +4742,12 @@ def build_app() -> gr.Blocks:
             show_progress="hidden",
         )
         evaluate_experiments_button.click(
-            evaluate_experiment_answers_for_ui,
+            evaluate_experiment_answers_with_services_for_ui,
             inputs=[
                 project_selector, experiment_pending_answers_state, experiment_groups_state,
                 experiment_judge_model, experiment_judge_effort,
-                experiment_judge_max_concurrent_requests, experiment_judge_endpoint,
-                experiment_judge_key, experiment_run_control_state,
+                experiment_judge_max_concurrent_requests, llm_service_state,
+                experiment_run_control_state,
             ],
             outputs=[
                 experiment_status, experiment_results_state,
@@ -5146,7 +5153,6 @@ def build_app() -> gr.Blocks:
             (evaluation_generation_model, generation_model_endpoint, generation_model_key),
             (evaluation_test_model, evaluation_model_endpoint, evaluation_model_key),
             (evaluation_judge_model, evaluation_judge_endpoint, evaluation_judge_key),
-            (experiment_judge_model, experiment_judge_endpoint, experiment_judge_key),
             (answer_model, answer_model_endpoint, answer_model_key),
         ]:
             field.change(

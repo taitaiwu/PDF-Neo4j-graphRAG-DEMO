@@ -1804,6 +1804,38 @@ def test_evaluate_experiment_answers_and_manual_edit_recompute_summary(monkeypat
     assert saved["experiment"]["results"] == updated
 
 
+def test_experiment_evaluation_resolves_current_model_credentials_at_click_time(monkeypatch) -> None:
+    resolved = {}
+    monkeypatch.setattr(
+        ui, "resolve_model_credentials_for_ui",
+        lambda state, model: (resolved.update(state=state, model=model) or ("endpoint", "secret")),
+    )
+    monkeypatch.setattr(
+        ui, "evaluate_experiment_answers_for_ui",
+        lambda *args: (resolved.update(core_args=args) or ("✅ 評測完成", [], [], [])),
+    )
+    llm_state = {"kind": "llm", "active": "OpenAI"}
+
+    result = ui.evaluate_experiment_answers_with_services_for_ui(
+        "project", [{"question": "Q"}], [], "gpt-6-luna", "low", 5, llm_state,
+    )
+
+    assert result[0] == "✅ 評測完成"
+    assert resolved["state"] is llm_state
+    assert resolved["model"] == "gpt-6-luna"
+    assert resolved["core_args"][6:8] == ("endpoint", "secret")
+
+
+def test_experiment_evaluation_reports_unavailable_current_model(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "resolve_model_credentials_for_ui", lambda *_: ("", ""))
+
+    result = ui.evaluate_experiment_answers_with_services_for_ui(
+        "project", [{"question": "Q"}], [], "gpt-6-luna", "low", 5, {},
+    )
+
+    assert "請先測試模型服務連線" in result[0]
+
+
 def test_inline_experiment_group_add_and_remove(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("experiment-rows")
@@ -1925,6 +1957,11 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         and any(tuple(target) == (result_table["id"], "input") for target in dependency.get("targets", []))
         for dependency in app.config["dependencies"]
     )
+    evaluation_dependency = next(
+        dependency for dependency in app.config["dependencies"]
+        if str(dependency.get("api_name", "")).startswith("evaluate_experiment_answers_with_services_for_ui")
+    )
+    assert len(evaluation_dependency["inputs"]) == 8
     assert any(
         str(dependency.get("api_name", "")).startswith("load_experiment_for_ui")
         for dependency in app.config["dependencies"]
