@@ -308,12 +308,11 @@ def workflow_tabs_for_ui(
         and has_available_service(llm_state)
         and has_available_service(embedding_state)
     )
-    return tuple(gr.update(interactive=enabled) for _ in range(6))
+    return tuple(gr.update(interactive=enabled) for _ in range(5))
 
 
 def lock_project_tabs_for_ui(project_id: str) -> tuple[dict[str, Any], ...]:
-    """Keep delete-project output compatibility; successful setup uses workflow_tabs_for_ui."""
-    return tuple(gr.update(interactive=False) for _ in range(6))
+    return tuple(gr.update(interactive=False) for _ in range(5))
 
 
 def delete_project_for_ui(
@@ -426,11 +425,6 @@ def _document_status(index: int, total: int, doc: dict[str, Any], chunk_count: i
     name = doc.get("file_name", "")
     page_range = f"{doc.get('page_start', '')}–{doc.get('page_end', '')}"
     return f"文件 {index + 1} / {total}：{name}（第 {page_range} 頁），共 {chunk_count} 個 chunk。"
-
-
-def _history_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
-    return [[i.get("asked_at", ""), i.get("question", ""), i.get("answer", ""),
-             i.get("retrieval_mode", ""), i.get("document", "")] for i in reversed(questions)]
 
 
 def _display_retrieval_mode(value: str | None) -> str:
@@ -577,7 +571,6 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         documents, chunks, graph, active_preview, active_chunks,
         _document_rows(documents), _document_choices(documents),
         _chunk_rows(active_chunks), document_status,
-        _history_rows(project.get("questions") or []),
         entity_rows, relationship_rows, graph_status, import_status,
     )
 
@@ -585,8 +578,7 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
 def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ...]:
     status, answer, sources = answer_question_for_ui(*args)
     if not status.startswith("✅") or not project_id:
-        note = "" if project_id else "⚠️ 未選擇專案，問答未加入專案紀錄。"
-        return status, answer, sources, gr.update(), note
+        return status, answer, sources
     try:
         current = load_project(project_id)
         record = {
@@ -595,10 +587,10 @@ def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ..
             "top_k": int(args[11]), "sources": sources,
             "document": (current.get("graph_state") or {}).get("document", ""),
         }
-        project = append_question(project_id, record)
+        append_question(project_id, record)
     except (OSError, ValueError) as exc:
-        return status, answer, sources, gr.update(), f"⚠️ 回答成功，但專案紀錄保存失敗：{exc}"
-    return status, answer, sources, _history_rows(project.get("questions") or []), "✅ 問答紀錄已加入目前專案。"
+        return f"{status}｜⚠️ 專案紀錄保存失敗：{exc}", answer, sources
+    return f"{status}｜✅ 問答紀錄已加入目前專案。", answer, sources
 
 
 def _evaluation_question_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
@@ -2884,14 +2876,6 @@ def build_app() -> gr.Blocks:
                 experiment_export_file = gr.File(label="實驗結果 JSON", interactive=False)
             experiment_export_status = gr.Markdown()
 
-        with gr.Tab("7. 歷史紀錄", interactive=False) as history_tab:
-            gr.Markdown("目前專案的問答紀錄；成功問答後會自動追加並保存。")
-            project_history_status = gr.Markdown()
-            history_table = gr.Dataframe(
-                headers=["時間", "問題", "回答", "模式", "文件"],
-                interactive=False, wrap=True,
-            )
-
         schema_model_endpoint = gr.State(initial_llm_credentials[0][0])
         schema_model_key = gr.State(initial_llm_credentials[0][1])
         extraction_model_endpoint = gr.State(initial_llm_credentials[1][0])
@@ -3073,7 +3057,7 @@ def build_app() -> gr.Blocks:
             documents_state, chunk_state, graph_state,
             active_preview_state, active_chunks_state,
             documents_table, remove_document_selector,
-            chunk_table, page_status, history_table,
+            chunk_table, page_status,
             entity_table, relationship_table, build_status, import_status,
         ]
         project_tab.select(refresh_projects_for_ui, inputs=project_state, outputs=project_selector)
@@ -3118,13 +3102,13 @@ def build_app() -> gr.Blocks:
             show_progress="hidden",
         )
         protected_tabs = [
-            pdf_tab, graph_tab, qa_tab, evaluation_tab, experiment_tab, history_tab,
+            pdf_tab, graph_tab, qa_tab, evaluation_tab, experiment_tab,
         ]
         delete_project_event = delete_project_button.click(
             delete_project_for_ui,
             inputs=project_selector,
             outputs=[project_selector, project_state, project_status,
-                     pdf_tab, graph_tab, qa_tab, evaluation_tab, experiment_tab, history_tab,
+                     pdf_tab, graph_tab, qa_tab, evaluation_tab, experiment_tab,
                      delete_project_completed],
             js="""(projectId) => {
                 if (!window.confirm('確定要刪除此專案嗎？專案設定、PDF、圖譜、題庫與紀錄都會永久刪除。')) {
@@ -3419,6 +3403,6 @@ def build_app() -> gr.Blocks:
                 use_reranker,
                 expand_evidence,
             ],
-            outputs=[answer_status, answer, answer_sources, history_table, project_history_status],
+            outputs=[answer_status, answer, answer_sources],
         )
     return app

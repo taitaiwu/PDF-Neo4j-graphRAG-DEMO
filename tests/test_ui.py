@@ -243,14 +243,18 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
         "2. PDF 與參數", "3. 建圖",
-        "4. 問答測試", "5. 自動問答測試", "6. 實驗", "7. 歷史紀錄",
+        "4. 問答測試", "5. 自動問答測試", "6. 實驗",
     }
     tabs = [
         component for component in app.config["components"]
         if component.get("props", {}).get("label") in protected_labels
     ]
 
-    assert len(tabs) == 6
+    assert len(tabs) == 5
+    assert not any(
+        "歷史紀錄" in str(component.get("props", {}).get("label", ""))
+        for component in app.config["components"]
+    )
     connection_tab = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("label") == "1. 連線設定"
@@ -269,7 +273,7 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
         if str(dependency.get("api_name", "")).startswith("workflow_tabs_for_ui")
     ]
     assert len(gate_dependencies) >= 5
-    assert all(len(dependency["outputs"]) == 6 for dependency in gate_dependencies)
+    assert all(len(dependency["outputs"]) == 5 for dependency in gate_dependencies)
 
 
 
@@ -385,7 +389,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     ]
     assert labels.index("4. 問答測試") < labels.index("5. 自動問答測試")
     assert labels.index("5. 自動問答測試") < labels.index("6. 實驗")
-    assert labels.index("6. 實驗") < labels.index("7. 歷史紀錄")
+    assert "7. 歷史紀錄" not in labels
     components = app.config["components"]
     question_table_index = next(
         index for index, component in enumerate(components)
@@ -542,10 +546,10 @@ def test_project_ui_create_save_and_load(tmp_path, monkeypatch) -> None:
     assert "api_key" not in stored_project["settings"]
     assert stored_project["graph_state"]["entities"][0]["name"] == "設備"
     assert stored_project["graph_state"]["relationships"][0]["type"] == "USES"
-    assert loaded[31][0][:2] == ["設備", "DEVICE"]
-    assert loaded[32][0][:3] == ["設備", "USES", "零件"]
-    assert "1 個實體、1 筆關係" in loaded[33]
-    assert "已匯入 Neo4j" in loaded[34]
+    assert loaded[30][0][:2] == ["設備", "DEVICE"]
+    assert loaded[31][0][:3] == ["設備", "USES", "零件"]
+    assert "1 個實體、1 筆關係" in loaded[32]
+    assert "已匯入 Neo4j" in loaded[33]
 
 
 def test_load_project_ignores_legacy_model_credentials(tmp_path, monkeypatch) -> None:
@@ -605,7 +609,7 @@ def test_project_answer_appends_history(monkeypatch) -> None:
     assert captured["answer_model"] == "answer-model"
     assert captured["retrieval_mode"] == "關聯擴展檢索"
     assert captured["top_k"] == 8
-    assert result[3][0][1:3] == ["問題", "答案"]
+    assert result[0].endswith("✅ 問答紀錄已加入目前專案。")
 
 
 def test_generate_evaluation_for_ui_saves_questions(monkeypatch) -> None:
