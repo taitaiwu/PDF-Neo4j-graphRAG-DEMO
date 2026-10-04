@@ -424,10 +424,18 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     values_by_component = [component.get("props", {}).get("value") for component in components]
     import_button_index = values_by_component.index("匯入題目")
     generation_heading_index = values_by_component.index("#### 生題設定")
+    questions_heading_index = values_by_component.index("#### 測試題目")
     answer_heading_index = values_by_component.index("#### 回答模型設定")
     judge_heading_index = values_by_component.index("#### 評測模型設定")
-    questions_heading_index = values_by_component.index("#### 測試題目")
+    result_heading_index = values_by_component.index("#### 測試結果")
     assert import_button_index < generation_heading_index
+    question_table = next(
+        component for component in components
+        if component.get("props", {}).get("headers")
+        == ["題號", "題目", "正確答案", "題目來源（文件與頁碼）", "答案來源（文件與頁碼）"]
+    )
+    question_table_index = components.index(question_table)
+    assert questions_heading_index < question_table_index < answer_heading_index < judge_heading_index < result_heading_index
     assert "最大並行請求數" in labels
     assert any(
         component.get("props", {}).get("label") == "最大並行請求數"
@@ -435,16 +443,11 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     )
     assert any(
         component.get("props", {}).get("label") == "最大並行請求數"
-        for component in components[judge_heading_index:questions_heading_index]
+        for component in components[judge_heading_index:result_heading_index]
     )
     assert not any(
         component.get("props", {}).get("label") == "測試最大並行請求數"
-        for component in components[answer_heading_index:questions_heading_index]
-    )
-    question_table = next(
-        component for component in app.config["components"]
-        if component.get("props", {}).get("headers")
-        == ["題號", "題目", "正確答案", "題目來源（文件與頁碼）", "答案來源（文件與頁碼）"]
+        for component in components[answer_heading_index:result_heading_index]
     )
     assert any(
         str(dependency.get("api_name", "")).startswith("save_evaluation_questions_for_ui")
@@ -472,9 +475,17 @@ def test_build_app_has_automatic_evaluation_page() -> None:
         if component.get("props", {}).get("headers")
         == ["題號", "題目", "正確答案", "題目來源（文件與頁碼）", "答案來源（文件與頁碼）"]
     )
-    metrics_box_index = next(
+    answer_availability_index = next(
         index for index, component in enumerate(components)
-        if "evaluation-metrics-box" in component.get("props", {}).get("elem_classes", [])
+        if component.get("props", {}).get("value") == "尚未生成測試回答；請先按「生成回答」。"
+    )
+    answer_heading_index = next(
+        index for index, component in enumerate(components)
+        if component.get("props", {}).get("value") == "#### 回答模型設定"
+    )
+    judge_heading_index = next(
+        index for index, component in enumerate(components)
+        if component.get("props", {}).get("value") == "#### 評測模型設定"
     )
     result_title_index = next(
         index for index, component in enumerate(components)
@@ -485,16 +496,34 @@ def test_build_app_has_automatic_evaluation_page() -> None:
         if component.get("props", {}).get("headers")
         == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由"]
     )
-    assert question_table_index < metrics_box_index < result_title_index < result_table_index
+    assert question_table_index < answer_heading_index < answer_availability_index < judge_heading_index < result_title_index < result_table_index
     results_table = components[result_table_index]
     assert results_table["props"]["interactive"] is True
     assert results_table["props"]["datatype"][5] == "bool"
     assert 5 not in results_table["props"]["static_columns"]
+    judge_button = next(
+        component for component in components
+        if component.get("props", {}).get("value") == "進行評測"
+    )
+    assert judge_button["props"]["interactive"] is False
+    assert "evaluation-judge-button" in judge_button["props"]["elem_classes"]
     assert any(
         str(dependency.get("api_name", "")).startswith("update_manual_evaluation_for_ui")
         and any(tuple(target) == (results_table["id"], "input") for target in dependency.get("targets", []))
         for dependency in app.config["dependencies"]
     )
+
+
+def test_evaluation_button_availability_tracks_saved_answers() -> None:
+    no_answers, disabled = ui._evaluation_answer_availability({"questions": [{"number": 1}]})
+    has_answers, enabled = ui._evaluation_answer_availability({
+        "pending_answers": [{"number": 1, "actual_answer": "A"}],
+    })
+
+    assert "尚未生成" in no_answers
+    assert disabled["interactive"] is False
+    assert "有 1 題回答" in has_answers
+    assert enabled["interactive"] is True
 
 
 def test_build_app_has_manual_neo4j_import_button() -> None:

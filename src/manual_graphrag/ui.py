@@ -330,7 +330,8 @@ def load_evaluation_with_services_for_ui(
                 choices=list(choice_items),
                 value=selected if selected in allowed else None,
             )
-    return tuple(values)
+    answer_status, evaluate_update = _evaluation_answer_availability(values[0])
+    return (*values, answer_status, evaluate_update)
 
 
 def reload_env_with_services_for_ui() -> tuple[Any, ...]:
@@ -1575,6 +1576,19 @@ def _evaluation_result_rows(results: list[dict[str, Any]]) -> list[list[object]]
         bool(item.get("passed")),
         item.get("reason", ""),
     ] for item in results]
+
+
+def _evaluation_answer_availability(evaluation: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    current = evaluation or {}
+    answers = current.get("pending_answers") or current.get("results") or []
+    if answers:
+        evaluated = bool(current.get("results"))
+        message = (
+            f"✅ 目前有 {len(answers)} 題回答，已完成評測。"
+            if evaluated else f"✅ 目前有 {len(answers)} 題回答，可以進行評測。"
+        )
+        return message, gr.update(interactive=True)
+    return "尚未生成測試回答；請先按「生成回答」。", gr.update(interactive=False)
 
 
 def update_manual_evaluation_for_ui(
@@ -3682,55 +3696,6 @@ def build_app() -> gr.Blocks:
                         value=False, label="允許並行"
                     )
                 generate_evaluation_button = gr.Button("從 PDF 建立題目與答案", variant="primary")
-            with gr.Group():
-                gr.Markdown("#### 回答模型設定")
-                with gr.Row():
-                    evaluation_test_model = gr.Dropdown(
-                        choices=llm_choices,
-                        value=preferred_llm,
-                        allow_custom_value=False,
-                        label="回答模型",
-                    )
-                    evaluation_test_effort = gr.Dropdown(
-                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
-                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
-                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
-                    )
-                    evaluation_retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
-                    evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
-                    evaluation_use_reranker = gr.Checkbox(
-                        value=False, label="使用 Reranker"
-                    )
-                    evaluation_expand_evidence = gr.Checkbox(
-                        value=False, label="擴展圖譜證據",
-                        info="僅在「混合檢索」模式生效。",
-                    )
-                    evaluation_test_max_concurrent_requests = gr.Number(
-                        value=3, minimum=1, precision=0,
-                        label="最大並行請求數",
-                        info=OLLAMA_CONCURRENCY_HINT,
-                    )
-                generate_evaluation_answers_button = gr.Button("生成回答", variant="primary")
-            with gr.Group():
-                gr.Markdown("#### 評測模型設定")
-                with gr.Row():
-                    evaluation_judge_model = gr.Dropdown(
-                        choices=llm_choices,
-                        value=preferred_llm,
-                        allow_custom_value=False,
-                        label="評測模型",
-                    )
-                    evaluation_judge_effort = gr.Dropdown(
-                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
-                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
-                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
-                    )
-                    evaluation_judge_max_concurrent_requests = gr.Number(
-                        value=3, minimum=1, precision=0,
-                        label="最大並行請求數",
-                        info=OLLAMA_CONCURRENCY_HINT,
-                    )
-                run_evaluation_button = gr.Button("進行評測")
             gr.HTML(
                 """<style>
                 .evaluation-metrics-box {
@@ -3746,6 +3711,15 @@ def build_app() -> gr.Blocks:
                 .evaluation-results-table table,
                 .evaluation-results-table td,
                 .evaluation-results-table th {font-size: 14px !important;}
+                .evaluation-judge-button button {
+                    background: #f59e0b !important;
+                    border-color: #f59e0b !important;
+                    color: #1f2937 !important;
+                }
+                .evaluation-judge-button button:hover {
+                    background: #d97706 !important;
+                    border-color: #d97706 !important;
+                }
                 </style>""",
                 padding=False,
             )
@@ -3756,9 +3730,55 @@ def build_app() -> gr.Blocks:
                 type="array", interactive=True, wrap=True,
                 elem_classes="evaluation-table",
             )
+            with gr.Group():
+                gr.Markdown("#### 回答模型設定")
+                with gr.Row():
+                    evaluation_test_model = gr.Dropdown(
+                        choices=llm_choices, value=preferred_llm,
+                        allow_custom_value=False, label="回答模型",
+                    )
+                    evaluation_test_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
+                    )
+                    evaluation_retrieval_mode = gr.Radio(
+                        ["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式",
+                    )
+                    evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
+                    evaluation_use_reranker = gr.Checkbox(value=False, label="使用 Reranker")
+                    evaluation_expand_evidence = gr.Checkbox(
+                        value=False, label="擴展圖譜證據", info="僅在「混合檢索」模式生效。",
+                    )
+                    evaluation_test_max_concurrent_requests = gr.Number(
+                        value=3, minimum=1, precision=0, label="最大並行請求數",
+                        info=OLLAMA_CONCURRENCY_HINT,
+                    )
+                generate_evaluation_answers_button = gr.Button("生成回答", variant="primary")
             with gr.Group(elem_classes="evaluation-metrics-box"):
-                evaluation_status = gr.Markdown(
-                    "請先載入專案並解析 PDF。", elem_classes="evaluation-metrics"
+                evaluation_answers_status = gr.Markdown(
+                    "尚未生成測試回答；請先按「生成回答」。",
+                    elem_classes="evaluation-metrics",
+                )
+            with gr.Group():
+                gr.Markdown("#### 評測模型設定")
+                with gr.Row():
+                    evaluation_judge_model = gr.Dropdown(
+                        choices=llm_choices, value=preferred_llm,
+                        allow_custom_value=False, label="評測模型",
+                    )
+                    evaluation_judge_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
+                    )
+                    evaluation_judge_max_concurrent_requests = gr.Number(
+                        value=3, minimum=1, precision=0, label="最大並行請求數",
+                        info=OLLAMA_CONCURRENCY_HINT,
+                    )
+                run_evaluation_button = gr.Button(
+                    "進行評測", variant="primary", interactive=False,
+                    elem_classes="evaluation-judge-button",
                 )
             gr.Markdown("#### 測試結果")
             evaluation_results_table = gr.Dataframe(
@@ -3767,6 +3787,10 @@ def build_app() -> gr.Blocks:
                 type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 6], wrap=True,
                 elem_classes=["evaluation-table", "evaluation-results-table"],
             )
+            with gr.Group(elem_classes="evaluation-metrics-box"):
+                evaluation_status = gr.Markdown(
+                    "請先載入專案並解析 PDF。", elem_classes="evaluation-metrics"
+                )
 
         with gr.Tab("0-6 單一專案實驗", interactive=False) as experiment_tab:
             gr.Markdown(
@@ -3986,7 +4010,13 @@ def build_app() -> gr.Blocks:
                      evaluation_judge_max_concurrent_requests,
                      evaluation_generation_effort, evaluation_test_effort,
                      evaluation_judge_effort,
-                     evaluation_status],
+                     evaluation_status, evaluation_answers_status, run_evaluation_button],
+        )
+        evaluation_state.change(
+            _evaluation_answer_availability,
+            inputs=evaluation_state,
+            outputs=[evaluation_answers_status, run_evaluation_button],
+            show_progress="hidden",
         )
         experiment_tab.select(
             load_experiment_for_ui,
