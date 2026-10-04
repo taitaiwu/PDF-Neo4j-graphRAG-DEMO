@@ -1954,6 +1954,37 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
     }
 
 
+def test_export_experiment_results_syncs_latest_manual_judgment(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("experiment-export-manual-edit")
+    group = {
+        "name": "向量組", "answer_model": "model-a", "retrieval_mode": "混合檢索",
+        "top_k": 8, "use_reranker": False, "expand_evidence": False,
+    }
+    result = {
+        "group_index": 0, "group_name": "向量組", "number": 1,
+        "answer_model": "model-a", "judge_model": "judge-a",
+        "question": "問題", "document": "manual.pdf", "expected_answer": "標準答案",
+        "actual_answer": "模型答案", "passed": True, "reason": "正確",
+        "retrieval_rank": 1, "recall_at_5": True, "recall_at_10": True,
+        "reciprocal_rank": 1.0,
+    }
+    ui.save_project(project["project_id"], {"experiment": {
+        "groups": [group], "judge_model": "judge-a", "results": [result],
+        "summary_rows": [["向量組", "model-a", "judge-a", 1, "1 / 1", "100.0%", "100.0%", "100.0%", "1.000"]],
+    }})
+    edited_rows = ui._single_experiment_detail_rows([result])
+    edited_rows[0][6] = False
+
+    status, file_path = ui.export_experiment_results_for_ui(project["project_id"], edited_rows)
+    exported = json.loads(Path(file_path).read_text(encoding="utf-8"))
+
+    assert status.startswith("✅ 已匯出")
+    assert exported["groups"][0]["results"][0]["passed"] is False
+    assert exported["groups"][0]["results"][0]["reason"] == "人工評判"
+    assert exported["groups"][0]["summary"]["correct_count"] == 0
+
+
 def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatch) -> None:
     captured = {"calls": [], "workers": 0}
     real_executor = ui.ThreadPoolExecutor

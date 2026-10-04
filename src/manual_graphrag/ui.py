@@ -2731,12 +2731,23 @@ def update_manual_experiment_result_for_ui(
     )
 
 
-def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
+def export_experiment_results_for_ui(
+    project_id: str, detail_rows: Any = None,
+) -> tuple[str, str | None]:
     if not project_id:
         return "❌ 請先建立或載入專案。", None
     try:
         project = load_project(project_id)
         experiment = project.get("experiment") or {}
+        saved_results = experiment.get("results") or []
+        if detail_rows is not None and saved_results:
+            sync_status, _, _, _ = update_manual_experiment_result_for_ui(
+                project_id, detail_rows, saved_results,
+            )
+            if sync_status.startswith("❌"):
+                return f"❌ 匯出前同步人工判定失敗：{sync_status.removeprefix('❌ ').strip()}", None
+            project = load_project(project_id)
+            experiment = project.get("experiment") or {}
         groups = experiment.get("groups") or []
         results = experiment.get("results") or []
         summary_rows = experiment.get("summary_rows") or []
@@ -4615,7 +4626,7 @@ def build_app() -> gr.Blocks:
         )
         export_experiment_results_button.click(
             export_experiment_results_for_ui,
-            inputs=[project_selector],
+            inputs=[project_selector, experiment_details_table],
             outputs=[experiment_export_status, experiment_export_file],
             show_progress="hidden",
         )
