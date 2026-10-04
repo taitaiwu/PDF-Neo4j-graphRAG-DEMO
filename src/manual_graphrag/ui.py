@@ -4351,6 +4351,7 @@ def build_app() -> gr.Blocks:
                 ],
                 datatype=["str", "number", "str", "str", "str", "str", "bool", "str"],
                 type="array", interactive=False, static_columns=[0, 1, 2, 3, 4, 5, 7],
+                column_widths=[90, 60, 140, 300, 420, 420, 120, 300],
                 wrap=True, elem_classes=["evaluation-table", "evaluation-results-table"],
             )
             with gr.Row():

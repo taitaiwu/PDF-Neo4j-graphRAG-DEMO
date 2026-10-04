@@ -1898,6 +1898,11 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
     assert result_table["props"]["headers"][1:4] == ["題號", "來源文件", "題目"]
     assert "答案來源排名" not in result_table["props"]["headers"]
     assert len(result_table["props"]["headers"]) == 8
+    column_widths = [int(str(width).removesuffix("px")) for width in result_table["props"]["column_widths"]]
+    assert column_widths[0] < column_widths[4] and column_widths[0] < column_widths[5]
+    assert column_widths[1] < column_widths[4] and column_widths[1] < column_widths[5]
+    assert column_widths[2] < column_widths[4] and column_widths[2] < column_widths[5]
+    assert column_widths[6] < column_widths[4] and column_widths[6] < column_widths[5]
     assert 6 not in result_table["props"]["static_columns"]
     assert any(
         component.get("props", {}).get("label") == "啟用答案結果人工修改"
