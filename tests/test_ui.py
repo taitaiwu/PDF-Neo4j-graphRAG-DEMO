@@ -231,7 +231,7 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
         "2. PDF 與參數", "3. 建圖",
-        "4. 自動問答測試", "5. 問答測試", "6. 歷史紀錄",
+        "4. 問答測試", "5. 自動問答測試", "6. 歷史紀錄",
     }
     tabs = [
         component for component in app.config["components"]
@@ -366,8 +366,10 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     )
     assert not any("摘要" in str(component.get("props", {}).get("label", "")) for component in app.config["components"])
     assert not any("選定 PDF" in str(component.get("props", {}).get("headers", [])) for component in app.config["components"])
-    assert any(component.get("props", {}).get("label") == "4. 自動問答測試" for component in app.config["components"])
-    assert any(component.get("props", {}).get("label") == "5. 問答測試" for component in app.config["components"])
+    labels = [
+        component.get("props", {}).get("label") for component in app.config["components"]
+    ]
+    assert labels.index("4. 問答測試") < labels.index("5. 自動問答測試")
     assert any(component.get("props", {}).get("label") == "6. 歷史紀錄" for component in app.config["components"])
     components = app.config["components"]
     question_table_index = next(

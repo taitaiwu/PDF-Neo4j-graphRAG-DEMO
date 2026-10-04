@@ -1957,7 +1957,61 @@ def build_app() -> gr.Blocks:
                 )
                 import_status = gr.Markdown("尚未執行 Embedding 與匯入。")
 
-        with gr.Tab("4. 自動問答測試", interactive=False) as evaluation_tab:
+        with gr.Tab("4. 問答測試", interactive=False) as qa_tab:
+            gr.Markdown(
+                "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
+                "可選擇是否由本機 Reranker 重排 Hybrid Search 候選。"
+            )
+            answer_model = gr.Dropdown(
+                choices=llm_choices,
+                value=preferred_llm,
+                allow_custom_value=False,
+                label="問答 LLM",
+            )
+            question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
+            with gr.Row():
+                retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
+                top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
+                use_reranker = gr.Checkbox(value=False, label="使用 Reranker")
+                expand_evidence = gr.Checkbox(
+                    value=False, label="擴展圖譜證據",
+                    info="僅在「混合檢索」模式生效。",
+                )
+            ask_button = gr.Button("送出問題", variant="primary")
+            answer_status = gr.Markdown()
+            gr.HTML(
+                """
+                <style>
+                .answer-panel {
+                    border: 2px solid var(--border-color-primary);
+                    border-radius: 12px;
+                    padding: 18px 22px;
+                    background: var(--background-fill-secondary);
+                }
+                .answer-content,
+                .answer-content p,
+                .answer-content li {
+                    font-size: 20px !important;
+                    line-height: 1.75 !important;
+                }
+                </style>
+                """,
+                padding=False,
+            )
+            with gr.Group(elem_classes="answer-panel"):
+                gr.Markdown("### 回答")
+                answer = gr.Markdown(elem_classes="answer-content")
+            gr.Markdown("### 檢索來源")
+            answer_sources = gr.Dataframe(
+                headers=[
+                    "類型", "證據", "Retriever", "檢索分數",
+                    "來源頁碼", "來源 Chunks", "來源文件",
+                ],
+                interactive=False,
+                wrap=True,
+            )
+
+        with gr.Tab("5. 自動問答測試", interactive=False) as evaluation_tab:
             gr.Markdown(
                 "### 從 PDF 自動建立問答測試集\n"
                 "每份 PDF 建立指定數量的題目與標準答案，再一鍵執行目前的 RAG 並由模型判斷答案是否正確。"
@@ -2042,60 +2096,6 @@ def build_app() -> gr.Blocks:
                 headers=["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案結果", "評判理由"],
                 interactive=False, wrap=True,
                 elem_classes=["evaluation-table", "evaluation-results-table"],
-            )
-
-        with gr.Tab("5. 問答測試", interactive=False) as qa_tab:
-            gr.Markdown(
-                "直接使用連線設定中的 Neo4j；預設查詢最近更新的建圖結果。"
-                "可選擇是否由本機 Reranker 重排 Hybrid Search 候選。"
-            )
-            answer_model = gr.Dropdown(
-                choices=llm_choices,
-                value=preferred_llm,
-                allow_custom_value=False,
-                label="問答 LLM",
-            )
-            question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
-            with gr.Row():
-                retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
-                top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
-                use_reranker = gr.Checkbox(value=False, label="使用 Reranker")
-                expand_evidence = gr.Checkbox(
-                    value=False, label="擴展圖譜證據",
-                    info="僅在「混合檢索」模式生效。",
-                )
-            ask_button = gr.Button("送出問題", variant="primary")
-            answer_status = gr.Markdown()
-            gr.HTML(
-                """
-                <style>
-                .answer-panel {
-                    border: 2px solid var(--border-color-primary);
-                    border-radius: 12px;
-                    padding: 18px 22px;
-                    background: var(--background-fill-secondary);
-                }
-                .answer-content,
-                .answer-content p,
-                .answer-content li {
-                    font-size: 20px !important;
-                    line-height: 1.75 !important;
-                }
-                </style>
-                """,
-                padding=False,
-            )
-            with gr.Group(elem_classes="answer-panel"):
-                gr.Markdown("### 回答")
-                answer = gr.Markdown(elem_classes="answer-content")
-            gr.Markdown("### 檢索來源")
-            answer_sources = gr.Dataframe(
-                headers=[
-                    "類型", "證據", "Retriever", "檢索分數",
-                    "來源頁碼", "來源 Chunks", "來源文件",
-                ],
-                interactive=False,
-                wrap=True,
             )
 
         with gr.Tab("6. 歷史紀錄", interactive=False) as history_tab:
