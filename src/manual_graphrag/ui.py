@@ -1399,7 +1399,13 @@ def load_experiment_for_ui(
         if row and len(row) == 11:
             # Older saved UI rows included the two model columns. Keep them in
             # the result objects/export, but omit them from the visible table.
-            detail_rows.append([row[0], *row[3:]])
+            detail_rows.append([
+                row[0], row[3], row[5], row[4], row[6], row[7], row[8], row[9],
+            ])
+        elif row and len(row) == 9:
+            # Older detail rows also included retrieval rank; it remains in the
+            # full result/export data, not in the visible table.
+            detail_rows.append([row[0], row[1], row[3], row[2], *row[4:8]])
         else:
             detail_rows.append(row)
     if not results:
@@ -2462,9 +2468,9 @@ def _single_experiment_summary_rows(
 
 def _single_experiment_detail_rows(results: list[dict[str, Any]]) -> list[list[object]]:
     return [[
-        item["group_name"], item["number"], item["question"], item.get("document", ""),
+        item["group_name"], item["number"], item.get("document", ""), item["question"],
         item["expected_answer"], item.get("actual_answer", ""),
-        bool(item.get("passed")), item.get("reason", ""), item.get("retrieval_rank"),
+        bool(item.get("passed")), item.get("reason", ""),
     ] for item in results]
 
 
@@ -2657,7 +2663,7 @@ def update_manual_experiment_result_for_ui(
             raise ValueError("結果列數與實驗題次不符")
         changed = 0
         for item, row in zip(current, submitted):
-            if len(row) < 9:
+            if len(row) < 8:
                 raise ValueError("逐題結果欄位不完整")
             value = row[6]
             if isinstance(value, str):
@@ -4190,11 +4196,11 @@ def build_app() -> gr.Blocks:
             gr.Markdown("#### 逐題結果")
             experiment_details_table = gr.Dataframe(
                 headers=[
-                    "實驗組", "題號", "題目", "來源文件", "正確答案", "實際答案",
-                    "答案結果（勾選=正確）", "評判理由", "答案來源排名",
+                    "實驗組", "題號", "來源文件", "題目", "正確答案", "實際答案",
+                    "答案結果（勾選=正確）", "評判理由",
                 ],
-                datatype=["str", "number", "str", "str", "str", "str", "bool", "str", "number"],
-                type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 5, 7, 8],
+                datatype=["str", "number", "str", "str", "str", "str", "bool", "str"],
+                type="array", interactive=True, static_columns=[0, 1, 2, 3, 4, 5, 7],
                 wrap=True, elem_classes=["evaluation-table", "evaluation-results-table"],
             )
             with gr.Row():

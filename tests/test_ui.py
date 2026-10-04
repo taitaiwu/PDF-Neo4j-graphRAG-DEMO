@@ -1838,7 +1838,9 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
     assert result_table["props"]["datatype"][6] == "bool"
     assert "回答模型" not in result_table["props"]["headers"]
     assert "評測模型" not in result_table["props"]["headers"]
-    assert len(result_table["props"]["headers"]) == 9
+    assert result_table["props"]["headers"][1:4] == ["題號", "來源文件", "題目"]
+    assert "答案來源排名" not in result_table["props"]["headers"]
+    assert len(result_table["props"]["headers"]) == 8
     assert 6 not in result_table["props"]["static_columns"]
     assert any(
         str(dependency.get("api_name", "")).startswith("update_manual_experiment_result_for_ui")
@@ -1991,7 +1993,7 @@ def test_experiment_reload_migrates_legacy_summary_rows_to_show_models(monkeypat
     loaded = ui.load_experiment_for_ui("project", {})
 
     assert loaded[6] == [["舊組", "answer-model", "answer-model", 2, "1 / 2", "50.0%", "100.0%", "100.0%", "1.000"]]
-    assert loaded[7][0][:3] == ["舊組", 1, "Q"]
+    assert loaded[7][0][:4] == ["舊組", 1, "manual.pdf", "Q"]
     assert loaded[7][0][6] is True
 
 
