@@ -294,9 +294,13 @@ def load_evaluation_with_services_for_ui(
     values = list(load_evaluation_for_ui(project_id))
     allowed = service_choices(llm_state)
     choice_items = service_choice_items(llm_state)
-    for index in (3, 4):
+    for index in (3, 4, 12):
         if not isinstance(values[index], dict):
-            values[index] = gr.update(choices=choice_items, value=values[index] if values[index] in allowed else None)
+            selected = values[index]
+            choices = list(choice_items)
+            if selected and selected not in allowed:
+                choices.append((f"{selected}（目前不可用）", selected))
+            values[index] = gr.update(choices=choices, value=selected)
     return tuple(values)
 
 
@@ -880,14 +884,15 @@ def import_experiment_questions_for_ui(
 
 def _experiment_group_rows(groups: list[dict[str, Any]]) -> list[list[object]]:
     return [[
-        item["name"], item["answer_model"], item["retrieval_mode"], item["top_k"],
+        item["name"], item["answer_model"], item.get("judge_model", item["answer_model"]),
+        item["retrieval_mode"], item["top_k"],
         "是" if item["use_reranker"] else "否",
         "是" if item["expand_evidence"] else "否",
     ] for item in groups]
 
 
 EXPERIMENT_GROUP_LIMIT = 12
-EXPERIMENT_GROUP_FIELDS = 6
+EXPERIMENT_GROUP_FIELDS = 7
 
 
 def _inline_group_values(groups: list[dict[str, Any]]) -> list[Any]:
@@ -895,7 +900,9 @@ def _inline_group_values(groups: list[dict[str, Any]]) -> list[Any]:
     for index in range(EXPERIMENT_GROUP_LIMIT):
         item = groups[index] if index < len(groups) else {}
         values.extend([
-            item.get("name", ""), item.get("answer_model"), item.get("retrieval_mode", "混合檢索"),
+            item.get("name", ""), item.get("answer_model"),
+            item.get("judge_model", item.get("answer_model")),
+            item.get("retrieval_mode", "混合檢索"),
             item.get("top_k", 8), bool(item.get("use_reranker", False)),
             bool(item.get("expand_evidence", False)),
         ])
@@ -908,20 +915,25 @@ def _inline_group_updates(
     choices = list(model_choices or [])
     available_models = {value for _, value in choices}
     for item in groups:
-        model = item.get("answer_model")
-        if model and model not in available_models:
-            choices.append((f"{model}（目前不可用）", model))
-            available_models.add(model)
+        for model in (item.get("answer_model"), item.get("judge_model", item.get("answer_model"))):
+            if model and model not in available_models:
+                choices.append((f"{model}（目前不可用）", model))
+                available_models.add(model)
     values = []
     for index in range(EXPERIMENT_GROUP_LIMIT):
         item = groups[index] if index < len(groups) else {}
         visible = bool(item)
         model_update = gr.update(value=item.get("answer_model"), visible=visible)
+        judge_model_update = gr.update(
+            value=item.get("judge_model", item.get("answer_model")), visible=visible,
+        )
         if model_choices is not None or choices:
             model_update["choices"] = choices
+            judge_model_update["choices"] = choices
         values.extend([
             gr.update(value=item.get("name", ""), visible=visible),
             model_update,
+            judge_model_update,
             gr.update(value=item.get("retrieval_mode", "混合檢索"), visible=visible),
             gr.update(value=item.get("top_k", 8), visible=visible),
             gr.update(value=bool(item.get("use_reranker", False)), visible=visible),
@@ -936,7 +948,7 @@ def _groups_from_inline_values(values: tuple[Any, ...]) -> list[dict[str, Any]]:
     seen_empty_name = False
     for index in range(EXPERIMENT_GROUP_LIMIT):
         offset = index * EXPERIMENT_GROUP_FIELDS
-        name, model, mode, top_k, reranker, expansion = values[offset:offset + EXPERIMENT_GROUP_FIELDS]
+        name, answer_model, judge_model, mode, top_k, reranker, expansion = values[offset:offset + EXPERIMENT_GROUP_FIELDS]
         name = str(name or "").strip()
         if not name:
             if any(str(values[later * EXPERIMENT_GROUP_FIELDS] or "").strip()
@@ -946,8 +958,10 @@ def _groups_from_inline_values(values: tuple[Any, ...]) -> list[dict[str, Any]]:
             continue
         if seen_empty_name:
             raise ValueError("實驗組列不可留空缺；請使用「移除」按鈕")
-        if not model:
+        if not answer_model:
             raise ValueError(f"「{name}」尚未選擇回答模型")
+        if not judge_model:
+            raise ValueError(f"「{name}」尚未選擇評測模型")
         if mode not in {"基本向量檢索", "混合檢索"}:
             raise ValueError(f"「{name}」的檢索模式無效")
         try:
@@ -957,7 +971,8 @@ def _groups_from_inline_values(values: tuple[Any, ...]) -> list[dict[str, Any]]:
         if not 1 <= top_k <= 50:
             raise ValueError(f"「{name}」的 Top K 必須介於 1 到 50")
         groups.append({
-            "name": name, "answer_model": str(model), "retrieval_mode": mode,
+            "name": name, "answer_model": str(answer_model), "judge_model": str(judge_model),
+            "retrieval_mode": mode,
             "top_k": top_k, "use_reranker": bool(reranker),
             "expand_evidence": bool(expansion),
         })
@@ -1025,7 +1040,7 @@ def add_inline_experiment_group_for_ui(
         while f"實驗組 {next_index}" in existing_names:
             next_index += 1
         groups.append({
-            "name": f"實驗組 {next_index}", "answer_model": model,
+            "name": f"實驗組 {next_index}", "answer_model": model, "judge_model": model,
             "retrieval_mode": "混合檢索", "top_k": 8,
             "use_reranker": False, "expand_evidence": False,
         })
@@ -1073,10 +1088,31 @@ def load_experiment_for_ui(
     questions = data.get("questions", [])
     groups = data.get("groups") or project.get("experiment_group_settings") or []
     results = data.get("results", [])
+    group_by_name = {str(group.get("name", "")): group for group in groups}
+    summary_rows = []
+    for row in data.get("summary_rows", []):
+        group = group_by_name.get(str(row[0])) if row else None
+        if group and len(row) == 6:
+            summary_rows.append([
+                row[0], group.get("answer_model"),
+                group.get("judge_model") or group.get("answer_model"), *row[1:],
+            ])
+        else:
+            summary_rows.append(row)
+    detail_rows = []
+    for row in data.get("detail_rows", []):
+        group = group_by_name.get(str(row[0])) if row else None
+        if group and len(row) == 9:
+            detail_rows.append([
+                row[0], group.get("answer_model"),
+                group.get("judge_model") or group.get("answer_model"), *row[1:],
+            ])
+        else:
+            detail_rows.append(row)
     return (
         questions, _evaluation_question_rows(questions), groups, results,
         data.get("max_concurrent_requests", 5), status,
-        data.get("summary_rows", []), data.get("detail_rows", []),
+        summary_rows, detail_rows,
         *_inline_group_updates(groups, service_choice_items(llm_state)),
     )
 
@@ -1086,11 +1122,13 @@ def refresh_experiment_model_choices_for_ui(
 ) -> list[Any]:
     choices = service_choice_items(llm_state)
     allowed = service_choices(llm_state)
-    fallback = preferred_service_model(llm_state)
-    return [
-        gr.update(choices=choices, value=model if model in allowed else fallback)
-        for model in models
-    ]
+    updates = []
+    for model in models:
+        model_choices = list(choices)
+        if model and model not in allowed:
+            model_choices.append((f"{model}（目前不可用）", model))
+        updates.append(gr.update(choices=model_choices, value=model or preferred_service_model(llm_state)))
+    return updates
 
 
 def add_experiment_group_for_ui(
@@ -1120,6 +1158,7 @@ def add_experiment_group_for_ui(
     current.append({
         "name": group_name,
         "answer_model": model,
+        "judge_model": model,
         "retrieval_mode": retrieval_mode,
         "top_k": selected_top_k,
         "use_reranker": bool(use_reranker),
@@ -1381,11 +1420,11 @@ def _retrieval_rank(
 
 def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     if not project_id:
-        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
+        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
     try:
         project = load_project(project_id)
     except (OSError, ValueError) as exc:
-        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
+        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
     evaluation = dict(project.get("evaluation") or {})
     evaluation.setdefault("dirty", False)
     preferences = evaluation.get("preferences") or {}
@@ -1401,6 +1440,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         preferences.get("use_reranker", False),
         preferences.get("expand_evidence", False),
         preferences.get("test_max_concurrent_requests", 3),
+        preferences.get("judge_model", preferences.get("test_model", legacy_model)),
         (_evaluation_summary(results, loaded=True) if results else
          f"已載入 {len(questions)} 道題目與 0 筆測試結果。"),
     )
@@ -1413,6 +1453,7 @@ def save_evaluation_preferences_for_ui(
     test_max_concurrent_requests: int = 3,
     use_reranker: bool = False,
     expand_evidence: bool = False,
+    judge_model: str | None = None,
 ) -> str:
     if not project_id:
         return "⚠️ 請先選擇專案。"
@@ -1424,6 +1465,7 @@ def save_evaluation_preferences_for_ui(
         evaluation = dict(project.get("evaluation") or {})
         evaluation["preferences"] = {
             "generation_model": generation_model, "test_model": test_model,
+            "judge_model": judge_model or test_model,
             "question_count": int(question_count),
             "retrieval_mode": retrieval_mode, "top_k": int(top_k),
             "allow_parallel_generation": bool(allow_parallel_generation),
@@ -1560,6 +1602,9 @@ def run_evaluation_for_ui(
     max_concurrent_requests: int = 3,
     use_reranker: bool = False,
     expand_evidence: bool = False,
+    judge_model_endpoint: str | None = None,
+    judge_api_key: str | None = None,
+    judge_model: str | None = None,
     progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], dict[str, Any]]:
     questions = evaluation.get("questions") if evaluation else None
@@ -1569,8 +1614,11 @@ def run_evaluation_for_ui(
         return "❌ 請先建立測試題目。", [], evaluation or {}
     if evaluation.get("dirty"):
         return "❌ 題目或答案尚未完成自動儲存，請稍後再試。", [], evaluation
-    if not model:
-        return "❌ 請先勾選並選擇回答與評判模型。", [], evaluation
+    effective_judge_model = judge_model or (model if judge_model_endpoint is None else "")
+    if not model or not effective_judge_model:
+        return "❌ 請選擇回答模型與評測模型。", [], evaluation
+    if judge_model_endpoint is not None and not judge_model_endpoint:
+        return "❌ 無法解析評測模型的服務設定。", [], evaluation
     concurrency = int(max_concurrent_requests)
     if concurrency < 1:
         return "❌ 測試最大並行請求數必須大於 0", [], evaluation
@@ -1586,7 +1634,9 @@ def run_evaluation_for_ui(
         if status.startswith("✅"):
             try:
                 judgment = judge_evaluation_answer(
-                    model_endpoint, api_key, model, item["question"],
+                    judge_model_endpoint or model_endpoint,
+                    api_key if judge_api_key is None else judge_api_key,
+                    effective_judge_model, item["question"],
                     item["expected_answer"], actual,
                 )
             except ValueError as exc:
@@ -1595,6 +1645,8 @@ def run_evaluation_for_ui(
             judgment = {"passed": False, "reason": status}
         return {
             **item,
+            "answer_model": model,
+            "judge_model": effective_judge_model,
             "actual_answer": actual,
             "retrieval_rank": retrieval_rank,
             "recall_at_5": retrieval_rank is not None and retrieval_rank <= 5,
@@ -1655,13 +1707,17 @@ def run_experiment_groups_for_ui(
     run_control = run_control or RunControl()
     run_control.reset()
 
-    credentials: list[tuple[str, str]] = []
+    credentials: list[tuple[str, str, str, str]] = []
     document_ids_by_name = _project_document_ids(project_id)
     for group in groups:
         endpoint, key = resolve_model_credentials_for_ui(llm_state, group["answer_model"])
         if not endpoint:
             return f"❌ 無法解析實驗組「{group['name']}」的回答模型服務。", [], [], []
-        credentials.append((endpoint, key))
+        judge_model = group.get("judge_model") or group["answer_model"]
+        judge_endpoint, judge_key = resolve_model_credentials_for_ui(llm_state, judge_model)
+        if not judge_endpoint:
+            return f"❌ 無法解析實驗組「{group['name']}」的評測模型服務。", [], [], []
+        credentials.append((endpoint, key, judge_endpoint, judge_key))
 
     tasks = [
         (group_index, question_index)
@@ -1678,7 +1734,7 @@ def run_experiment_groups_for_ui(
         group_index, question_index = tasks[task_index]
         group = groups[group_index]
         item = questions[question_index]
-        endpoint, key = credentials[group_index]
+        endpoint, key, judge_endpoint, judge_key = credentials[group_index]
         status, actual, evidence_rows = answer_question_for_ui(
             endpoint, key, embedding_api_base, embedding_api_key,
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
@@ -1689,7 +1745,8 @@ def run_experiment_groups_for_ui(
         if status.startswith("✅"):
             try:
                 judgment = judge_evaluation_answer(
-                    endpoint, key, group["answer_model"], item["question"],
+                    judge_endpoint, judge_key,
+                    group.get("judge_model") or group["answer_model"], item["question"],
                     item["expected_answer"], actual,
                 )
             except ValueError as exc:
@@ -1699,6 +1756,8 @@ def run_experiment_groups_for_ui(
         return {
             "group_index": group_index,
             "group_name": group["name"],
+            "answer_model": group["answer_model"],
+            "judge_model": group.get("judge_model") or group["answer_model"],
             "number": item.get("number", question_index + 1),
             "question": item["question"],
             "expected_answer": item["expected_answer"],
@@ -1745,14 +1804,16 @@ def run_experiment_groups_for_ui(
         ]
         total = len(group_results)
         summary_rows.append([
-            group["name"], total,
+            group["name"], group["answer_model"],
+            group.get("judge_model") or group["answer_model"], total,
             f"{sum(bool(item['passed']) for item in group_results) / total:.1%}" if total else "—",
             f"{sum(bool(item['recall_at_5']) for item in group_results) / total:.1%}" if total else "—",
             f"{sum(bool(item['recall_at_10']) for item in group_results) / total:.1%}" if total else "—",
             f"{sum(float(item['reciprocal_rank']) for item in group_results) / total:.3f}" if total else "—",
         ])
     detail_rows = [[
-        item["group_name"], item["number"], item["question"], item["document"],
+        item["group_name"], item["answer_model"], item["judge_model"],
+        item["number"], item["question"], item["document"],
         item["expected_answer"], item["actual_answer"],
         "✅ 通過" if item["passed"] else "❌ 未通過", item["reason"],
         item["retrieval_rank"],
@@ -1791,17 +1852,19 @@ def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
 
         summaries = {
             str(row[0]): {
-                "question_count": row[1] if len(row) > 1 else 0,
-                "accuracy": row[2] if len(row) > 2 else None,
-                "recall_at_5": row[3] if len(row) > 3 else None,
-                "recall_at_10": row[4] if len(row) > 4 else None,
-                "mrr": row[5] if len(row) > 5 else None,
+                "answer_model": row[1] if len(row) >= 8 else None,
+                "judge_model": row[2] if len(row) >= 8 else None,
+                "question_count": row[3] if len(row) >= 8 else row[1] if len(row) > 1 else 0,
+                "accuracy": row[4] if len(row) >= 8 else row[2] if len(row) > 2 else None,
+                "recall_at_5": row[5] if len(row) >= 8 else row[3] if len(row) > 3 else None,
+                "recall_at_10": row[6] if len(row) >= 8 else row[4] if len(row) > 4 else None,
+                "mrr": row[7] if len(row) >= 8 else row[5] if len(row) > 5 else None,
             }
             for row in summary_rows if row
         }
         result_fields = (
             "number", "question", "document", "expected_answer", "actual_answer",
-            "passed", "reason", "retrieval_rank", "recall_at_5", "recall_at_10",
+            "answer_model", "judge_model", "passed", "reason", "retrieval_rank", "recall_at_5", "recall_at_10",
             "reciprocal_rank",
         )
         exported_groups = []
@@ -1816,13 +1879,18 @@ def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
             exported_groups.append({
                 "name": name,
                 "parameters": {
-                    key: group.get(key)
+                    key: (group.get("judge_model") or group.get("answer_model")
+                          if key == "judge_model" else group.get(key))
                     for key in (
-                        "answer_model", "retrieval_mode", "top_k",
+                        "answer_model", "judge_model", "retrieval_mode", "top_k",
                         "use_reranker", "expand_evidence",
                     )
                 },
-                "summary": summaries.get(name, {"question_count": len(group_results)}),
+                "summary": {
+                    **summaries.get(name, {"question_count": len(group_results)}),
+                    "answer_model": summaries.get(name, {}).get("answer_model") or group.get("answer_model"),
+                    "judge_model": summaries.get(name, {}).get("judge_model") or group.get("judge_model", group.get("answer_model")),
+                },
                 "results": group_results,
             })
         payload = {
@@ -2831,7 +2899,13 @@ def build_app() -> gr.Blocks:
                         choices=llm_choices,
                         value=preferred_llm,
                         allow_custom_value=False,
-                        label="回答與評判模型",
+                        label="回答模型",
+                    )
+                    evaluation_judge_model = gr.Dropdown(
+                        choices=llm_choices,
+                        value=preferred_llm,
+                        allow_custom_value=False,
+                        label="評測模型",
                     )
                     evaluation_retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
                     evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
@@ -2916,7 +2990,7 @@ def build_app() -> gr.Blocks:
                 interactive=False, wrap=True,
             )
             gr.Markdown("#### 實驗組設定（直接編輯欄位；每次變更會自動儲存）")
-            gr.Markdown("實驗組名稱　　回答模型　　檢索模式　　Top K　　Reranker　　擴展圖譜證據")
+            gr.Markdown("實驗組名稱　　回答模型　　評測模型　　檢索模式　　Top K　　Reranker　　擴展圖譜證據")
             experiment_group_rows: list[list[Any]] = []
             for row_index in range(EXPERIMENT_GROUP_LIMIT):
                 with gr.Row():
@@ -2924,6 +2998,10 @@ def build_app() -> gr.Blocks:
                     group_model = gr.Dropdown(
                         choices=llm_choices, value=None, allow_custom_value=False,
                         label="回答模型", show_label=False, visible=False, scale=2,
+                    )
+                    group_judge_model = gr.Dropdown(
+                        choices=llm_choices, value=None, allow_custom_value=False,
+                        label="評測模型", show_label=False, visible=False, scale=2,
                     )
                     group_retrieval = gr.Dropdown(
                         choices=["基本向量檢索", "混合檢索"], value="混合檢索",
@@ -2934,10 +3012,10 @@ def build_app() -> gr.Blocks:
                     group_expansion = gr.Checkbox(value=False, label="擴展證據", show_label=False, visible=False, scale=1)
                     delete_group_button = gr.Button("移除", size="sm", visible=False, scale=1)
                 experiment_group_rows.append([
-                    group_name, group_model, group_retrieval, group_top_k,
+                    group_name, group_model, group_judge_model, group_retrieval, group_top_k,
                     group_reranker, group_expansion, delete_group_button,
                 ])
-            experiment_group_fields = [component for row in experiment_group_rows for component in row[:6]]
+            experiment_group_fields = [component for row in experiment_group_rows for component in row[:7]]
             experiment_group_all_components = [component for row in experiment_group_rows for component in row]
             add_experiment_group_button = gr.Button("新增實驗組")
             experiment_group_status = gr.Markdown()
@@ -2951,13 +3029,13 @@ def build_app() -> gr.Blocks:
             experiment_status = gr.Markdown()
             gr.Markdown("#### 實驗組摘要")
             experiment_summary_table = gr.Dataframe(
-                headers=["實驗組", "題數", "答案正確率", "Recall@5", "Recall@10", "MRR"],
+                headers=["實驗組", "回答模型", "評測模型", "題數", "答案正確率", "Recall@5", "Recall@10", "MRR"],
                 interactive=False, wrap=True,
             )
             gr.Markdown("#### 逐題結果")
             experiment_details_table = gr.Dataframe(
                 headers=[
-                    "實驗組", "題號", "題目", "來源文件", "正確答案", "實際答案",
+                    "實驗組", "回答模型", "評測模型", "題號", "題目", "來源文件", "正確答案", "實際答案",
                     "答案結果", "評判理由", "答案來源排名",
                 ],
                 interactive=False, wrap=True,
@@ -2976,6 +3054,8 @@ def build_app() -> gr.Blocks:
         generation_model_key = gr.State(initial_llm_credentials[2][1])
         evaluation_model_endpoint = gr.State(initial_llm_credentials[3][0])
         evaluation_model_key = gr.State(initial_llm_credentials[3][1])
+        evaluation_judge_endpoint = gr.State(initial_llm_credentials[3][0])
+        evaluation_judge_key = gr.State(initial_llm_credentials[3][1])
         answer_model_endpoint = gr.State(initial_llm_credentials[4][0])
         answer_model_key = gr.State(initial_llm_credentials[4][1])
         selected_embedding_endpoint = gr.State(initial_embedding_credentials[0])
@@ -2988,7 +3068,8 @@ def build_app() -> gr.Blocks:
                      evaluation_retrieval_mode, evaluation_top_k, evaluation_allow_parallel_generation,
                      evaluation_use_reranker,
                      evaluation_expand_evidence,
-                     evaluation_test_max_concurrent_requests, evaluation_status],
+                     evaluation_test_max_concurrent_requests, evaluation_judge_model,
+                     evaluation_status],
         )
         experiment_tab.select(
             load_experiment_for_ui,
@@ -3006,13 +3087,13 @@ def build_app() -> gr.Blocks:
             evaluation_retrieval_mode, evaluation_top_k,
             evaluation_allow_parallel_generation, evaluation_test_max_concurrent_requests,
             evaluation_use_reranker,
-            evaluation_expand_evidence,
+            evaluation_expand_evidence, evaluation_judge_model,
         ]
         for component in [evaluation_generation_model, evaluation_test_model, evaluation_question_count,
                           evaluation_retrieval_mode, evaluation_top_k,
                           evaluation_allow_parallel_generation, evaluation_use_reranker,
                           evaluation_expand_evidence,
-                          evaluation_test_max_concurrent_requests]:
+                          evaluation_test_max_concurrent_requests, evaluation_judge_model]:
             component.input(
                 save_evaluation_preferences_for_ui,
                 inputs=evaluation_preference_inputs, outputs=evaluation_status,
@@ -3052,7 +3133,8 @@ def build_app() -> gr.Blocks:
                     neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
                     evaluation_test_model, evaluation_retrieval_mode,
                     evaluation_top_k, evaluation_state, evaluation_test_max_concurrent_requests,
-                    evaluation_use_reranker, evaluation_expand_evidence],
+                    evaluation_use_reranker, evaluation_expand_evidence,
+                    evaluation_judge_endpoint, evaluation_judge_key, evaluation_judge_model],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
         )
         import_experiment_questions_button.click(
@@ -3299,8 +3381,10 @@ def build_app() -> gr.Blocks:
                     show_progress="hidden",
                 ).then(
                     refresh_experiment_model_choices_for_ui,
-                    inputs=[llm_service_state, *[row[1] for row in experiment_group_rows]],
-                    outputs=[row[1] for row in experiment_group_rows],
+                    inputs=[llm_service_state, evaluation_judge_model,
+                            *[component for row in experiment_group_rows for component in row[1:3]]],
+                    outputs=[evaluation_judge_model,
+                             *[component for row in experiment_group_rows for component in row[1:3]]],
                     show_progress="hidden",
                 )
         all_connection_test_event = one_click_connection_test_button.click(
@@ -3323,8 +3407,10 @@ def build_app() -> gr.Blocks:
             show_progress="hidden",
         ).then(
             refresh_experiment_model_choices_for_ui,
-            inputs=[llm_service_state, *[row[1] for row in experiment_group_rows]],
-            outputs=[row[1] for row in experiment_group_rows],
+            inputs=[llm_service_state, evaluation_judge_model,
+                    *[component for row in experiment_group_rows for component in row[1:3]]],
+            outputs=[evaluation_judge_model,
+                     *[component for row in experiment_group_rows for component in row[1:3]]],
             show_progress="hidden",
         )
         for field, endpoint_state, key_state in [
@@ -3332,6 +3418,7 @@ def build_app() -> gr.Blocks:
             (extraction_llm_model, extraction_model_endpoint, extraction_model_key),
             (evaluation_generation_model, generation_model_endpoint, generation_model_key),
             (evaluation_test_model, evaluation_model_endpoint, evaluation_model_key),
+            (evaluation_judge_model, evaluation_judge_endpoint, evaluation_judge_key),
             (answer_model, answer_model_endpoint, answer_model_key),
         ]:
             field.change(

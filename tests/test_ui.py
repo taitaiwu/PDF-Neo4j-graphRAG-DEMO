@@ -44,7 +44,7 @@ def test_model_fields_only_offer_initially_checked_models() -> None:
         "知識圖譜抽取 LLM",
         "Embedding 模型",
         "生題模型",
-        "回答與評判模型",
+        "回答模型", "評測模型",
         "問答 LLM",
     }
     fields = {
@@ -86,13 +86,14 @@ def test_pages_three_through_five_default_all_llm_fields_to_gpt_4_1_mini(monkeyp
     monkeypatch.setattr(ui, "preferred_service_model", lambda state: "gpt-4.1-mini")
     app = build_app()
     labels = {
-        "Schema 規劃 LLM", "知識圖譜抽取 LLM", "生題模型", "回答與評判模型", "問答 LLM",
+        "Schema 規劃 LLM", "知識圖譜抽取 LLM", "生題模型", "回答模型", "評測模型", "問答 LLM",
     }
     fields = [
         component for component in app.config["components"]
         if component.get("props", {}).get("label") in labels
+        and component.get("props", {}).get("visible", True)
     ]
-    assert len(fields) == 5
+    assert len(fields) == 6
     assert all(field["props"]["value"] == "gpt-4.1-mini" for field in fields)
 
 
@@ -1035,6 +1036,42 @@ def test_run_evaluation_for_ui_forwards_credentials_to_answer_question_for_ui(mo
     )
 
 
+def test_run_evaluation_uses_separate_judge_model_and_records_both(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        ui, "answer_question_for_ui",
+        lambda *args: ("✅ 完成", "回答內容", []),
+    )
+    monkeypatch.setattr(
+        ui, "judge_evaluation_answer",
+        lambda *args: captured.update(judge_args=args) or {"passed": True, "reason": "正確"},
+    )
+    monkeypatch.setattr(ui, "save_project", lambda _project_id, payload: captured.update(payload) or {})
+    evaluation = {"questions": [{"number": 1, "question": "Q", "expected_answer": "A"}]}
+
+    _status, _rows, updated = ui.run_evaluation_for_ui(
+        "project", "answer-endpoint", "answer-key", "embed", "embed-key",
+        "bolt", "database", "user", "pass", "answer-model", "混合檢索", 5,
+        evaluation, 1, False, False,
+        "judge-endpoint", "judge-key", "judge-model",
+    )
+
+    assert captured["judge_args"][:3] == ("judge-endpoint", "judge-key", "judge-model")
+    assert updated["results"][0]["answer_model"] == "answer-model"
+    assert updated["results"][0]["judge_model"] == "judge-model"
+
+
+def test_run_evaluation_requires_selected_judge_model(monkeypatch) -> None:
+    result = ui.run_evaluation_for_ui(
+        "project", "answer-endpoint", "answer-key", "embed", "embed-key",
+        "bolt", "database", "user", "pass", "answer-model", "混合檢索", 5,
+        {"questions": [{"number": 1, "question": "Q", "expected_answer": "A"}]},
+        1, False, False, "judge-endpoint", "judge-key", None,
+    )
+
+    assert result[0] == "❌ 請選擇回答模型與評測模型。"
+
+
 def test_edit_questions_auto_save_and_clear_results(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
@@ -1283,9 +1320,9 @@ def test_add_experiment_group_for_ui_stores_selected_settings() -> None:
     )
 
     assert status == "✅ 已加入「混合擴展」。"
-    assert rows == [["混合擴展", "model-a", "混合檢索", 12, "是", "是"]]
+    assert rows == [["混合擴展", "model-a", "model-a", "混合檢索", 12, "是", "是"]]
     assert groups[0] == {
-        "name": "混合擴展", "answer_model": "model-a", "retrieval_mode": "混合檢索",
+        "name": "混合擴展", "answer_model": "model-a", "judge_model": "model-a", "retrieval_mode": "混合檢索",
         "top_k": 12, "use_reranker": True, "expand_evidence": True,
     }
 
@@ -1294,7 +1331,7 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("experiment-autosave")
     groups = [{
-        "name": "向量組", "answer_model": "gpt-4.1-mini",
+        "name": "向量組", "answer_model": "gpt-4.1-mini", "judge_model": "gpt-4o-mini",
         "retrieval_mode": "基本向量檢索", "top_k": 5,
         "use_reranker": False, "expand_evidence": True,
     }]
@@ -1327,11 +1364,12 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert restored[8]["visible"] is True
     assert restored[8]["value"] == "向量組"
     assert restored[9]["value"] == "gpt-4.1-mini"
-    assert restored[10]["value"] == "基本向量檢索"
-    assert restored[11]["value"] == 5
-    assert restored[12]["value"] is False
-    assert restored[13]["value"] is True
-    assert restored[14]["visible"] is True
+    assert restored[10]["value"] == "gpt-4o-mini"
+    assert restored[11]["value"] == "基本向量檢索"
+    assert restored[12]["value"] == 5
+    assert restored[13]["value"] is False
+    assert restored[14]["value"] is True
+    assert restored[15]["visible"] is True
 
 
 def test_empty_inline_autosave_preserves_saved_experiment_groups(tmp_path, monkeypatch) -> None:
@@ -1339,6 +1377,7 @@ def test_empty_inline_autosave_preserves_saved_experiment_groups(tmp_path, monke
     project = ui.create_project("protect-experiment-groups")
     groups = [{
         "name": "保留組", "answer_model": "model-a",
+        "judge_model": "judge-a",
         "retrieval_mode": "混合檢索", "top_k": 7,
         "use_reranker": True, "expand_evidence": False,
     }]
@@ -1358,6 +1397,7 @@ def test_experiment_reload_recovers_saved_group_settings_backup(tmp_path, monkey
     project = ui.create_project("experiment-group-backup")
     groups = [{
         "name": "備援組", "answer_model": "disconnected-model",
+        "judge_model": "judge-model",
         "retrieval_mode": "基本向量檢索", "top_k": 4,
         "use_reranker": False, "expand_evidence": True,
     }]
@@ -1374,6 +1414,7 @@ def test_experiment_reload_recovers_saved_group_settings_backup(tmp_path, monkey
     assert restored[8]["value"] == "備援組"
     assert restored[9]["value"] == "disconnected-model"
     assert ("disconnected-model（目前不可用）", "disconnected-model") in restored[9]["choices"]
+    assert restored[10]["value"] == "judge-model"
 
 
 def test_experiment_default_concurrency_is_five(tmp_path, monkeypatch) -> None:
@@ -1418,7 +1459,7 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
     app = build_app()
     components = app.config["components"]
     assert not any(component.get("props", {}).get("headers") == [
-        "實驗組", "回答模型", "檢索模式", "Top K", "Reranker", "擴展圖譜證據",
+        "實驗組", "回答模型", "評測模型", "檢索模式", "Top K", "Reranker", "擴展圖譜證據",
     ] for component in components)
     assert sum(
         component.get("props", {}).get("choices") == [
@@ -1427,6 +1468,11 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         and component.get("type") == "dropdown"
         for component in components
     ) == ui.EXPERIMENT_GROUP_LIMIT
+    assert sum(
+        component.get("props", {}).get("label") == "評測模型"
+        and component.get("type") == "dropdown"
+        for component in components
+    ) == ui.EXPERIMENT_GROUP_LIMIT + 1
     assert any(component.get("props", {}).get("value") == "新增實驗組" for component in components)
     assert any(
         str(dependency.get("api_name", "")).startswith("load_experiment_for_ui")
@@ -1448,12 +1494,13 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("experiment-export")
     groups = [{
-        "name": "向量組", "answer_model": "model-a",
+        "name": "向量組", "answer_model": "model-a", "judge_model": "judge-a",
         "retrieval_mode": "基本向量檢索", "top_k": 6,
         "use_reranker": False, "expand_evidence": True,
     }]
     result = {
         "group_index": 0, "group_name": "向量組", "number": 2,
+        "answer_model": "model-a", "judge_model": "judge-a",
         "question": "問題二", "document": "manual.pdf", "expected_answer": "標準答案",
         "actual_answer": "模型答案", "passed": True, "reason": "正確",
         "retrieval_rank": 1, "recall_at_5": True, "recall_at_10": True,
@@ -1463,7 +1510,7 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
         "questions": [{"question": "問題二"}], "groups": groups,
         "max_concurrent_requests": 5, "status": "實驗已完成",
         "results": [result],
-        "summary_rows": [["向量組", 1, "100.0%", "100.0%", "100.0%", "1.000"]],
+        "summary_rows": [["向量組", "model-a", "judge-a", 1, "100.0%", "100.0%", "100.0%", "1.000"]],
         "detail_rows": [["向量組", 2, "問題二"]],
     }})
 
@@ -1478,10 +1525,11 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
     assert payload["groups"][0] == {
         "name": "向量組",
         "parameters": {
-            "answer_model": "model-a", "retrieval_mode": "基本向量檢索",
+            "answer_model": "model-a", "judge_model": "judge-a", "retrieval_mode": "基本向量檢索",
             "top_k": 6, "use_reranker": False, "expand_evidence": True,
         },
         "summary": {
+            "answer_model": "model-a", "judge_model": "judge-a",
             "question_count": 1, "accuracy": "100.0%", "recall_at_5": "100.0%",
             "recall_at_10": "100.0%", "mrr": "1.000",
         },
@@ -1522,9 +1570,9 @@ def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatc
          "answer_source_pages": [3], "document": "manual.pdf"},
     ]
     groups = [
-        {"name": "向量", "answer_model": "model-a", "retrieval_mode": "基本向量檢索",
+        {"name": "向量", "answer_model": "model-a", "judge_model": "judge-x", "retrieval_mode": "基本向量檢索",
          "top_k": 3, "use_reranker": False, "expand_evidence": False},
-        {"name": "混合擴展", "answer_model": "model-b", "retrieval_mode": "混合檢索",
+        {"name": "混合擴展", "answer_model": "model-b", "judge_model": "judge-y", "retrieval_mode": "混合檢索",
          "top_k": 12, "use_reranker": True, "expand_evidence": True},
     ]
 
@@ -1535,16 +1583,36 @@ def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatc
 
     assert status.startswith("✅ 已完成 2 個實驗組")
     assert summaries == [
-        ["向量", 2, "100.0%", "100.0%", "100.0%", "1.000"],
-        ["混合擴展", 2, "100.0%", "100.0%", "100.0%", "1.000"],
+        ["向量", "model-a", "judge-x", 2, "100.0%", "100.0%", "100.0%", "1.000"],
+        ["混合擴展", "model-b", "judge-y", 2, "100.0%", "100.0%", "100.0%", "1.000"],
     ]
     assert len(details) == len(results) == 4
     assert captured["workers"] == 2
     assert {call[8] for call in captured["calls"]} == {"model-a", "model-b"}
     assert {call[11] for call in captured["calls"]} == {3, 12}
+    assert {item["judge_model"] for item in results} == {"judge-x", "judge-y"}
+    assert saved["experiment"]["summary_rows"][0][1:3] == ["model-a", "judge-x"]
     assert saved["experiment"]["groups"] == groups
     assert saved["experiment"]["results"] == results
     assert saved["experiment"]["summary_rows"] == summaries
+
+
+def test_experiment_reload_migrates_legacy_summary_rows_to_show_models(monkeypatch) -> None:
+    groups = [{
+        "name": "舊組", "answer_model": "answer-model", "retrieval_mode": "混合檢索",
+        "top_k": 8, "use_reranker": False, "expand_evidence": False,
+    }]
+    monkeypatch.setattr(ui, "load_project", lambda _project_id: {"experiment": {
+        "groups": groups,
+        "summary_rows": [["舊組", 2, "50.0%", "100.0%", "100.0%", "1.000"]],
+        "detail_rows": [["舊組", 1, "Q", "manual.pdf", "A", "A", "✅ 通過", "正確", 1]],
+    }})
+    monkeypatch.setattr(ui, "service_choice_items", lambda _state: [("answer-model", "answer-model")])
+
+    loaded = ui.load_experiment_for_ui("project", {})
+
+    assert loaded[6] == [["舊組", "answer-model", "answer-model", 2, "50.0%", "100.0%", "100.0%", "1.000"]]
+    assert loaded[7][0][:3] == ["舊組", "answer-model", "answer-model"]
 
 
 def test_run_experiment_groups_stops_after_current_tasks_and_saves_partial_results(monkeypatch) -> None:
@@ -1594,7 +1662,7 @@ def test_run_experiment_groups_stops_after_current_tasks_and_saves_partial_resul
     assert len(returned[3]) == 1
     assert len(calls) == 1
     assert saved["experiment"]["results"] == returned[3]
-    assert saved["experiment"]["summary_rows"][0][1] == 1
+    assert saved["experiment"]["summary_rows"][0][3] == 1
 
 
 def test_switch_document_cycles_through_documents() -> None:
@@ -2177,13 +2245,14 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
 
     status = ui.save_evaluation_preferences_for_ui(
         "project", "generation-model", "test-model", 12, "基本檢索", 6,
-        True, 5, False, False,
+        True, 5, False, False, "judge-model",
     )
 
     assert status.startswith("✅")
     assert captured["evaluation"]["preferences"] == {
         "generation_model": "generation-model",
         "test_model": "test-model",
+        "judge_model": "judge-model",
         "question_count": 12,
         "retrieval_mode": "基本檢索",
         "top_k": 6,
@@ -2225,6 +2294,20 @@ def test_load_evaluation_restores_saved_summary(monkeypatch) -> None:
     assert len(loaded[2]) == 2
 
 
+def test_load_evaluation_restores_separate_judge_model(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "load_project", lambda _project_id: {
+        "evaluation": {"preferences": {
+            "test_model": "answer-model", "judge_model": "judge-model",
+        }},
+    })
+
+    loaded = ui.load_evaluation_for_ui("project")
+
+    assert loaded[4] == "answer-model"
+    assert loaded[12] == "judge-model"
+    assert "已載入" in loaded[-1]
+
+
 
 def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     monkeypatch.setattr(ui, "load_project", lambda project_id: {
@@ -2238,6 +2321,7 @@ def test_load_evaluation_supports_legacy_shared_model(monkeypatch) -> None:
     assert loaded[10] is False
     assert loaded[11] == 3
     assert loaded[3:5] == ("legacy-model", "legacy-model")
+    assert loaded[12] == "legacy-model"
     assert loaded[6] == "混合檢索"
 
 
