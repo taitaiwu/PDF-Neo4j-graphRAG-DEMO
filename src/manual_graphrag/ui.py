@@ -990,7 +990,10 @@ def save_inline_experiment_groups_for_ui(
         previous = project.get("experiment") or {}
         saved_groups = previous.get("groups") or project.get("experiment_group_settings") or []
         if (current_groups or saved_groups) and not groups and not allow_empty:
-            raise ValueError("已保存的實驗組不可由空欄位覆蓋；請使用該列的「移除」按鈕刪除")
+            # Gradio may send a transient empty component snapshot while the tab
+            # is restoring persisted values. Keep the saved groups and avoid
+            # turning that UI initialization event into a destructive write.
+            return "✅ 已保留已保存的實驗組設定。", list(saved_groups), gr.update()
         result_status = (
             "⚠️ 實驗設定已變更；畫面保留的是最近一次執行結果。"
             if previous.get("results") else "實驗組設定已自動儲存。"

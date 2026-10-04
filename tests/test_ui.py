@@ -1334,7 +1334,7 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert restored[14]["visible"] is True
 
 
-def test_empty_inline_autosave_cannot_erase_saved_experiment_groups(tmp_path, monkeypatch) -> None:
+def test_empty_inline_autosave_preserves_saved_experiment_groups(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("protect-experiment-groups")
     groups = [{
@@ -1348,7 +1348,8 @@ def test_empty_inline_autosave_cannot_erase_saved_experiment_groups(tmp_path, mo
         project["project_id"], [], 5, [], *ui._inline_group_values([]),
     )
 
-    assert status.startswith("❌ 實驗設定儲存失敗：已保存的實驗組不可由空欄位覆蓋")
+    assert status == "✅ 已保留已保存的實驗組設定。"
+    assert _state_groups == groups
     assert ui.load_project(project["project_id"])["experiment"]["groups"] == groups
 
 
