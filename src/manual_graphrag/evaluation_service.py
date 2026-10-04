@@ -126,6 +126,7 @@ def expand_page_context_until_complete(
     model: str,
     chunks: list[TextChunk],
     focus_page: int,
+    reasoning_effort: str | None = None,
 ) -> list[TextChunk]:
     """Expand a focus page by adjacent pages until an LLM judges it self-contained."""
     ordered = sorted(chunks, key=lambda chunk: chunk.number)
@@ -159,6 +160,7 @@ def expand_page_context_until_complete(
             f"目前已提供頁面 {pages[lower]} 至 {pages[upper]}：\n{context}",
             temperature=0,
             validator=validate,
+            reasoning_effort=reasoning_effort,
         )
         if assessment["sufficient"] or (lower == 0 and upper == len(pages) - 1):
             return context_chunks
@@ -176,6 +178,7 @@ def generate_evaluation_questions(
     question_count: int,
     excluded_questions: list[Any] | None = None,
     focus_page: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> list[dict[str, Any]]:
     count = int(question_count)
     if not chunks:
@@ -328,6 +331,7 @@ def generate_evaluation_questions(
         f"文件：\n{context}",
         temperature=0.2,
         validator=validate,
+        reasoning_effort=reasoning_effort,
     )
     return result["questions"]
 
@@ -351,6 +355,7 @@ def judge_evaluation_answer(
     question: str,
     expected_answer: str,
     actual_answer: str,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     if not actual_answer.strip():
         return {"passed": False, "reason": "實際答案為空，未回答標準答案中的關鍵事實。"}
@@ -379,4 +384,5 @@ def judge_evaluation_answer(
         "請逐項檢查標準答案中的數值、單位、名稱、條件與結論是否出現在實際答案。"
         '輸出格式：{"passed":true,"reason":"簡短理由"}。',
         validator=validate,
+        reasoning_effort=reasoning_effort,
     )

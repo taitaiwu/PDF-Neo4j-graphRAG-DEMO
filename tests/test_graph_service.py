@@ -759,6 +759,43 @@ def test_chat_json_retries_invalid_output_once(monkeypatch) -> None:
     assert "請修正" in payloads[1]["messages"][-1]["content"]
 
 
+def test_luna_chat_json_uses_reasoning_effort_and_omits_temperature(monkeypatch) -> None:
+    payloads = []
+
+    def fake_post(url, payload, api_key, timeout=120, **kwargs):
+        payloads.append(payload)
+        return chat_response(SCHEMA)
+
+    monkeypatch.setattr(graph_service, "_post_json", fake_post)
+    assert graph_service._chat_json(
+        "http://models/v1", "", "gpt-6-luna", "system", "user", 0.7,
+        reasoning_effort="low",
+    ) == SCHEMA
+    assert payloads[0]["reasoning_effort"] == "low"
+    assert "temperature" not in payloads[0]
+
+
+def test_luna_none_effort_preserves_temperature_and_invalid_effort_fails(monkeypatch) -> None:
+    payloads = []
+
+    def fake_post(url, payload, api_key, timeout=120, **kwargs):
+        payloads.append(payload)
+        return chat_response(SCHEMA)
+
+    monkeypatch.setattr(graph_service, "_post_json", fake_post)
+    graph_service._chat_json(
+        "http://models/v1", "", "gpt-6-luna", "system", "user", 0.4,
+        reasoning_effort="none",
+    )
+    assert payloads[0]["reasoning_effort"] == "none"
+    assert payloads[0]["temperature"] == 0.4
+    with pytest.raises(ValueError, match="推理強度"):
+        graph_service._chat_json(
+            "http://models/v1", "", "gpt-6-luna", "system", "user", 0,
+            reasoning_effort="unsupported",
+        )
+
+
 
 def test_chat_json_retries_schema_that_fails_structure_validation(monkeypatch) -> None:
     invalid_schema = {"entity_types": [], "relationship_types": []}

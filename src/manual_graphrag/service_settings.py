@@ -17,8 +17,11 @@ MODEL_COUNTS = {"llm": 6, "embedding": 1}
 PROVIDERS_BY_KIND = {"llm": ("OpenAI", "Ollama"), "embedding": ("OpenAI", "Ollama", "Voyage")}
 _SETTINGS_LOCK = RLock()
 DEFAULT_OPENAI_MODELS = {
-    "llm": ["gpt-4.1-mini", "gpt-4o-mini"],
+    "llm": ["gpt-4.1-mini", "gpt-4o-mini", "gpt-6-luna"],
     "embedding": ["text-embedding-3-small", "text-embedding-3-large"],
+}
+LEGACY_DEFAULT_OPENAI_MODELS = {
+    "llm": ["gpt-4.1-mini", "gpt-4o-mini"],
 }
 DEFAULT_VOYAGE_MODELS = [
     "voyage-4-large", "voyage-4", "voyage-4-lite", "voyage-code-3",
@@ -88,7 +91,12 @@ def openai_models(kind: str) -> list[str]:
             raise ValueError()
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"模型設定檔無效：{MODEL_SETTINGS_PATH}（openai_models.{kind}）") from exc
-    return list(dict.fromkeys(model.strip() for model in models))
+    normalized = list(dict.fromkeys(model.strip() for model in models))
+    # Upgrade the built-in legacy list without overriding intentional custom
+    # allowlists saved by the user.
+    if normalized == LEGACY_DEFAULT_OPENAI_MODELS.get(kind):
+        return list(DEFAULT_OPENAI_MODELS[kind])
+    return normalized
 
 
 def configured_models(kind: str, provider: str) -> list[str]:

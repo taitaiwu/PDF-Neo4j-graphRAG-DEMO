@@ -18,6 +18,8 @@ SCHEMA_MERGE_LIMIT = 12_000
 SCHEMA_DESCRIPTION_LIMIT = 120
 EXTRACTION_BATCH_LIMIT = 12_000
 RATE_LIMIT_MAX_RETRIES = 6
+GPT_6_LUNA_MODEL = "gpt-6-luna"
+GPT_6_LUNA_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 RATE_LIMIT_BASE_DELAY_SECONDS = 2.0
 RATE_LIMIT_MAX_DELAY_SECONDS = 30.0
 NETWORK_MAX_RETRIES = 2
@@ -326,6 +328,7 @@ def _chat_json(
     validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     on_retry: Callable[[int, float], None] | None = None,
     control: RunControl | None = None,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     if not 0 <= temperature <= 2:
         raise ValueError("temperature 必須介於 0 到 2")
@@ -338,14 +341,28 @@ def _chat_json(
         {"role": "user", "content": user_prompt},
     ]
 
+    is_gpt_6_luna = model.strip().casefold() == GPT_6_LUNA_MODEL
+    effective_effort = reasoning_effort or "low"
+    if is_gpt_6_luna and effective_effort not in GPT_6_LUNA_REASONING_EFFORTS:
+        raise ValueError(
+            "GPT-6 Luna 推理強度必須是 none、low、medium、high、xhigh 或 max"
+        )
+
     def request_json(request_messages: list[dict[str, str]], request_temperature: float):
+        payload = {
+            "model": model.strip(),
+            "messages": request_messages,
+        }
+        if is_gpt_6_luna:
+            payload["reasoning_effort"] = effective_effort
+            # GPT-6 reasoning requests reject sampling parameters unless effort is none.
+            if effective_effort == "none":
+                payload["temperature"] = request_temperature
+        else:
+            payload["temperature"] = request_temperature
         return _post_json(
             url,
-            {
-                "model": model.strip(),
-                "temperature": request_temperature,
-                "messages": request_messages,
-            },
+            payload,
             api_key,
             on_retry=on_retry,
             control=control,
@@ -501,6 +518,7 @@ def plan_graph_schema(
     schema_granularity: str = "平衡",
     max_concurrent_requests: int = 3,
     control: RunControl | None = None,
+    reasoning_effort: str | None = None,
 ) -> SchemaPlan:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -554,6 +572,7 @@ def plan_graph_schema(
             validate_schema,
             on_retry=report_retry,
             control=control,
+            reasoning_effort=reasoning_effort,
         )
         return _compact_schema(candidate)
 
@@ -641,6 +660,7 @@ def plan_graph_schema(
                 validate_schema,
                 on_retry=report_retry,
                 control=control,
+                reasoning_effort=reasoning_effort,
             )
             return _compact_schema(result)
 
@@ -696,6 +716,7 @@ def extract_graph(
     max_concurrent_requests: int = 3,
     progress_callback: Callable[[float | None, str], None] | None = None,
     control: RunControl | None = None,
+    reasoning_effort: str | None = None,
 ) -> GraphExtraction:
     if not chunks:
         raise ValueError("請先在 PDF 頁面解析並產生 chunks")
@@ -747,6 +768,7 @@ def extract_graph(
             temperature,
             on_retry=report_retry,
             control=control,
+            reasoning_effort=reasoning_effort,
         )
 
     results: list[dict[str, Any] | None] = [None] * len(batches)

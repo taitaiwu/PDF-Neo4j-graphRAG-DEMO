@@ -4,7 +4,10 @@ import json
 import re
 from typing import Any
 
-from .graph_service import _api_url, _chat_response_content, _post_json
+from .graph_service import (
+    GPT_6_LUNA_MODEL, GPT_6_LUNA_REASONING_EFFORTS,
+    _api_url, _chat_response_content, _post_json,
+)
 
 RERANK_CANDIDATE_MULTIPLIER = 3
 RERANK_MAX_CANDIDATES = 50
@@ -88,6 +91,7 @@ def answer_graph_question(
     question: str,
     retrieval_mode: str,
     evidence: list[dict[str, Any]],
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     if not question.strip():
         raise ValueError("請輸入問題")
@@ -100,24 +104,34 @@ def answer_graph_question(
         raise ValueError("不支援的檢索模式")
     if not evidence:
         raise ValueError("Neo4j 檢索找不到相關證據")
+    is_gpt_6_luna = answer_model.strip().casefold() == GPT_6_LUNA_MODEL
+    effective_effort = reasoning_effort or "low"
+    if is_gpt_6_luna and effective_effort not in GPT_6_LUNA_REASONING_EFFORTS:
+        raise ValueError("GPT-6 Luna 推理強度設定無效")
+    payload = {
+        "model": answer_model.strip(),
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是車型文件知識圖譜問答助手。只能根據目前專案提供的證據回答；證據不足時必須明確說明。使用繁體中文，並在相關敘述後標示來源頁碼。",
+            },
+            {
+                "role": "user",
+                "content": "問題：{}\n\n證據：\n{}".format(
+                    question.strip(), json.dumps(evidence, ensure_ascii=False)
+                ),
+            },
+        ],
+    }
+    if is_gpt_6_luna:
+        payload["reasoning_effort"] = effective_effort
+        if effective_effort == "none":
+            payload["temperature"] = 0
+    else:
+        payload["temperature"] = 0
     response = _post_json(
         _api_url(base_url, "chat/completions"),
-        {
-            "model": answer_model.strip(),
-            "temperature": 0,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "你是車型文件知識圖譜問答助手。只能根據目前專案提供的證據回答；證據不足時必須明確說明。使用繁體中文，並在相關敘述後標示來源頁碼。",
-                },
-                {
-                    "role": "user",
-                    "content": "問題：{}\n\n證據：\n{}".format(
-                        question.strip(), json.dumps(evidence, ensure_ascii=False)
-                    ),
-                },
-            ],
-        },
+        payload,
         api_key,
     )
     answer, _ = _chat_response_content(response)

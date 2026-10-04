@@ -26,6 +26,8 @@ from .evaluation_service import (
     sample_random_page_context,
 )
 from .graph_service import (
+    GPT_6_LUNA_MODEL,
+    GPT_6_LUNA_REASONING_EFFORTS,
     RunCancelled,
     RunControl,
     check_model_connection,
@@ -75,7 +77,28 @@ from .service_settings import (
 from .storage import write_json
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_REASONING_EFFORT = "low"
 OLLAMA_CONCURRENCY_HINT = "使用 Ollama 時建議設為 1。"
+
+
+def reasoning_effort_visibility(model: str | None) -> dict[str, Any]:
+    return gr.update(
+        visible=str(model or "").strip().casefold() == GPT_6_LUNA_MODEL,
+        value=DEFAULT_REASONING_EFFORT,
+    )
+
+
+def _reasoning_effort_kwargs(model: str | None, effort: str | None) -> dict[str, str]:
+    if str(model or "").strip().casefold() != GPT_6_LUNA_MODEL:
+        return {}
+    return {"reasoning_effort": effort or DEFAULT_REASONING_EFFORT}
+
+
+def _reasoning_effort_record(model: str | None, effort: str | None, field: str) -> dict[str, str]:
+    return (
+        {field: effort or DEFAULT_REASONING_EFFORT}
+        if str(model or "").strip().casefold() == GPT_6_LUNA_MODEL else {}
+    )
 
 
 def connection_summary(
@@ -297,10 +320,10 @@ def load_evaluation_with_services_for_ui(
     for index in (3, 4, 12):
         if not isinstance(values[index], dict):
             selected = values[index]
-            choices = list(choice_items)
-            if selected and selected not in allowed:
-                choices.append((f"{selected}（目前不可用）", selected))
-            values[index] = gr.update(choices=choices, value=selected)
+            values[index] = gr.update(
+                choices=list(choice_items),
+                value=selected if selected in allowed else None,
+            )
     return tuple(values)
 
 
@@ -557,6 +580,9 @@ def save_project_for_ui(
     max_concurrent_requests: int, extraction_llm_model: str,
     extraction_max_concurrent_requests: int,
     retrieval_mode: str, top_k: int, schema_text: str,
+    graph_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    extraction_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    answer_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
 ) -> tuple[dict[str, Any], str]:
     if not project_id:
         return {}, "❌ 請先建立或載入專案。"
@@ -573,6 +599,9 @@ def save_project_for_ui(
         "extraction_max_concurrent_requests": int(extraction_max_concurrent_requests),
         "retrieval_mode": retrieval_mode,
         "top_k": int(top_k), "schema_text": schema_text or "",
+        "graph_reasoning_effort": graph_reasoning_effort or DEFAULT_REASONING_EFFORT,
+        "extraction_reasoning_effort": extraction_reasoning_effort or DEFAULT_REASONING_EFFORT,
+        "answer_reasoning_effort": answer_reasoning_effort or DEFAULT_REASONING_EFFORT,
     }
     documents = documents or []
     try:
@@ -645,6 +674,21 @@ def load_project_for_ui(project_id: str) -> tuple[Any, ...]:
         _document_rows(documents), _document_choices(documents),
         _chunk_rows(active_chunks), document_status,
         entity_rows, relationship_rows, graph_status, import_status,
+        gr.update(
+            value=get("graph_reasoning_effort", DEFAULT_REASONING_EFFORT),
+            visible=str(get("graph_llm_model", DEFAULT_LLM_MODEL) or "").casefold() == GPT_6_LUNA_MODEL,
+            choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+        ),
+        gr.update(
+            value=get("extraction_reasoning_effort", DEFAULT_REASONING_EFFORT),
+            visible=str(get("extraction_llm_model", DEFAULT_LLM_MODEL) or "").casefold() == GPT_6_LUNA_MODEL,
+            choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+        ),
+        gr.update(
+            value=get("answer_reasoning_effort", DEFAULT_REASONING_EFFORT),
+            visible=str(get("answer_model", DEFAULT_LLM_MODEL) or "").casefold() == GPT_6_LUNA_MODEL,
+            choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+        ),
     )
 
 
@@ -660,6 +704,8 @@ def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ..
             "top_k": int(args[11]), "sources": sources,
             "document": (current.get("graph_state") or {}).get("document", ""),
         }
+        if len(args) > 14:
+            record.update(_reasoning_effort_record(args[8], args[14], "reasoning_effort"))
         append_question(project_id, record)
     except (OSError, ValueError) as exc:
         return f"{status}｜⚠️ 專案紀錄保存失敗：{exc}", answer, sources
@@ -892,7 +938,7 @@ def _experiment_group_rows(groups: list[dict[str, Any]]) -> list[list[object]]:
 
 
 EXPERIMENT_GROUP_LIMIT = 12
-EXPERIMENT_GROUP_FIELDS = 7
+EXPERIMENT_GROUP_FIELDS = 9
 
 
 def _inline_group_values(groups: list[dict[str, Any]]) -> list[Any]:
@@ -902,6 +948,8 @@ def _inline_group_values(groups: list[dict[str, Any]]) -> list[Any]:
         values.extend([
             item.get("name", ""), item.get("answer_model"),
             item.get("judge_model", item.get("answer_model")),
+            item.get("answer_reasoning_effort", DEFAULT_REASONING_EFFORT),
+            item.get("judge_reasoning_effort", DEFAULT_REASONING_EFFORT),
             item.get("retrieval_mode", "混合檢索"),
             item.get("top_k", 8), bool(item.get("use_reranker", False)),
             bool(item.get("expand_evidence", False)),
@@ -927,6 +975,8 @@ def _inline_group_updates(
         judge_model_update = gr.update(
             value=item.get("judge_model", item.get("answer_model")), visible=visible,
         )
+        answer_effort_model = item.get("answer_model")
+        judge_effort_model = item.get("judge_model", answer_effort_model)
         if model_choices is not None or choices:
             model_update["choices"] = choices
             judge_model_update["choices"] = choices
@@ -934,6 +984,16 @@ def _inline_group_updates(
             gr.update(value=item.get("name", ""), visible=visible),
             model_update,
             judge_model_update,
+            gr.update(
+                value=item.get("answer_reasoning_effort", DEFAULT_REASONING_EFFORT),
+                visible=visible and str(answer_effort_model or "").casefold() == GPT_6_LUNA_MODEL,
+                choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+            ),
+            gr.update(
+                value=item.get("judge_reasoning_effort", DEFAULT_REASONING_EFFORT),
+                visible=visible and str(judge_effort_model or "").casefold() == GPT_6_LUNA_MODEL,
+                choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+            ),
             gr.update(value=item.get("retrieval_mode", "混合檢索"), visible=visible),
             gr.update(value=item.get("top_k", 8), visible=visible),
             gr.update(value=bool(item.get("use_reranker", False)), visible=visible),
@@ -948,7 +1008,8 @@ def _groups_from_inline_values(values: tuple[Any, ...]) -> list[dict[str, Any]]:
     seen_empty_name = False
     for index in range(EXPERIMENT_GROUP_LIMIT):
         offset = index * EXPERIMENT_GROUP_FIELDS
-        name, answer_model, judge_model, mode, top_k, reranker, expansion = values[offset:offset + EXPERIMENT_GROUP_FIELDS]
+        (name, answer_model, judge_model, answer_effort, judge_effort,
+         mode, top_k, reranker, expansion) = values[offset:offset + EXPERIMENT_GROUP_FIELDS]
         name = str(name or "").strip()
         if not name:
             if any(str(values[later * EXPERIMENT_GROUP_FIELDS] or "").strip()
@@ -972,6 +1033,8 @@ def _groups_from_inline_values(values: tuple[Any, ...]) -> list[dict[str, Any]]:
             raise ValueError(f"「{name}」的 Top K 必須介於 1 到 50")
         groups.append({
             "name": name, "answer_model": str(answer_model), "judge_model": str(judge_model),
+            **_reasoning_effort_record(answer_model, answer_effort, "answer_reasoning_effort"),
+            **_reasoning_effort_record(judge_model, judge_effort, "judge_reasoning_effort"),
             "retrieval_mode": mode,
             "top_k": top_k, "use_reranker": bool(reranker),
             "expand_evidence": bool(expansion),
@@ -1420,11 +1483,15 @@ def _retrieval_rank(
 
 def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     if not project_id:
-        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "請先選擇專案。"
+        return ({}, [], [], *([gr.update()] * 10),
+                *([gr.update(value=DEFAULT_REASONING_EFFORT, visible=False)] * 3),
+                "請先選擇專案。")
     try:
         project = load_project(project_id)
     except (OSError, ValueError) as exc:
-        return {}, [], [], gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ {exc}"
+        return ({}, [], [], *([gr.update()] * 10),
+                *([gr.update(value=DEFAULT_REASONING_EFFORT, visible=False)] * 3),
+                f"❌ {exc}")
     evaluation = dict(project.get("evaluation") or {})
     evaluation.setdefault("dirty", False)
     preferences = evaluation.get("preferences") or {}
@@ -1441,6 +1508,15 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         preferences.get("expand_evidence", False),
         preferences.get("test_max_concurrent_requests", 3),
         preferences.get("judge_model", preferences.get("test_model", legacy_model)),
+        gr.update(value=preferences.get("generation_reasoning_effort", DEFAULT_REASONING_EFFORT),
+                  visible=str(preferences.get("generation_model", legacy_model) or "").casefold() == GPT_6_LUNA_MODEL,
+                  choices=list(GPT_6_LUNA_REASONING_EFFORTS)),
+        gr.update(value=preferences.get("test_reasoning_effort", DEFAULT_REASONING_EFFORT),
+                  visible=str(preferences.get("test_model", legacy_model) or "").casefold() == GPT_6_LUNA_MODEL,
+                  choices=list(GPT_6_LUNA_REASONING_EFFORTS)),
+        gr.update(value=preferences.get("judge_reasoning_effort", DEFAULT_REASONING_EFFORT),
+                  visible=str(preferences.get("judge_model", preferences.get("test_model", legacy_model)) or "").casefold() == GPT_6_LUNA_MODEL,
+                  choices=list(GPT_6_LUNA_REASONING_EFFORTS)),
         (_evaluation_summary(results, loaded=True) if results else
          f"已載入 {len(questions)} 道題目與 0 筆測試結果。"),
     )
@@ -1454,6 +1530,9 @@ def save_evaluation_preferences_for_ui(
     use_reranker: bool = False,
     expand_evidence: bool = False,
     judge_model: str | None = None,
+    generation_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    test_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    judge_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
 ) -> str:
     if not project_id:
         return "⚠️ 請先選擇專案。"
@@ -1472,6 +1551,9 @@ def save_evaluation_preferences_for_ui(
             "use_reranker": bool(use_reranker),
             "expand_evidence": bool(expand_evidence),
             "test_max_concurrent_requests": int(test_max_concurrent_requests),
+            "generation_reasoning_effort": generation_reasoning_effort or DEFAULT_REASONING_EFFORT,
+            "test_reasoning_effort": test_reasoning_effort or DEFAULT_REASONING_EFFORT,
+            "judge_reasoning_effort": judge_reasoning_effort or DEFAULT_REASONING_EFFORT,
         }
         save_project(project_id, {"evaluation": evaluation})
     except (OSError, TypeError, ValueError) as exc:
@@ -1486,6 +1568,7 @@ def generate_evaluation_for_ui(
     test_max_concurrent_requests: int = 3,
     use_reranker: bool = False,
     expand_evidence: bool = False,
+    reasoning_effort: str | None = None,
 ) -> tuple[str, list[list[object]], dict[str, Any], list[list[object]]]:
     if not project_id:
         return "❌ 請先建立或載入專案。", [], {}, []
@@ -1525,6 +1608,7 @@ def generate_evaluation_for_ui(
                         generation_model,
                         selected_chunks,
                         focus_page,
+                        **_reasoning_effort_kwargs(generation_model, reasoning_effort),
                     )
                     batch = generate_evaluation_questions(
                         model_endpoint,
@@ -1534,6 +1618,7 @@ def generate_evaluation_for_ui(
                         1,
                         excluded,
                         focus_page,
+                        **_reasoning_effort_kwargs(generation_model, reasoning_effort),
                     )
                 except ValueError as exc:
                     last_error = str(exc)
@@ -1582,7 +1667,8 @@ def generate_evaluation_for_ui(
                             "allow_parallel_generation": bool(allow_parallel_generation),
                             "use_reranker": bool(use_reranker),
                             "expand_evidence": bool(expand_evidence),
-                            "test_max_concurrent_requests": int(test_max_concurrent_requests)},
+                            "test_max_concurrent_requests": int(test_max_concurrent_requests),
+                            "generation_reasoning_effort": reasoning_effort or DEFAULT_REASONING_EFFORT},
             "questions": questions, "results": [], "dirty": False,
         }
         save_project(project_id, {"evaluation": evaluation})
@@ -1605,6 +1691,8 @@ def run_evaluation_for_ui(
     judge_model_endpoint: str | None = None,
     judge_api_key: str | None = None,
     judge_model: str | None = None,
+    answer_reasoning_effort: str | None = None,
+    judge_reasoning_effort: str | None = None,
     progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], dict[str, Any]]:
     questions = evaluation.get("questions") if evaluation else None
@@ -1629,6 +1717,7 @@ def run_evaluation_for_ui(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             model, item["question"], retrieval_mode, max(int(top_k), 10),
             use_reranker, expand_evidence,
+            **_reasoning_effort_kwargs(model, answer_reasoning_effort),
         )
         retrieval_rank = _retrieval_rank(item, evidence_rows, document_ids_by_name)
         if status.startswith("✅"):
@@ -1638,6 +1727,7 @@ def run_evaluation_for_ui(
                     api_key if judge_api_key is None else judge_api_key,
                     effective_judge_model, item["question"],
                     item["expected_answer"], actual,
+                    **_reasoning_effort_kwargs(effective_judge_model, judge_reasoning_effort),
                 )
             except ValueError as exc:
                 judgment = {"passed": False, "reason": f"評判失敗：{exc}"}
@@ -1647,6 +1737,8 @@ def run_evaluation_for_ui(
             **item,
             "answer_model": model,
             "judge_model": effective_judge_model,
+            **_reasoning_effort_record(model, answer_reasoning_effort, "answer_reasoning_effort"),
+            **_reasoning_effort_record(effective_judge_model, judge_reasoning_effort, "judge_reasoning_effort"),
             "actual_answer": actual,
             "retrieval_rank": retrieval_rank,
             "recall_at_5": retrieval_rank is not None and retrieval_rank <= 5,
@@ -1740,6 +1832,10 @@ def run_experiment_groups_for_ui(
             neo4j_uri, neo4j_database, neo4j_username, neo4j_password,
             group["answer_model"], item["question"], group["retrieval_mode"],
             int(group["top_k"]), group["use_reranker"], group["expand_evidence"],
+            **_reasoning_effort_kwargs(
+                group["answer_model"],
+                group.get("answer_reasoning_effort"),
+            ),
         )
         rank = _retrieval_rank(item, evidence_rows, document_ids_by_name)
         if status.startswith("✅"):
@@ -1748,6 +1844,10 @@ def run_experiment_groups_for_ui(
                     judge_endpoint, judge_key,
                     group.get("judge_model") or group["answer_model"], item["question"],
                     item["expected_answer"], actual,
+                    **_reasoning_effort_kwargs(
+                        group.get("judge_model") or group["answer_model"],
+                        group.get("judge_reasoning_effort"),
+                    ),
                 )
             except ValueError as exc:
                 judgment = {"passed": False, "reason": f"評判失敗：{exc}"}
@@ -1758,6 +1858,13 @@ def run_experiment_groups_for_ui(
             "group_name": group["name"],
             "answer_model": group["answer_model"],
             "judge_model": group.get("judge_model") or group["answer_model"],
+            **_reasoning_effort_record(
+                group["answer_model"], group.get("answer_reasoning_effort"), "answer_reasoning_effort",
+            ),
+            **_reasoning_effort_record(
+                group.get("judge_model") or group["answer_model"],
+                group.get("judge_reasoning_effort"), "judge_reasoning_effort",
+            ),
             "number": item.get("number", question_index + 1),
             "question": item["question"],
             "expected_answer": item["expected_answer"],
@@ -1865,7 +1972,7 @@ def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
         result_fields = (
             "number", "question", "document", "expected_answer", "actual_answer",
             "answer_model", "judge_model", "passed", "reason", "retrieval_rank", "recall_at_5", "recall_at_10",
-            "reciprocal_rank",
+            "reciprocal_rank", "answer_reasoning_effort", "judge_reasoning_effort",
         )
         exported_groups = []
         for group_index, group in enumerate(groups):
@@ -1876,16 +1983,23 @@ def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
                 if result.get("group_index") == group_index
                 or ("group_index" not in result and result.get("group_name") == name)
             ]
+            parameters = {
+                key: (group.get("judge_model") or group.get("answer_model")
+                      if key == "judge_model" else group.get(key))
+                for key in (
+                    "answer_model", "judge_model", "retrieval_mode", "top_k",
+                    "use_reranker", "expand_evidence",
+                )
+            }
+            for model_key, effort_key in (
+                ("answer_model", "answer_reasoning_effort"),
+                ("judge_model", "judge_reasoning_effort"),
+            ):
+                if effort_key in group or str(group.get(model_key) or "").casefold() == GPT_6_LUNA_MODEL:
+                    parameters[effort_key] = group.get(effort_key, DEFAULT_REASONING_EFFORT)
             exported_groups.append({
                 "name": name,
-                "parameters": {
-                    key: (group.get("judge_model") or group.get("answer_model")
-                          if key == "judge_model" else group.get(key))
-                    for key in (
-                        "answer_model", "judge_model", "retrieval_mode", "top_k",
-                        "use_reranker", "expand_evidence",
-                    )
-                },
+                "parameters": parameters,
                 "summary": {
                     **summaries.get(name, {"question_count": len(group_results)}),
                     "answer_model": summaries.get(name, {}).get("answer_model") or group.get("answer_model"),
@@ -2192,6 +2306,7 @@ def plan_schema_for_ui(
     document_rows: Any,
     chunks: list[TextChunk],
     run_control: RunControl,
+    reasoning_effort: str | None = None,
     progress=gr.Progress(),
 ) -> tuple[str, str]:
     if not llm_model:
@@ -2211,6 +2326,7 @@ def plan_schema_for_ui(
             schema_granularity,
             int(max_concurrent_requests),
             control=run_control,
+            **_reasoning_effort_kwargs(llm_model, reasoning_effort),
         )
     except RunCancelled:
         return "⏹ 已停止（使用者中止 Schema 規劃）。", ""
@@ -2241,6 +2357,7 @@ def extract_graph_for_ui(
     schema_text: str,
     documents: list[dict[str, Any]],
     run_control: RunControl,
+    reasoning_effort: str | None = None,
     progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], list[list[object]], dict[str, Any]]:
     if not llm_model:
@@ -2261,6 +2378,7 @@ def extract_graph_for_ui(
             int(max_concurrent_requests),
             lambda value, description: progress(value, desc=description),
             control=run_control,
+            **_reasoning_effort_kwargs(llm_model, reasoning_effort),
         )
     except RunCancelled:
         return "⏹ 已停止（使用者中止抽取）。", [], [], {}
@@ -2479,6 +2597,7 @@ def answer_question_for_ui(
     top_k: int,
     use_reranker: bool = False,
     expand_evidence: bool = False,
+    reasoning_effort: str | None = None,
 ) -> tuple[str, str, list[list[object]]]:
     if not answer_model:
         return "❌ 請先勾選並選擇問答 LLM。", "", []
@@ -2507,7 +2626,8 @@ def answer_question_for_ui(
         else:
             evidence = evidence[:int(top_k)]
         result = answer_graph_question(
-            model_endpoint, api_key, answer_model, question, retrieval_mode, evidence
+            model_endpoint, api_key, answer_model, question, retrieval_mode, evidence,
+            **_reasoning_effort_kwargs(answer_model, reasoning_effort),
         )
     except ValueError as exc:
         return f"❌ {exc}", "", []
@@ -2713,8 +2833,14 @@ def build_app() -> gr.Blocks:
                         allow_custom_value=False,
                         label="Schema 規劃 LLM",
                     )
+                    graph_reasoning_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
+                    )
                     graph_temperature = gr.Slider(
-                        0, 2, value=0, step=0.1, label="Temperature"
+                        0, 2, value=0, step=0.1, label="Temperature",
+                        info="選用 GPT-6 Luna 且推理強度非 none 時，API 請求會略過此參數。",
                     )
                 with gr.Row():
                     schema_granularity = gr.Radio(
@@ -2776,6 +2902,11 @@ def build_app() -> gr.Blocks:
                     allow_custom_value=False,
                     label="知識圖譜抽取 LLM",
                 )
+                extraction_reasoning_effort = gr.Dropdown(
+                    choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                    value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                    visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
+                )
                 extraction_max_concurrent_requests = gr.Number(
                     value=3,
                     minimum=1,
@@ -2828,6 +2959,11 @@ def build_app() -> gr.Blocks:
                 value=preferred_llm,
                 allow_custom_value=False,
                 label="問答 LLM",
+            )
+            answer_reasoning_effort = gr.Dropdown(
+                choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
             )
             question = gr.Textbox(label="問題", placeholder="例如：設備出現 E01 時該如何處理？")
             with gr.Row():
@@ -2887,6 +3023,11 @@ def build_app() -> gr.Blocks:
                         allow_custom_value=False,
                         label="生題模型",
                     )
+                    evaluation_generation_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
+                    )
                     evaluation_question_count = gr.Number(value=10, minimum=1, maximum=100, precision=0, label="每份 PDF 題目數 N")
                     evaluation_allow_parallel_generation = gr.Checkbox(
                         value=False, label="允許並行"
@@ -2901,11 +3042,21 @@ def build_app() -> gr.Blocks:
                         allow_custom_value=False,
                         label="回答模型",
                     )
+                    evaluation_test_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
+                    )
                     evaluation_judge_model = gr.Dropdown(
                         choices=llm_choices,
                         value=preferred_llm,
                         allow_custom_value=False,
                         label="評測模型",
+                    )
+                    evaluation_judge_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
                     )
                     evaluation_retrieval_mode = gr.Radio(["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式")
                     evaluation_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
@@ -2990,7 +3141,7 @@ def build_app() -> gr.Blocks:
                 interactive=False, wrap=True,
             )
             gr.Markdown("#### 實驗組設定（直接編輯欄位；每次變更會自動儲存）")
-            gr.Markdown("實驗組名稱　　回答模型　　評測模型　　檢索模式　　Top K　　Reranker　　擴展圖譜證據")
+            gr.Markdown("實驗組名稱　回答模型／推理強度　評測模型／推理強度　檢索模式　Top K　Reranker　擴展圖譜證據")
             experiment_group_rows: list[list[Any]] = []
             for row_index in range(EXPERIMENT_GROUP_LIMIT):
                 with gr.Row():
@@ -3003,6 +3154,16 @@ def build_app() -> gr.Blocks:
                         choices=llm_choices, value=None, allow_custom_value=False,
                         label="評測模型", show_label=False, visible=False, scale=2,
                     )
+                    group_answer_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="回答推理強度",
+                        show_label=False, visible=False, scale=1,
+                    )
+                    group_judge_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="評測推理強度",
+                        show_label=False, visible=False, scale=1,
+                    )
                     group_retrieval = gr.Dropdown(
                         choices=["基本向量檢索", "混合檢索"], value="混合檢索",
                         label="檢索模式", show_label=False, visible=False, scale=2,
@@ -3012,10 +3173,11 @@ def build_app() -> gr.Blocks:
                     group_expansion = gr.Checkbox(value=False, label="擴展證據", show_label=False, visible=False, scale=1)
                     delete_group_button = gr.Button("移除", size="sm", visible=False, scale=1)
                 experiment_group_rows.append([
-                    group_name, group_model, group_judge_model, group_retrieval, group_top_k,
+                    group_name, group_model, group_judge_model, group_answer_effort,
+                    group_judge_effort, group_retrieval, group_top_k,
                     group_reranker, group_expansion, delete_group_button,
                 ])
-            experiment_group_fields = [component for row in experiment_group_rows for component in row[:7]]
+            experiment_group_fields = [component for row in experiment_group_rows for component in row[:-1]]
             experiment_group_all_components = [component for row in experiment_group_rows for component in row]
             add_experiment_group_button = gr.Button("新增實驗組")
             experiment_group_status = gr.Markdown()
@@ -3069,6 +3231,8 @@ def build_app() -> gr.Blocks:
                      evaluation_use_reranker,
                      evaluation_expand_evidence,
                      evaluation_test_max_concurrent_requests, evaluation_judge_model,
+                     evaluation_generation_effort, evaluation_test_effort,
+                     evaluation_judge_effort,
                      evaluation_status],
         )
         experiment_tab.select(
@@ -3088,12 +3252,15 @@ def build_app() -> gr.Blocks:
             evaluation_allow_parallel_generation, evaluation_test_max_concurrent_requests,
             evaluation_use_reranker,
             evaluation_expand_evidence, evaluation_judge_model,
+            evaluation_generation_effort, evaluation_test_effort, evaluation_judge_effort,
         ]
         for component in [evaluation_generation_model, evaluation_test_model, evaluation_question_count,
                           evaluation_retrieval_mode, evaluation_top_k,
                           evaluation_allow_parallel_generation, evaluation_use_reranker,
                           evaluation_expand_evidence,
-                          evaluation_test_max_concurrent_requests, evaluation_judge_model]:
+                          evaluation_test_max_concurrent_requests, evaluation_judge_model,
+                          evaluation_generation_effort, evaluation_test_effort,
+                          evaluation_judge_effort]:
             component.input(
                 save_evaluation_preferences_for_ui,
                 inputs=evaluation_preference_inputs, outputs=evaluation_status,
@@ -3122,7 +3289,8 @@ def build_app() -> gr.Blocks:
                     evaluation_test_model, evaluation_question_count, evaluation_retrieval_mode,
                     evaluation_top_k, chunk_state, evaluation_allow_parallel_generation,
                     evaluation_test_max_concurrent_requests,
-                    evaluation_use_reranker, evaluation_expand_evidence],
+                    evaluation_use_reranker, evaluation_expand_evidence,
+                    evaluation_generation_effort],
             outputs=[evaluation_status, evaluation_questions_table,
                      evaluation_state, evaluation_results_table],
         )
@@ -3134,7 +3302,8 @@ def build_app() -> gr.Blocks:
                     evaluation_test_model, evaluation_retrieval_mode,
                     evaluation_top_k, evaluation_state, evaluation_test_max_concurrent_requests,
                     evaluation_use_reranker, evaluation_expand_evidence,
-                    evaluation_judge_endpoint, evaluation_judge_key, evaluation_judge_model],
+                    evaluation_judge_endpoint, evaluation_judge_key, evaluation_judge_model,
+                    evaluation_test_effort, evaluation_judge_effort],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
         )
         import_experiment_questions_button.click(
@@ -3216,7 +3385,8 @@ def build_app() -> gr.Blocks:
             max_concurrent_requests,
             extraction_llm_model,
             extraction_max_concurrent_requests, retrieval_mode,
-            top_k, schema_editor,
+            top_k, schema_editor, graph_reasoning_effort,
+            extraction_reasoning_effort, answer_reasoning_effort,
         ]
         project_load_outputs = [
             project_state, project_status,
@@ -3233,7 +3403,16 @@ def build_app() -> gr.Blocks:
             documents_table, remove_document_selector,
             chunk_table, page_status,
             entity_table, relationship_table, build_status, import_status,
+            graph_reasoning_effort, extraction_reasoning_effort,
+            answer_reasoning_effort,
         ]
+        for effort_control in [
+            graph_reasoning_effort, extraction_reasoning_effort, answer_reasoning_effort,
+        ]:
+            effort_control.input(
+                save_project_for_ui, inputs=project_setting_inputs,
+                outputs=[project_state, project_status], show_progress="hidden",
+            )
         project_tab.select(refresh_projects_for_ui, inputs=project_state, outputs=project_selector)
         app.load(refresh_projects_for_ui, inputs=project_state, outputs=project_selector)
         project_selector.input(
@@ -3426,6 +3605,27 @@ def build_app() -> gr.Blocks:
                 inputs=[llm_service_state, field], outputs=[endpoint_state, key_state],
                 show_progress="hidden",
             )
+        for model_field, effort_field in [
+            (graph_llm_model, graph_reasoning_effort),
+            (extraction_llm_model, extraction_reasoning_effort),
+            (answer_model, answer_reasoning_effort),
+            (evaluation_generation_model, evaluation_generation_effort),
+            (evaluation_test_model, evaluation_test_effort),
+            (evaluation_judge_model, evaluation_judge_effort),
+        ]:
+            model_field.change(
+                reasoning_effort_visibility, inputs=model_field, outputs=effort_field,
+                show_progress="hidden",
+            )
+        for row in experiment_group_rows:
+            row[1].change(
+                reasoning_effort_visibility, inputs=row[1], outputs=row[3],
+                show_progress="hidden",
+            )
+            row[2].change(
+                reasoning_effort_visibility, inputs=row[2], outputs=row[4],
+                show_progress="hidden",
+            )
         graph_embedding_model.change(
             resolve_model_credentials_for_ui,
             inputs=[embedding_service_state, graph_embedding_model],
@@ -3539,6 +3739,7 @@ def build_app() -> gr.Blocks:
                 schema_documents,
                 chunk_state,
                 run_control_state,
+                graph_reasoning_effort,
             ],
             outputs=[plan_status, schema_editor],
         )
@@ -3554,6 +3755,7 @@ def build_app() -> gr.Blocks:
                 schema_editor,
                 documents_state,
                 run_control_state,
+                extraction_reasoning_effort,
             ],
             outputs=[build_status, entity_table, relationship_table, graph_state],
             show_progress="minimal",
@@ -3610,6 +3812,7 @@ def build_app() -> gr.Blocks:
                 top_k,
                 use_reranker,
                 expand_evidence,
+                answer_reasoning_effort,
             ],
             outputs=[answer_status, answer, answer_sources],
         )

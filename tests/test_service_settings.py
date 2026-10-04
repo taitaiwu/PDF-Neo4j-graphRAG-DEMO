@@ -31,8 +31,36 @@ def act(state, action, *, provider=None, base=None, key=None, rows=None, models=
     )
 
 
+def test_legacy_builtin_openai_model_list_is_upgraded_without_customizing_other_lists(tmp_path, monkeypatch):
+    path = tmp_path / "model_settings.yaml"
+    monkeypatch.setattr(settings, "MODEL_SETTINGS_PATH", path)
+    path.write_text(
+        "openai_models:\n"
+        "  llm: [gpt-4.1-mini, gpt-4o-mini]\n"
+        "  embedding: [text-embedding-3-small, text-embedding-3-large]\n",
+        encoding="utf-8",
+    )
+
+    assert settings.openai_models("llm") == ["gpt-4.1-mini", "gpt-4o-mini", "gpt-6-luna"]
+    assert settings.openai_models("embedding") == [
+        "text-embedding-3-small", "text-embedding-3-large",
+    ]
+
+
+def test_custom_openai_model_allowlist_is_not_overwritten(tmp_path, monkeypatch):
+    path = tmp_path / "model_settings.yaml"
+    monkeypatch.setattr(settings, "MODEL_SETTINGS_PATH", path)
+    path.write_text(
+        "openai_models:\n  llm: [custom-chat]\n  embedding: [custom-embed]\n",
+        encoding="utf-8",
+    )
+
+    assert settings.openai_models("llm") == ["custom-chat"]
+    assert settings.openai_models("embedding") == ["custom-embed"]
+
+
 @pytest.mark.parametrize("kind,expected", [
-    ("llm", ["gpt-4.1-mini", "gpt-4o-mini"]),
+    ("llm", ["gpt-4.1-mini", "gpt-4o-mini", "gpt-6-luna"]),
     ("embedding", ["text-embedding-3-small", "text-embedding-3-large"]),
 ])
 def test_openai_requires_connection_then_only_offers_json_allowlist(monkeypatch, kind, expected):
@@ -245,7 +273,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
     async def run():
         inputs = ["OpenAI", None, "https://api.openai.com/v1", "test-key", {"headers": ["使用", "模型名稱"], "data": []}, *([None] * settings.MODEL_COUNTS["llm"])]
         connected = (await app.process_api(test["id"], inputs, state=session))["data"]
-        assert connected[7]["choices"] == [["OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"], ["OpenAI｜gpt-4o-mini", "gpt-4o-mini"]]
+        assert connected[7]["choices"] == [["OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"], ["OpenAI｜gpt-4o-mini", "gpt-4o-mini"], ["OpenAI｜gpt-6-luna", "gpt-6-luna"]]
         assert all(field["value"] == "gpt-4.1-mini" for field in connected[7:])
         inputs[4] = connected[3]["value"]
         inputs[5:] = [u["value"] for u in connected[7:]]
@@ -258,7 +286,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
         inputs[4] = fetched[3]["value"]
         inputs[4]["data"][0][0] = True
         checked = (await app.process_api(edit["id"], inputs, state=session))["data"]
-        assert checked[7]["choices"] == [["OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"], ["OpenAI｜gpt-4o-mini", "gpt-4o-mini"], ["Ollama｜chat-local", "chat-local"]]
+        assert checked[7]["choices"] == [["OpenAI｜gpt-4.1-mini", "gpt-4.1-mini"], ["OpenAI｜gpt-4o-mini", "gpt-4o-mini"], ["OpenAI｜gpt-6-luna", "gpt-6-luna"], ["Ollama｜chat-local", "chat-local"]]
         inputs[4] = checked[3]["value"]
         inputs[0] = "OpenAI"
         restored = (await app.process_api(switch["id"], inputs, state=session))["data"]
@@ -328,7 +356,7 @@ def test_both_provider_models_remain_visible_and_route_to_their_own_service(monk
         rows=[[True, "local-chat"], [False, "local-embed"]],
     )
     assert combined[7]["choices"] == (
-        choices("OpenAI", ["gpt-4.1-mini", "gpt-4o-mini"])
+        choices("OpenAI", ["gpt-4.1-mini", "gpt-4o-mini", "gpt-6-luna"])
         + choices("Ollama", ["local-chat"])
     )
     assert settings.resolve_model_service(combined[0], "gpt-4o-mini") == (

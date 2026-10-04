@@ -32,6 +32,39 @@ def test_answer_graph_question_omits_max_tokens(monkeypatch) -> None:
     assert "只允許使用以下文件" not in captured["payload"]["messages"][0]["content"]
 
 
+def test_luna_answer_uses_low_reasoning_without_temperature(monkeypatch) -> None:
+    captured = {}
+
+    def fake_post(url, payload, api_key, **kwargs):
+        captured.update(payload=payload)
+        return {"choices": [{"message": {"content": "答案"}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(qa_service, "_post_json", fake_post)
+    qa_service.answer_graph_question(
+        "http://models/v1", "", "gpt-6-luna", "問題", "混合檢索", [{"text": "證據"}],
+    )
+
+    assert captured["payload"]["reasoning_effort"] == "low"
+    assert "temperature" not in captured["payload"]
+
+
+def test_luna_none_reasoning_keeps_compatible_temperature(monkeypatch) -> None:
+    captured = {}
+
+    def fake_post(url, payload, api_key, **kwargs):
+        captured.update(payload=payload)
+        return {"choices": [{"message": {"content": "答案"}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(qa_service, "_post_json", fake_post)
+    qa_service.answer_graph_question(
+        "http://models/v1", "", "gpt-6-luna", "問題", "混合檢索", [{"text": "證據"}],
+        "none",
+    )
+
+    assert captured["payload"]["reasoning_effort"] == "none"
+    assert captured["payload"]["temperature"] == 0
+
+
 def test_rerank_evidence_prioritizes_question_term_matches() -> None:
     evidence = [
         {

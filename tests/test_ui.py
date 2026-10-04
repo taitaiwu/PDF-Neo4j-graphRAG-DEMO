@@ -1365,11 +1365,49 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert restored[8]["value"] == "向量組"
     assert restored[9]["value"] == "gpt-4.1-mini"
     assert restored[10]["value"] == "gpt-4o-mini"
-    assert restored[11]["value"] == "基本向量檢索"
-    assert restored[12]["value"] == 5
-    assert restored[13]["value"] is False
-    assert restored[14]["value"] is True
-    assert restored[15]["visible"] is True
+    assert restored[11]["value"] == "low"
+    assert restored[12]["value"] == "low"
+    assert restored[13]["value"] == "基本向量檢索"
+    assert restored[14]["value"] == 5
+    assert restored[15]["value"] is False
+    assert restored[16]["value"] is True
+    assert restored[17]["visible"] is True
+
+
+def test_luna_reasoning_controls_are_visible_only_for_luna_and_default_low() -> None:
+    assert ui.reasoning_effort_visibility("gpt-6-luna") == {
+        "visible": True, "value": "low", "__type__": "update",
+    }
+    assert ui.reasoning_effort_visibility("gpt-4o-mini")["visible"] is False
+
+
+def test_model_selection_dynamically_toggles_reasoning_effort_control() -> None:
+    app = build_app()
+    components = app.config["components"]
+    model = next(c for c in components if c.get("props", {}).get("label") == "問答 LLM")
+    effort_ids = {
+        c["id"] for c in components if c.get("props", {}).get("label") == "推理強度"
+    }
+    dependency = next(
+        item for item in app.config["dependencies"]
+        if model["id"] in item["inputs"]
+        and effort_ids.intersection(item["outputs"])
+    )
+    assert effort_ids.intersection(dependency["outputs"])
+    assert (model["id"], "change") in dependency["targets"]
+
+
+def test_experiment_group_reasoning_controls_follow_each_selected_model() -> None:
+    luna_group = {
+        "name": "Luna 組", "answer_model": "gpt-6-luna", "judge_model": "gpt-4o-mini",
+    }
+    updates = ui._inline_group_updates([luna_group])
+    assert updates[3]["visible"] is True
+    assert updates[3]["value"] == "low"
+    assert updates[4]["visible"] is False
+    saved = ui._groups_from_inline_values(tuple(ui._inline_group_values([luna_group])))[0]
+    assert saved["answer_reasoning_effort"] == "low"
+    assert "judge_reasoning_effort" not in saved
 
 
 def test_empty_inline_autosave_preserves_saved_experiment_groups(tmp_path, monkeypatch) -> None:
@@ -2260,6 +2298,9 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
         "use_reranker": False,
         "expand_evidence": False,
         "test_max_concurrent_requests": 5,
+        "generation_reasoning_effort": "low",
+        "test_reasoning_effort": "low",
+        "judge_reasoning_effort": "low",
     }
 
 
