@@ -1771,13 +1771,13 @@ def _retrieval_rank(
 
 def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
     if not project_id:
-        return ({}, [], [], *([gr.update()] * 10),
+        return ({}, [], [], *([gr.update()] * 11),
                 *([gr.update(value=DEFAULT_REASONING_EFFORT, visible=False)] * 3),
                 "請先選擇專案。")
     try:
         project = load_project(project_id)
     except (OSError, ValueError) as exc:
-        return ({}, [], [], *([gr.update()] * 10),
+        return ({}, [], [], *([gr.update()] * 11),
                 *([gr.update(value=DEFAULT_REASONING_EFFORT, visible=False)] * 3),
                 f"❌ {exc}")
     evaluation = dict(project.get("evaluation") or {})
@@ -1796,6 +1796,7 @@ def load_evaluation_for_ui(project_id: str) -> tuple[Any, ...]:
         preferences.get("expand_evidence", False),
         preferences.get("test_max_concurrent_requests", 3),
         preferences.get("judge_model", preferences.get("test_model", legacy_model)),
+        preferences.get("judge_max_concurrent_requests", 3),
         gr.update(value=preferences.get("generation_reasoning_effort", DEFAULT_REASONING_EFFORT),
                   visible=str(preferences.get("generation_model", legacy_model) or "").casefold() == GPT_6_LUNA_MODEL,
                   choices=list(GPT_6_LUNA_REASONING_EFFORTS)),
@@ -1821,6 +1822,7 @@ def save_evaluation_preferences_for_ui(
     generation_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     test_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     judge_reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    judge_max_concurrent_requests: int = 3,
 ) -> str:
     if not project_id:
         return "⚠️ 請先選擇專案。"
@@ -1828,6 +1830,9 @@ def save_evaluation_preferences_for_ui(
         test_concurrency = int(test_max_concurrent_requests)
         if test_concurrency < 1:
             raise ValueError("最大並行請求數必須大於 0")
+        judge_concurrency = int(judge_max_concurrent_requests)
+        if judge_concurrency < 1:
+            raise ValueError("評測最大並行請求數必須大於 0")
         project = load_project(project_id)
         evaluation = dict(project.get("evaluation") or {})
         evaluation["preferences"] = {
@@ -1839,6 +1844,7 @@ def save_evaluation_preferences_for_ui(
             "use_reranker": bool(use_reranker),
             "expand_evidence": bool(expand_evidence),
             "test_max_concurrent_requests": int(test_max_concurrent_requests),
+            "judge_max_concurrent_requests": judge_concurrency,
             "generation_reasoning_effort": generation_reasoning_effort or DEFAULT_REASONING_EFFORT,
             "test_reasoning_effort": test_reasoning_effort or DEFAULT_REASONING_EFFORT,
             "judge_reasoning_effort": judge_reasoning_effort or DEFAULT_REASONING_EFFORT,
@@ -2038,6 +2044,7 @@ def generate_evaluation_answers_for_ui(
 def evaluate_generated_answers_for_ui(
     project_id: str, judge_model_endpoint: str, judge_api_key: str,
     judge_model: str, evaluation: dict[str, Any],
+    max_concurrent_requests: int = 3,
     judge_reasoning_effort: str | None = None,
     progress=gr.Progress(),
 ) -> tuple[str, list[list[object]], dict[str, Any]]:
@@ -2050,6 +2057,12 @@ def evaluate_generated_answers_for_ui(
         return "❌ 請先按「生成回答」完成回答生成。", [], current
     if not judge_model or not judge_model_endpoint:
         return "❌ 請選擇可用的評測模型。", [], current
+    try:
+        concurrency = int(max_concurrent_requests)
+        if concurrency < 1:
+            raise ValueError("評測最大並行請求數必須大於 0")
+    except (TypeError, ValueError) as exc:
+        return f"❌ {exc}", [], current
 
     def evaluate(item: dict[str, Any]) -> dict[str, Any]:
         status = str(item.get("answer_status") or "")
@@ -2073,7 +2086,7 @@ def evaluate_generated_answers_for_ui(
 
     results: list[dict[str, Any] | None] = [None] * len(pending)
     try:
-        with ThreadPoolExecutor(max_workers=min(8, len(pending))) as executor:
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(pending))) as executor:
             futures = {executor.submit(evaluate, item): index for index, item in enumerate(pending)}
             for completed, future in enumerate(as_completed(futures), start=1):
                 results[futures[future]] = future.result()
@@ -3643,6 +3656,13 @@ def build_app() -> gr.Blocks:
                 "每份 PDF 建立指定數量的題目與標準答案；先生成測試回答，再獨立進行模型評測。"
                 "勾選允許並行時，不同 PDF 可同時生題，但同一份 PDF 同時只會送出一個請求；未勾選時全部依序處理。"
             )
+            with gr.Row():
+                evaluation_import_file = gr.File(
+                    label="匯入題目（JSON／CSV）", file_types=[".json", ".csv"], type="filepath"
+                )
+                import_evaluation_button = gr.Button("匯入題目")
+                export_evaluation_button = gr.Button("匯出題目")
+                evaluation_export_file = gr.File(label="題目 JSON", interactive=False)
             with gr.Group():
                 gr.Markdown("#### 生題設定")
                 with gr.Row():
@@ -3687,7 +3707,7 @@ def build_app() -> gr.Blocks:
                     )
                     evaluation_test_max_concurrent_requests = gr.Number(
                         value=3, minimum=1, precision=0,
-                        label="測試最大並行請求數",
+                        label="最大並行請求數",
                         info=OLLAMA_CONCURRENCY_HINT,
                     )
                 generate_evaluation_answers_button = gr.Button("生成回答", variant="primary")
@@ -3705,14 +3725,12 @@ def build_app() -> gr.Blocks:
                         value=DEFAULT_REASONING_EFFORT, label="推理強度",
                         visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
                     )
+                    evaluation_judge_max_concurrent_requests = gr.Number(
+                        value=3, minimum=1, precision=0,
+                        label="最大並行請求數",
+                        info=OLLAMA_CONCURRENCY_HINT,
+                    )
                 run_evaluation_button = gr.Button("進行評測")
-            with gr.Row():
-                evaluation_import_file = gr.File(
-                    label="匯入題目（JSON／CSV）", file_types=[".json", ".csv"], type="filepath"
-                )
-                import_evaluation_button = gr.Button("匯入題目")
-                export_evaluation_button = gr.Button("匯出題目")
-                evaluation_export_file = gr.File(label="題目 JSON", interactive=False)
             gr.HTML(
                 """<style>
                 .evaluation-metrics-box {
@@ -3965,6 +3983,7 @@ def build_app() -> gr.Blocks:
                      evaluation_use_reranker,
                      evaluation_expand_evidence,
                      evaluation_test_max_concurrent_requests, evaluation_judge_model,
+                     evaluation_judge_max_concurrent_requests,
                      evaluation_generation_effort, evaluation_test_effort,
                      evaluation_judge_effort,
                      evaluation_status],
@@ -3988,12 +4007,14 @@ def build_app() -> gr.Blocks:
             evaluation_use_reranker,
             evaluation_expand_evidence, evaluation_judge_model,
             evaluation_generation_effort, evaluation_test_effort, evaluation_judge_effort,
+            evaluation_judge_max_concurrent_requests,
         ]
         for component in [evaluation_generation_model, evaluation_test_model, evaluation_question_count,
                           evaluation_retrieval_mode, evaluation_top_k,
                           evaluation_allow_parallel_generation, evaluation_use_reranker,
                           evaluation_expand_evidence,
                           evaluation_test_max_concurrent_requests, evaluation_judge_model,
+                          evaluation_judge_max_concurrent_requests,
                           evaluation_generation_effort, evaluation_test_effort,
                           evaluation_judge_effort]:
             component.input(
@@ -4042,7 +4063,8 @@ def build_app() -> gr.Blocks:
         run_evaluation_button.click(
             evaluate_generated_answers_for_ui,
             inputs=[project_selector, evaluation_judge_endpoint, evaluation_judge_key,
-                    evaluation_judge_model, evaluation_state, evaluation_judge_effort],
+                    evaluation_judge_model, evaluation_state,
+                    evaluation_judge_max_concurrent_requests, evaluation_judge_effort],
             outputs=[evaluation_status, evaluation_results_table, evaluation_state],
         )
         evaluation_results_table.input(

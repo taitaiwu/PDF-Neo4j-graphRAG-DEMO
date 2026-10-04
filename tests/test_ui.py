@@ -227,7 +227,7 @@ def test_all_concurrency_inputs_show_ollama_recommendation() -> None:
         if "最大並行請求數" in str(component.get("props", {}).get("label", ""))
     ]
 
-    assert len(concurrency_inputs) == 5
+    assert len(concurrency_inputs) == 6
     assert all(
         component["props"].get("info") == ui.OLLAMA_CONCURRENCY_HINT
         for component in concurrency_inputs
@@ -419,6 +419,28 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     assert "#### 生題設定" in values
     assert "#### 回答模型設定" in values
     assert "#### 評測模型設定" in values
+    components = app.config["components"]
+    labels = [component.get("props", {}).get("label") for component in components]
+    values_by_component = [component.get("props", {}).get("value") for component in components]
+    import_button_index = values_by_component.index("匯入題目")
+    generation_heading_index = values_by_component.index("#### 生題設定")
+    answer_heading_index = values_by_component.index("#### 回答模型設定")
+    judge_heading_index = values_by_component.index("#### 評測模型設定")
+    questions_heading_index = values_by_component.index("#### 測試題目")
+    assert import_button_index < generation_heading_index
+    assert "最大並行請求數" in labels
+    assert any(
+        component.get("props", {}).get("label") == "最大並行請求數"
+        for component in components[answer_heading_index:judge_heading_index]
+    )
+    assert any(
+        component.get("props", {}).get("label") == "最大並行請求數"
+        for component in components[judge_heading_index:questions_heading_index]
+    )
+    assert not any(
+        component.get("props", {}).get("label") == "測試最大並行請求數"
+        for component in components[answer_heading_index:questions_heading_index]
+    )
     question_table = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("headers")
@@ -1055,28 +1077,38 @@ def test_generate_answers_defers_display_and_evaluation(monkeypatch) -> None:
 
 def test_evaluation_judges_saved_answers_without_generating_again(monkeypatch) -> None:
     captured = {}
+    real_executor = ui.ThreadPoolExecutor
+
+    def recording_executor(max_workers):
+        captured["judge_workers"] = max_workers
+        return real_executor(max_workers=max_workers)
+
     monkeypatch.setattr(ui, "answer_question_for_ui", lambda *_args: (_ for _ in ()).throw(AssertionError()))
     monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *args: {"passed": True, "reason": "正確"})
     monkeypatch.setattr(ui, "save_project", lambda project_id, payload: captured.update(payload) or {})
-    evaluation = {
-        "questions": [{"number": 1, "question": "Q", "expected_answer": "A"}],
-        "pending_answers": [{
+    monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
+    first_answer = {
             "number": 1, "question": "Q", "expected_answer": "A",
             "actual_answer": "回答內容", "answer_status": "✅ 完成",
             "retrieval_rank": 1, "recall_at_5": True, "recall_at_10": True,
             "reciprocal_rank": 1.0,
-        }],
+    }
+    evaluation = {
+        "questions": [{"number": 1, "question": "Q", "expected_answer": "A"}],
+        "pending_answers": [first_answer, {**first_answer, "number": 2, "question": "Q2"}],
     }
 
     status, rows, updated = ui.evaluate_generated_answers_for_ui(
         "project", "judge-endpoint", "judge-key", "judge-model", evaluation,
+        max_concurrent_requests=2,
     )
 
-    assert "總共答對 1 題 / 1 題" in status
+    assert "總共答對 2 題 / 2 題" in status
     assert rows[0][4] == "回答內容"
     assert rows[0][5] is True
     assert updated["results"][0]["reason"] == "正確"
     assert captured["evaluation"] == updated
+    assert captured["judge_workers"] == 2
 
 
 def test_manual_evaluation_edit_updates_reason_and_accuracy(monkeypatch) -> None:
@@ -2420,6 +2452,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
     status = ui.save_evaluation_preferences_for_ui(
         "project", "generation-model", "test-model", 12, "基本檢索", 6,
         True, 5, False, False, "judge-model",
+        judge_max_concurrent_requests=7,
     )
 
     assert status.startswith("✅")
@@ -2434,6 +2467,7 @@ def test_evaluation_preferences_keep_generation_and_test_models_separate(monkeyp
         "use_reranker": False,
         "expand_evidence": False,
         "test_max_concurrent_requests": 5,
+        "judge_max_concurrent_requests": 7,
         "generation_reasoning_effort": "low",
         "test_reasoning_effort": "low",
         "judge_reasoning_effort": "low",
@@ -2482,6 +2516,7 @@ def test_load_evaluation_restores_separate_judge_model(monkeypatch) -> None:
 
     assert loaded[4] == "answer-model"
     assert loaded[12] == "judge-model"
+    assert loaded[13] == 3
     assert "已載入" in loaded[-1]
 
 
