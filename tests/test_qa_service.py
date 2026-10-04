@@ -30,6 +30,7 @@ def test_answer_graph_question_omits_max_tokens(monkeypatch) -> None:
     assert "max_tokens" not in captured["payload"]
     assert "目前專案" in captured["payload"]["messages"][0]["content"]
     assert "只允許使用以下文件" not in captured["payload"]["messages"][0]["content"]
+    assert "每個編號項目前都要空一行" in captured["payload"]["messages"][0]["content"]
 
 
 def test_luna_answer_uses_low_reasoning_without_temperature(monkeypatch) -> None:
