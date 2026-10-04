@@ -252,7 +252,7 @@ def test_evaluation_results_table_uses_smaller_font_class() -> None:
         component
         for component in app.config["components"]
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由", "人工註記"]
+        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由"]
     )
     html_styles = "\n".join(
         str(component.get("props", {}).get("value", ""))
@@ -494,13 +494,12 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     result_table_index = next(
         index for index, component in enumerate(components)
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由", "人工註記"]
+        == ["編號", "問題", "標準答案", "來源 PDF", "實際答案", "答案判定（勾選=正確）", "評判理由"]
     )
     assert question_table_index < answer_heading_index < answer_availability_index < judge_heading_index < result_title_index < result_table_index
     results_table = components[result_table_index]
     assert results_table["props"]["interactive"] is True
     assert results_table["props"]["datatype"][5] == "bool"
-    assert results_table["props"]["datatype"][7] == "str"
     assert 5 not in results_table["props"]["static_columns"]
     judge_button = next(
         component for component in components
@@ -1076,7 +1075,7 @@ def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     assert "Recall@5：100.0%" in status
     assert "Recall@10：100.0%" in status
     assert "MRR：1.000" in status
-    assert rows[0][3:] == ["manual.pdf", "實際答案", True, "正確", ""]
+    assert rows[0][3:] == ["manual.pdf", "實際答案", True, "正確"]
     assert captured["test_workers"] == 2
     assert updated["results"][0]["passed"] is True
     assert captured["evaluation"] == updated
@@ -1149,7 +1148,6 @@ def test_manual_evaluation_edit_updates_reason_and_accuracy(monkeypatch) -> None
         {"number": 2, "question": "Q2", "expected_answer": "A2", "passed": True, "reason": "正確"},
     ]}
     rows = ui._evaluation_result_rows(evaluation["results"])
-    rows[0][7] = "需要確認跨頁答案"
     rows[1][5] = False
 
     status, updated_rows, updated = ui.update_manual_evaluation_for_ui("project", rows, evaluation)
@@ -1160,9 +1158,6 @@ def test_manual_evaluation_edit_updates_reason_and_accuracy(monkeypatch) -> None
     assert updated["results"][0]["reason"] == "正確"
     assert updated["results"][1]["passed"] is False
     assert updated["results"][1]["reason"] == "人工評判"
-    assert updated["results"][0]["note"] == "需要確認跨頁答案"
-    assert updated_rows[0][7] == "需要確認跨頁答案"
-    assert "人工註記變更 1 筆" in status
     assert updated_rows[1][5] is False
     assert captured["evaluation"] == updated
 
@@ -1730,7 +1725,6 @@ def test_evaluate_experiment_answers_and_manual_edit_recompute_summary(monkeypat
     assert details[0][8] is True
     edited = [list(details[0])]
     edited[0][8] = False
-    edited[0][11] = "檢索證據需人工複核"
     manual_status, manual_summary, manual_details, updated = ui.update_manual_experiment_result_for_ui(
         "project", edited, results,
     )
@@ -1739,9 +1733,6 @@ def test_evaluate_experiment_answers_and_manual_edit_recompute_summary(monkeypat
     assert manual_summary[0][4:6] == ["0 / 1", "0.0%"]
     assert manual_details[0][8] is False
     assert updated[0]["reason"] == "人工評判"
-    assert updated[0]["note"] == "檢索證據需人工複核"
-    assert manual_details[0][11] == "檢索證據需人工複核"
-    assert "人工註記變更 1 筆" in manual_status
     assert saved["experiment"]["results"] == updated
 
 
@@ -1836,11 +1827,6 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
     )
     assert result_table["props"]["interactive"] is True
     assert result_table["props"]["datatype"][8] == "bool"
-    assert result_table["props"]["headers"][-1] == "人工註記"
-    assert result_table["props"]["datatype"][-1] == "str"
-    assert len(result_table["props"]["headers"]) == 12
-    assert "人工註記" in result_table["props"]["headers"]
-    assert result_table["props"]["datatype"][-1] == "str"
     assert 8 not in result_table["props"]["static_columns"]
     assert any(
         str(dependency.get("api_name", "")).startswith("update_manual_experiment_result_for_ui")
