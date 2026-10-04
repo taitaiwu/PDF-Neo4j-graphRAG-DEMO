@@ -627,10 +627,8 @@ def _source_references_cell(references: list[dict[str, Any]]) -> str:
     lines = []
     for reference in references:
         name = str(reference.get("document_name") or reference.get("document") or "未標示文件")
-        document_id = str(reference.get("document_id") or "")
-        identity = f" [{document_id}]" if document_id else ""
         pages = ", ".join(map(str, reference.get("pages", [])))
-        lines.append(f"{name}{identity}：{pages}")
+        lines.append(f"{name}：{pages}")
     return "\n".join(lines)
 
 
@@ -1057,6 +1055,7 @@ def save_evaluation_questions_for_ui(
         return "❌ 請先建立或載入專案。", evaluation or {}, []
     try:
         questions = _questions_from_rows(rows)
+        questions = _preserve_source_document_ids(questions, (evaluation or {}).get("questions"))
         questions = _attach_project_document_ids(questions, project_id)
         updated = dict(evaluation or {})
         updated.update({"questions": questions, "results": [], "dirty": False})
@@ -1111,6 +1110,9 @@ def export_evaluation_questions_for_ui(
         return "❌ 請先建立或載入專案。", None
     try:
         questions = _questions_from_rows(rows)
+        saved_questions = (load_project(project_id).get("evaluation") or {}).get("questions") or []
+        questions = _preserve_source_document_ids(questions, saved_questions)
+        questions = _attach_project_document_ids(questions, project_id)
         export_questions = [{
             key: question[key]
             for key in ("number", "question", "expected_answer", "question_sources", "answer_sources")
@@ -1205,6 +1207,38 @@ def _attach_project_document_ids(
                 name = str(reference.get("document_name") or "")
                 if not reference.get("document_id") and name in ids_by_name:
                     reference["document_id"] = ids_by_name[name]
+    return questions
+
+
+def _preserve_source_document_ids(
+    questions: list[dict[str, Any]], previous_questions: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Keep opaque document identities while source cells show only readable names/pages."""
+    previous_by_question = {
+        (item.get("number"), item.get("question")): item
+        for item in (previous_questions or [])
+    }
+    for question in questions:
+        previous = previous_by_question.get((question.get("number"), question.get("question")))
+        if not previous:
+            continue
+        for field in ("question_sources", "answer_sources"):
+            old_references = previous.get(field) or []
+            for reference in question.get(field, []):
+                if reference.get("document_id"):
+                    continue
+                same_name = [
+                    old for old in old_references
+                    if old.get("document_name") == reference.get("document_name")
+                    and old.get("document_id")
+                ]
+                if len(same_name) == 1:
+                    reference["document_id"] = same_name[0]["document_id"]
+                elif same_name:
+                    new_pages = set(reference.get("pages", []))
+                    overlapping = [old for old in same_name if new_pages.intersection(old.get("pages", []))]
+                    if len(overlapping) == 1:
+                        reference["document_id"] = overlapping[0]["document_id"]
     return questions
 
 
@@ -2867,7 +2901,7 @@ def build_app() -> gr.Blocks:
             experiment_groups_state, *experiment_group_fields,
         ]
         for group_component in [*experiment_group_fields, experiment_max_concurrent_requests]:
-            group_component.change(
+            group_component.input(
                 save_inline_experiment_groups_for_ui,
                 inputs=inline_group_save_inputs,
                 outputs=[experiment_group_status, experiment_groups_state, experiment_status],

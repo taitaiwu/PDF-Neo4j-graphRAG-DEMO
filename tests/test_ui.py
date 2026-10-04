@@ -991,6 +991,32 @@ def test_save_and_export_edited_questions(tmp_path, monkeypatch) -> None:
     }
 
 
+def test_editing_source_cells_preserves_document_ids(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("preserve-source-ids")
+    previous = [{
+        "number": 1, "question": "Q", "expected_answer": "A",
+        "question_sources": [{"document_id": "doc-1", "document_name": "manual.pdf", "pages": [1]}],
+        "answer_sources": [{"document_id": "doc-2", "document_name": "parts.pdf", "pages": [2]}],
+    }]
+    visible_rows = [[1, "Q", "A", "manual.pdf：1", "parts.pdf：2"]]
+
+    status, updated, _ = ui.save_evaluation_questions_for_ui(
+        project["project_id"], visible_rows, {"questions": previous},
+    )
+
+    assert status.startswith("✅")
+    assert updated["questions"][0]["question_sources"][0]["document_id"] == "doc-1"
+    assert updated["questions"][0]["answer_sources"][0]["document_id"] == "doc-2"
+    export_status, export_path = ui.export_evaluation_questions_for_ui(
+        project["project_id"], visible_rows,
+    )
+    exported = json.loads(Path(export_path).read_text(encoding="utf-8"))
+    assert export_status.startswith("✅")
+    assert exported["questions"][0]["question_sources"][0]["document_id"] == "doc-1"
+    assert exported["questions"][0]["answer_sources"][0]["document_id"] == "doc-2"
+
+
 def test_import_questions_supports_json_and_csv(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("import-test")
@@ -1112,7 +1138,9 @@ def test_import_and_roundtrip_cross_document_provenance(tmp_path) -> None:
 
     questions = ui._questions_from_file(str(question_file))
     rows = ui._evaluation_question_rows(questions)
-    reparsed = ui._questions_from_rows(rows)
+    assert rows[0][3] == "part-a.pdf：2\npart-b.pdf：7, 8"
+    assert rows[0][4] == "part-b.pdf：7, 8"
+    reparsed = ui._preserve_source_document_ids(ui._questions_from_rows(rows), questions)
 
     assert reparsed[0]["question_sources"] == sources
     assert reparsed[0]["answer_sources"] == [sources[1]]
