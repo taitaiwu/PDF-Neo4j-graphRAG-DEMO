@@ -1757,11 +1757,14 @@ def test_inline_experiment_group_add_and_remove(tmp_path, monkeypatch) -> None:
     })
     monkeypatch.setattr(
         ui, "service_choice_items",
-        lambda _state: [("OpenAI｜gpt-4o-mini", "gpt-4o-mini")],
+        lambda state: (
+            [("OpenAI｜gpt-4o-mini", "gpt-4o-mini")] if state is llm_state else []
+        ),
     )
 
     removed = ui.remove_inline_experiment_group_for_ui(
-        0, project["project_id"], [], 1, groups, *ui._inline_group_values(groups),
+        0, project["project_id"], [], 1, llm_state, groups,
+        *ui._inline_group_values(groups),
     )
     assert removed[-3][0]["name"] == "保留組"
     assert removed[1]["value"] == "gpt-4o-mini"

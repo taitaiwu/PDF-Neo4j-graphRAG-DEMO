@@ -1314,7 +1314,8 @@ def add_inline_experiment_group_for_ui(
 
 def remove_inline_experiment_group_for_ui(
     row_index: int, project_id: str, questions: list[dict[str, Any]],
-    max_concurrent_requests: int | float, current_groups: list[dict[str, Any]] | None,
+    max_concurrent_requests: int | float, llm_state: dict[str, Any],
+    current_groups: list[dict[str, Any]] | None,
     *values: Any,
 ) -> tuple[Any, ...]:
     groups = _groups_from_inline_values(values)
@@ -1324,7 +1325,6 @@ def remove_inline_experiment_group_for_ui(
         project_id, questions, max_concurrent_requests, current_groups,
         *_inline_group_values(groups), allow_empty=True,
     )
-    llm_state = load_service_settings("llm")
     return (
         *_inline_group_updates(saved_groups, service_choice_items(llm_state)),
         saved_groups, status, result_status,
@@ -4493,7 +4493,8 @@ def build_app() -> gr.Blocks:
             row[-1].click(
                 partial(remove_inline_experiment_group_for_ui, row_index),
                 inputs=[project_selector, experiment_questions_state,
-                        experiment_max_concurrent_requests, experiment_groups_state,
+                        experiment_max_concurrent_requests, llm_service_state,
+                        experiment_groups_state,
                         *experiment_group_fields],
                 outputs=[*experiment_group_all_components, experiment_groups_state,
                          experiment_group_status, experiment_status],
