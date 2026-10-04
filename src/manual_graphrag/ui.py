@@ -1343,6 +1343,23 @@ def _experiment_answer_availability(
     return "尚未生成實驗回答；請先按「檢索並生成回答」。", gr.update(interactive=False)
 
 
+def experiment_answer_progress_for_ui(run_control: RunControl) -> dict[str, Any]:
+    progress = getattr(run_control, "answer_generation_progress", None)
+    if not progress:
+        return gr.update(value="", visible=False)
+    completed, total = progress
+    return gr.update(
+        value=(
+            '<style>.experiment-answer-progress{display:flex;align-items:center;gap:12px;'
+            'font-size:14px}.experiment-answer-progress progress{flex:1;height:12px;'
+            'accent-color:#2563eb}</style><div class="experiment-answer-progress">'
+            f'<progress value="{completed}" max="{total}"></progress>'
+            f'<span>回答生成進度：{completed} / {total}</span></div>'
+        ),
+        visible=True,
+    )
+
+
 def load_experiment_for_ui(
     project_id: str, llm_state: dict[str, Any],
 ) -> tuple[Any, ...]:
@@ -2497,6 +2514,7 @@ def generate_experiment_answers_for_ui(
         return f"❌ {exc}", [], [], [], []
     control = run_control or RunControl()
     control.reset()
+    control.answer_generation_progress = None
     credentials = []
     for group in groups:
         endpoint, key = resolve_model_credentials_for_ui(llm_state, group["answer_model"])
@@ -2510,6 +2528,7 @@ def generate_experiment_answers_for_ui(
         for question_index in range(len(questions))
     ]
     answers: list[dict[str, Any] | None] = [None] * len(tasks)
+    control.answer_generation_progress = (0, len(tasks))
 
     def answer(task_index: int) -> dict[str, Any] | None:
         try:
@@ -2552,6 +2571,7 @@ def generate_experiment_answers_for_ui(
                 answers[futures[future]] = future.result()
                 if answers[futures[future]] is not None:
                     completed += 1
+                control.answer_generation_progress = (completed, len(tasks))
                 try:
                     control.check()
                 except RunCancelled:
@@ -4155,6 +4175,8 @@ def build_app() -> gr.Blocks:
                 )
             generate_experiments_answers_button = gr.Button("檢索並生成回答", variant="primary")
             with gr.Group(elem_classes="evaluation-metrics-box"):
+                experiment_answer_progress = gr.HTML(value="", visible=False, padding=False)
+                experiment_answer_progress_timer = gr.Timer(value=0.4, active=False)
                 experiment_answers_status = gr.Markdown(
                     "尚未生成實驗回答；請先按「檢索並生成回答」。",
                     elem_classes="evaluation-metrics",
@@ -4503,7 +4525,18 @@ def build_app() -> gr.Blocks:
                          experiment_group_status, experiment_status],
                 show_progress="hidden",
             ).then(lambda: [], outputs=experiment_pending_answers_state, show_progress="hidden")
+        experiment_answer_progress_timer.tick(
+            experiment_answer_progress_for_ui,
+            inputs=experiment_run_control_state,
+            outputs=experiment_answer_progress,
+            show_progress="hidden", queue=False,
+        )
         generate_experiments_answers_button.click(
+            lambda: gr.update(active=True),
+            outputs=experiment_answer_progress_timer,
+            queue=False,
+            show_progress="hidden",
+        ).then(
             generate_experiment_answers_for_ui,
             inputs=[
                 project_selector, experiment_questions_state, experiment_groups_state,
@@ -4517,6 +4550,10 @@ def build_app() -> gr.Blocks:
                 experiment_summary_table, experiment_details_table,
             ],
             show_progress="minimal",
+        ).then(
+            lambda: (gr.update(active=False), gr.update(value="", visible=False)),
+            outputs=[experiment_answer_progress_timer, experiment_answer_progress],
+            show_progress="hidden",
         )
         evaluate_experiments_button.click(
             evaluate_experiment_answers_for_ui,

@@ -1685,6 +1685,18 @@ def test_experiment_answer_availability_tracks_pending_answers() -> None:
     assert enabled["interactive"] is True
 
 
+def test_experiment_answer_progress_updates_the_inline_status_panel() -> None:
+    control = ui.RunControl()
+    assert ui.experiment_answer_progress_for_ui(control)["visible"] is False
+
+    control.answer_generation_progress = (3, 8)
+    update = ui.experiment_answer_progress_for_ui(control)
+
+    assert update["visible"] is True
+    assert '<progress value="3" max="8"></progress>' in update["value"]
+    assert "回答生成進度：3 / 8" in update["value"]
+
+
 def test_generate_experiment_answers_does_not_judge_or_display(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(ui, "resolve_model_credentials_for_ui", lambda *_: ("answer-endpoint", "key"))
@@ -1849,6 +1861,11 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
     )
     assert any(
         str(dependency.get("api_name", "")).startswith("load_experiment_for_ui")
+        for dependency in app.config["dependencies"]
+    )
+    assert any(
+        str(dependency.get("api_name", "")).startswith("experiment_answer_progress_for_ui")
+        and dependency.get("queue") is False
         for dependency in app.config["dependencies"]
     )
     export_button = next(
