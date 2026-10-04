@@ -2775,16 +2775,16 @@ def update_manual_experiment_result_for_ui(
         return f"❌ 人工評判保存失敗：{exc}", [], [], current
     correct = sum(bool(item.get("passed")) for item in current)
     return (
-        f"✅ 已保存人工評判變更 {changed} 筆；答對 {correct} / {len(current)} 個實驗題次。",
+        f"✅ 評測完成｜已保存人工評判變更 {changed} 筆；答對 {correct} / {len(current)} 個實驗題次。",
         summary, details, current,
     )
 
 
 def export_experiment_results_for_ui(
     project_id: str, detail_rows: Any = None,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, str | None]:
     if not project_id:
-        return "❌ 請先建立或載入專案。", None
+        return "❌ 請先建立或載入專案。", None, None
     try:
         project = load_project(project_id)
         experiment = project.get("experiment") or {}
@@ -2794,14 +2794,14 @@ def export_experiment_results_for_ui(
                 project_id, detail_rows, saved_results,
             )
             if sync_status.startswith("❌"):
-                return f"❌ 匯出前同步人工判定失敗：{sync_status.removeprefix('❌ ').strip()}", None
+                return f"❌ 匯出前同步人工判定失敗：{sync_status.removeprefix('❌ ').strip()}", None, None
             project = load_project(project_id)
             experiment = project.get("experiment") or {}
         groups = experiment.get("groups") or []
         results = experiment.get("results") or []
         summary_rows = experiment.get("summary_rows") or []
         if not summary_rows and not results:
-            return "❌ 尚無實驗結果可匯出。", None
+            return "❌ 尚無實驗結果可匯出。", None, None
 
         summaries = {}
         for row in summary_rows:
@@ -2918,8 +2918,30 @@ def export_experiment_results_for_ui(
                 "summary": summary,
                 "results": group_results,
             })
+
+        total_questions = sum(item["summary"]["question_count"] for item in exported_groups)
+        total_correct = sum(item["summary"]["correct_count"] for item in exported_groups)
+
+        def weighted_metric(key: str) -> float | None:
+            values = [
+                (item["summary"].get(key), item["summary"]["question_count"])
+                for item in exported_groups
+                if item["summary"].get(key) is not None and item["summary"]["question_count"]
+            ]
+            denominator = sum(count for _, count in values)
+            return sum(float(value) * count for value, count in values) / denominator if denominator else None
+
+        overall_summary = {
+            "question_count": total_questions,
+            "correct_count": total_correct,
+            "correct_total": f"{total_correct} / {total_questions}",
+            "accuracy": total_correct / total_questions if total_questions else 0.0,
+            "recall_at_5": weighted_metric("recall_at_5"),
+            "recall_at_10": weighted_metric("recall_at_10"),
+            "mrr": weighted_metric("mrr"),
+        }
         payload = {
-            "schema_version": 2,
+            "schema_version": 3,
             "project": {"project_id": project_id, "name": project.get("name", "")},
             "max_concurrent_requests": experiment.get("max_concurrent_requests", 5),
             "evaluation": {
@@ -2932,15 +2954,36 @@ def export_experiment_results_for_ui(
                 ),
             },
             "question_count": len(experiment.get("questions") or []),
+            "summary": overall_summary,
             "groups": exported_groups,
         }
+        output_id = uuid4().hex
         output = write_json(
-            Path("data/projects") / project_id / "exports" / f"experiment-results-{uuid4().hex}.json",
+            Path("data/projects") / project_id / "exports" / f"experiment-results-{output_id}.json",
             payload,
         )
+        compact_payload = {
+            "schema_version": 1,
+            "format": "manual-graphrag-experiment-summary",
+            "project": {"project_id": project_id, "name": project.get("name", "")},
+            "max_concurrent_requests": experiment.get("max_concurrent_requests", 5),
+            "evaluation": payload["evaluation"],
+            "summary": overall_summary,
+            "groups": [
+                {"name": item["name"], "parameters": item["parameters"], "summary": item["summary"]}
+                for item in exported_groups
+            ],
+        }
+        compact_output = write_json(
+            Path("data/projects") / project_id / "exports" / f"experiment-summary-{output_id}.json",
+            compact_payload,
+        )
     except (OSError, TypeError, ValueError) as exc:
-        return f"❌ 匯出失敗：{exc}", None
-    return f"✅ 已匯出 {len(exported_groups)} 個實驗組的結果 JSON。", str(output)
+        return f"❌ 匯出失敗：{exc}", None, None
+    return (
+        f"✅ 已匯出 {len(exported_groups)} 個實驗組；總答對 {total_correct} / {total_questions} 個實驗題次。",
+        str(output), str(compact_output),
+    )
 
 
 def add_experiment_project_group_for_ui(
@@ -4356,7 +4399,8 @@ def build_app() -> gr.Blocks:
             )
             with gr.Row():
                 export_experiment_results_button = gr.Button("匯出實驗結果 JSON")
-                experiment_export_file = gr.File(label="實驗結果 JSON", interactive=False)
+                experiment_export_file = gr.File(label="完整逐題結果 JSON", interactive=False)
+                experiment_compact_export_file = gr.File(label="簡潔指標結果 JSON", interactive=False)
             experiment_export_status = gr.Markdown()
 
         with gr.Tab("1-0 實驗專案", interactive=False) as experiment_project_tab:
@@ -4725,7 +4769,7 @@ def build_app() -> gr.Blocks:
         export_experiment_results_button.click(
             export_experiment_results_for_ui,
             inputs=[project_selector, experiment_details_table],
-            outputs=[experiment_export_status, experiment_export_file],
+            outputs=[experiment_export_status, experiment_export_file, experiment_compact_export_file],
             show_progress="hidden",
         )
 
