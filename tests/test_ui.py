@@ -1528,6 +1528,10 @@ def test_inline_experiment_group_add_and_remove(tmp_path, monkeypatch) -> None:
 def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
     app = build_app()
     components = app.config["components"]
+    assert any(
+        "答對數 / 總題數" in component.get("props", {}).get("headers", [])
+        for component in components
+    )
     assert not any(component.get("props", {}).get("headers") == [
         "實驗組", "回答模型", "評測模型", "檢索模式", "Top K", "Reranker", "擴展圖譜證據",
     ] for component in components)
@@ -1580,7 +1584,7 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
         "questions": [{"question": "問題二"}], "groups": groups,
         "max_concurrent_requests": 5, "status": "實驗已完成",
         "results": [result],
-        "summary_rows": [["向量組", "model-a", "judge-a", 1, "100.0%", "100.0%", "100.0%", "1.000"]],
+        "summary_rows": [["向量組", "model-a", "judge-a", 1, "1 / 1", "100.0%", "100.0%", "100.0%", "1.000"]],
         "detail_rows": [["向量組", 2, "問題二"]],
     }})
 
@@ -1603,7 +1607,8 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
         },
         "summary": {
             "answer_model": "model-a", "judge_model": "judge-a",
-            "question_count": 1, "accuracy": "100.0%", "recall_at_5": "100.0%",
+            "question_count": 1, "correct_count": 1,
+            "accuracy": "100.0%", "recall_at_5": "100.0%",
             "recall_at_10": "100.0%", "mrr": "1.000",
         },
         "results": [{
@@ -1656,8 +1661,8 @@ def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatc
 
     assert status.startswith("✅ 已完成 2 個實驗組")
     assert summaries == [
-        ["向量", "model-a", "judge-x", 2, "100.0%", "100.0%", "100.0%", "1.000"],
-        ["混合擴展", "model-b", "judge-x", 2, "100.0%", "100.0%", "100.0%", "1.000"],
+        ["向量", "model-a", "judge-x", 2, "2 / 2", "100.0%", "100.0%", "100.0%", "1.000"],
+        ["混合擴展", "model-b", "judge-x", 2, "2 / 2", "100.0%", "100.0%", "100.0%", "1.000"],
     ]
     assert len(details) == len(results) == 4
     assert captured["workers"] == 2
@@ -1685,7 +1690,7 @@ def test_experiment_reload_migrates_legacy_summary_rows_to_show_models(monkeypat
 
     loaded = ui.load_experiment_for_ui("project", {})
 
-    assert loaded[6] == [["舊組", "answer-model", "answer-model", 2, "50.0%", "100.0%", "100.0%", "1.000"]]
+    assert loaded[6] == [["舊組", "answer-model", "answer-model", 2, "1 / 2", "50.0%", "100.0%", "100.0%", "1.000"]]
     assert loaded[7][0][:3] == ["舊組", "answer-model", "answer-model"]
 
 

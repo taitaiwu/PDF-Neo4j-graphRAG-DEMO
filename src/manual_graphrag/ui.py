@@ -1145,15 +1145,31 @@ def load_experiment_for_ui(
     results = data.get("results", [])
     group_by_name = {str(group.get("name", "")): group for group in groups}
     summary_rows = []
-    for row in data.get("summary_rows", []):
+    for group_index, row in enumerate(data.get("summary_rows", [])):
         group = group_by_name.get(str(row[0])) if row else None
-        if group and len(row) == 6:
-            summary_rows.append([
-                row[0], group.get("answer_model"),
-                group.get("judge_model") or group.get("answer_model"), *row[1:],
-            ])
-        else:
-            summary_rows.append(row)
+        if row and len(row) == 6:
+            row = [
+                row[0], group.get("answer_model") if group else None,
+                (group.get("judge_model") or group.get("answer_model")) if group else global_judge_model,
+                *row[1:],
+            ]
+        if row and len(row) == 8:
+            name = str(row[0])
+            group_results = [
+                result for result in results
+                if result.get("group_name") == name
+                or result.get("group_index") == group_index
+            ]
+            total = len(group_results) if group_results else int(row[3] or 0)
+            if group_results:
+                correct = sum(bool(result.get("passed")) for result in group_results)
+            else:
+                try:
+                    correct = round(float(str(row[4]).rstrip("%")) * total / 100)
+                except (TypeError, ValueError):
+                    correct = 0
+            row = [*row[:4], f"{correct} / {total}", *row[4:]]
+        summary_rows.append(row)
     detail_rows = []
     for row in data.get("detail_rows", []):
         group = group_by_name.get(str(row[0])) if row else None
@@ -1969,7 +1985,7 @@ def run_experiment_groups_for_ui(
         total = len(group_results)
         summary_rows.append([
             group["name"], group["answer_model"],
-            effective_judge_model, total,
+            effective_judge_model, total, f"{sum(bool(item['passed']) for item in group_results)} / {total}",
             f"{sum(bool(item['passed']) for item in group_results) / total:.1%}" if total else "—",
             f"{sum(bool(item['recall_at_5']) for item in group_results) / total:.1%}" if total else "—",
             f"{sum(bool(item['recall_at_10']) for item in group_results) / total:.1%}" if total else "—",
@@ -2016,18 +2032,27 @@ def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
         if not summary_rows and not results:
             return "❌ 尚無實驗結果可匯出。", None
 
-        summaries = {
-            str(row[0]): {
-                "answer_model": row[1] if len(row) >= 8 else None,
-                "judge_model": row[2] if len(row) >= 8 else None,
-                "question_count": row[3] if len(row) >= 8 else row[1] if len(row) > 1 else 0,
-                "accuracy": row[4] if len(row) >= 8 else row[2] if len(row) > 2 else None,
-                "recall_at_5": row[5] if len(row) >= 8 else row[3] if len(row) > 3 else None,
-                "recall_at_10": row[6] if len(row) >= 8 else row[4] if len(row) > 4 else None,
-                "mrr": row[7] if len(row) >= 8 else row[5] if len(row) > 5 else None,
-            }
-            for row in summary_rows if row
-        }
+        summaries = {}
+        for row in summary_rows:
+            if not row:
+                continue
+            if len(row) >= 9:
+                summaries[str(row[0])] = {
+                    "answer_model": row[1], "judge_model": row[2],
+                    "question_count": row[3], "correct_total": row[4],
+                    "accuracy": row[5], "recall_at_5": row[6],
+                    "recall_at_10": row[7], "mrr": row[8],
+                }
+            else:
+                summaries[str(row[0])] = {
+                    "answer_model": row[1] if len(row) >= 8 else None,
+                    "judge_model": row[2] if len(row) >= 8 else None,
+                    "question_count": row[3] if len(row) >= 8 else row[1] if len(row) > 1 else 0,
+                    "accuracy": row[4] if len(row) >= 8 else row[2] if len(row) > 2 else None,
+                    "recall_at_5": row[5] if len(row) >= 8 else row[3] if len(row) > 3 else None,
+                    "recall_at_10": row[6] if len(row) >= 8 else row[4] if len(row) > 4 else None,
+                    "mrr": row[7] if len(row) >= 8 else row[5] if len(row) > 5 else None,
+                }
         result_fields = (
             "number", "question", "document", "expected_answer", "actual_answer",
             "answer_model", "judge_model", "passed", "reason", "retrieval_rank", "recall_at_5", "recall_at_10",
@@ -2042,6 +2067,25 @@ def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
                 if result.get("group_index") == group_index
                 or ("group_index" not in result and result.get("group_name") == name)
             ]
+            summary = dict(summaries.get(name, {"question_count": len(group_results)}))
+            if group_results:
+                correct_count = sum(bool(result.get("passed")) for result in group_results)
+            elif summary.get("correct_total"):
+                try:
+                    correct_count = int(str(summary["correct_total"]).split("/", 1)[0].strip())
+                except (TypeError, ValueError):
+                    correct_count = 0
+            else:
+                try:
+                    correct_count = round(
+                        float(str(summary.get("accuracy", "0")).rstrip("%"))
+                        * int(summary.get("question_count", 0)) / 100
+                    )
+                except (TypeError, ValueError):
+                    correct_count = 0
+            summary.pop("correct_total", None)
+            summary["correct_count"] = correct_count
+            summary["question_count"] = len(group_results) or summary.get("question_count", 0)
             parameters = {
                 key: group.get(key)
                 for key in (
@@ -2057,7 +2101,7 @@ def export_experiment_results_for_ui(project_id: str) -> tuple[str, str | None]:
                 "name": name,
                 "parameters": parameters,
                 "summary": {
-                    **summaries.get(name, {"question_count": len(group_results)}),
+                    **summary,
                     "answer_model": summaries.get(name, {}).get("answer_model") or group.get("answer_model"),
                     "judge_model": summaries.get(name, {}).get("judge_model") or group.get("judge_model", group.get("answer_model")),
                 },
@@ -3256,7 +3300,7 @@ def build_app() -> gr.Blocks:
             experiment_status = gr.Markdown()
             gr.Markdown("#### 實驗組摘要")
             experiment_summary_table = gr.Dataframe(
-                headers=["實驗組", "回答模型", "評測模型", "題數", "答案正確率", "Recall@5", "Recall@10", "MRR"],
+                headers=["實驗組", "回答模型", "評測模型", "題數", "答對數 / 總題數", "答案正確率", "Recall@5", "Recall@10", "MRR"],
                 interactive=False, wrap=True,
             )
             gr.Markdown("#### 逐題結果")
