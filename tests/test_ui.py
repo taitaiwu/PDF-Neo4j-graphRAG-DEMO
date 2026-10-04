@@ -1320,9 +1320,9 @@ def test_add_experiment_group_for_ui_stores_selected_settings() -> None:
     )
 
     assert status == "✅ 已加入「混合擴展」。"
-    assert rows == [["混合擴展", "model-a", "model-a", "混合檢索", 12, "是", "是"]]
+    assert rows == [["混合擴展", "model-a", "混合檢索", 12, "是", "是"]]
     assert groups[0] == {
-        "name": "混合擴展", "answer_model": "model-a", "judge_model": "model-a", "retrieval_mode": "混合檢索",
+        "name": "混合擴展", "answer_model": "model-a", "retrieval_mode": "混合檢索",
         "top_k": 12, "use_reranker": True, "expand_evidence": True,
     }
 
@@ -1331,7 +1331,7 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("experiment-autosave")
     groups = [{
-        "name": "向量組", "answer_model": "gpt-4.1-mini", "judge_model": "gpt-4o-mini",
+        "name": "向量組", "answer_model": "gpt-4.1-mini",
         "retrieval_mode": "基本向量檢索", "top_k": 5,
         "use_reranker": False, "expand_evidence": True,
     }]
@@ -1355,7 +1355,10 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert ui.load_project(project["project_id"])["experiment_group_settings"] == groups
     assert stored["questions"] == questions
     assert restored[0] == questions
-    assert restored[2] == groups
+    assert restored[2] == [{
+        key: value for key, value in groups[0].items()
+        if key not in {"judge_model", "judge_reasoning_effort"}
+    }]
     assert restored[4] == 3
     assert result_status == "實驗組設定已自動儲存。"
     assert restored[3] == [{"passed": True}]
@@ -1364,14 +1367,13 @@ def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> 
     assert restored[8]["visible"] is True
     assert restored[8]["value"] == "向量組"
     assert restored[9]["value"] == "gpt-4.1-mini"
-    assert restored[10]["value"] == "gpt-4o-mini"
-    assert restored[11]["value"] == "low"
-    assert restored[12]["value"] == "low"
-    assert restored[13]["value"] == "基本向量檢索"
-    assert restored[14]["value"] == 5
-    assert restored[15]["value"] is False
-    assert restored[16]["value"] is True
-    assert restored[17]["visible"] is True
+    assert restored[10]["value"] == "low"
+    assert restored[11]["value"] == "基本向量檢索"
+    assert restored[12]["value"] == 5
+    assert restored[13]["value"] is False
+    assert restored[14]["value"] is True
+    assert restored[15]["visible"] is True
+    assert restored[8 + ui.EXPERIMENT_GROUP_LIMIT * 8]["value"] == "gpt-4.1-mini"
 
 
 def test_luna_reasoning_controls_are_visible_only_for_luna_and_default_low() -> None:
@@ -1402,12 +1404,36 @@ def test_experiment_group_reasoning_controls_follow_each_selected_model() -> Non
         "name": "Luna 組", "answer_model": "gpt-6-luna", "judge_model": "gpt-4o-mini",
     }
     updates = ui._inline_group_updates([luna_group])
-    assert updates[3]["visible"] is True
-    assert updates[3]["value"] == "low"
-    assert updates[4]["visible"] is False
+    assert updates[2]["visible"] is True
+    assert updates[2]["value"] == "low"
     saved = ui._groups_from_inline_values(tuple(ui._inline_group_values([luna_group])))[0]
     assert saved["answer_reasoning_effort"] == "low"
+    assert "judge_model" not in saved
     assert "judge_reasoning_effort" not in saved
+
+
+def test_experiment_global_judge_settings_save_and_reload(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("experiment-global-judge")
+    groups = [{
+        "name": "Luna 回答組", "answer_model": "gpt-6-luna",
+        "retrieval_mode": "混合檢索", "top_k": 8,
+        "use_reranker": False, "expand_evidence": False,
+    }]
+    ui.save_project(project["project_id"], {"experiment": {"groups": groups}})
+
+    assert ui.save_experiment_judge_settings_for_ui(
+        project["project_id"], "gpt-6-luna", "high",
+    ).startswith("✅")
+    loaded = ui.load_experiment_for_ui(
+        project["project_id"], settings.load_service_settings("llm"),
+    )
+
+    assert loaded[8 + ui.EXPERIMENT_GROUP_LIMIT * 8]["value"] == "gpt-6-luna"
+    assert loaded[9 + ui.EXPERIMENT_GROUP_LIMIT * 8]["value"] == "high"
+    assert loaded[9 + ui.EXPERIMENT_GROUP_LIMIT * 8]["visible"] is True
+    assert ui.load_project(project["project_id"])["experiment"]["groups"] == groups
+    assert ui.load_project(project["project_id"])["experiment"]["judge_model"] == "gpt-6-luna"
 
 
 def test_empty_inline_autosave_preserves_saved_experiment_groups(tmp_path, monkeypatch) -> None:
@@ -1448,11 +1474,17 @@ def test_experiment_reload_recovers_saved_group_settings_backup(tmp_path, monkey
         project["project_id"], settings.load_service_settings("llm"),
     )
 
-    assert restored[2] == groups
+    assert restored[2] == [{
+        key: value for key, value in groups[0].items()
+        if key not in {"judge_model", "judge_reasoning_effort"}
+    }]
     assert restored[8]["value"] == "備援組"
     assert restored[9]["value"] == "disconnected-model"
     assert ("disconnected-model（目前不可用）", "disconnected-model") in restored[9]["choices"]
-    assert restored[10]["value"] == "judge-model"
+    assert restored[8 + ui.EXPERIMENT_GROUP_LIMIT * 8]["value"] == "judge-model"
+    migrated = ui.load_project(project["project_id"])
+    assert "judge_model" not in migrated["experiment"]["groups"][0]
+    assert migrated["experiment"]["judge_model"] == "judge-model"
 
 
 def test_experiment_default_concurrency_is_five(tmp_path, monkeypatch) -> None:
@@ -1507,10 +1539,10 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         for component in components
     ) == ui.EXPERIMENT_GROUP_LIMIT
     assert sum(
-        component.get("props", {}).get("label") == "評測模型"
+        component.get("props", {}).get("label") == "全域評測模型"
         and component.get("type") == "dropdown"
         for component in components
-    ) == ui.EXPERIMENT_GROUP_LIMIT + 1
+    ) == 1
     assert any(component.get("props", {}).get("value") == "新增實驗組" for component in components)
     assert any(
         str(dependency.get("api_name", "")).startswith("load_experiment_for_ui")
@@ -1560,10 +1592,13 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
         "project_id": project["project_id"], "name": "experiment-export",
     }
     assert payload["max_concurrent_requests"] == 5
+    assert payload["evaluation"] == {
+        "judge_model": "judge-a", "judge_reasoning_effort": "low",
+    }
     assert payload["groups"][0] == {
         "name": "向量組",
         "parameters": {
-            "answer_model": "model-a", "judge_model": "judge-a", "retrieval_mode": "基本向量檢索",
+            "answer_model": "model-a", "retrieval_mode": "基本向量檢索",
             "top_k": 6, "use_reranker": False, "expand_evidence": True,
         },
         "summary": {
@@ -1622,15 +1657,16 @@ def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatc
     assert status.startswith("✅ 已完成 2 個實驗組")
     assert summaries == [
         ["向量", "model-a", "judge-x", 2, "100.0%", "100.0%", "100.0%", "1.000"],
-        ["混合擴展", "model-b", "judge-y", 2, "100.0%", "100.0%", "100.0%", "1.000"],
+        ["混合擴展", "model-b", "judge-x", 2, "100.0%", "100.0%", "100.0%", "1.000"],
     ]
     assert len(details) == len(results) == 4
     assert captured["workers"] == 2
     assert {call[8] for call in captured["calls"]} == {"model-a", "model-b"}
     assert {call[11] for call in captured["calls"]} == {3, 12}
-    assert {item["judge_model"] for item in results} == {"judge-x", "judge-y"}
+    assert {item["judge_model"] for item in results} == {"judge-x"}
     assert saved["experiment"]["summary_rows"][0][1:3] == ["model-a", "judge-x"]
-    assert saved["experiment"]["groups"] == groups
+    assert saved["experiment"]["judge_model"] == "judge-x"
+    assert all("judge_model" not in group for group in saved["experiment"]["groups"])
     assert saved["experiment"]["results"] == results
     assert saved["experiment"]["summary_rows"] == summaries
 
