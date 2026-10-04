@@ -1009,10 +1009,15 @@ def _retrieval_rank(
         name = str(reference.get("document_name") or "")
         document_id = str(reference.get("document_id") or "")
         for page in reference.get("pages", []):
-            if document_id:
-                expected_sources.add((("id", document_id), int(page)))
-            if name:
-                expected_sources.add((("name", name), int(page)))
+            identity = (
+                ("id", document_id or document_ids_by_name[name])
+                if document_id or name in document_ids_by_name
+                else ("name", name)
+            )
+            if document_id or name:
+                expected_sources.add((identity, int(page)))
+                if document_id and document_id not in document_ids_by_name.values() and name:
+                    expected_sources.add((("name", name), int(page)))
     if not expected_sources:
         document = str(question.get("document") or "")
         expected_pages = {

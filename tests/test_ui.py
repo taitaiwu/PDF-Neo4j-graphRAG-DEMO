@@ -865,6 +865,13 @@ def test_retrieval_rank_counts_unique_document_pages() -> None:
     assert ui._retrieval_rank(question, rows) == 2
 
 
+def test_retrieval_rank_maps_legacy_source_name_to_document_id() -> None:
+    question = {"document": "manual.pdf", "answer_source_pages": [1]}
+    rows = [["原文", "同文件同頁", "", "0.9", "manual.pdf：1", "manual.pdf：7", "manual.pdf"]]
+
+    assert ui._retrieval_rank(question, rows, {"manual.pdf": "stable-document-id"}) == 1
+
+
 def test_run_evaluation_for_ui_judges_and_saves(monkeypatch) -> None:
     monkeypatch.setattr(
         ui, "answer_question_for_ui",
@@ -1105,6 +1112,10 @@ def test_import_and_roundtrip_cross_document_provenance(tmp_path) -> None:
         {"renamed.pdf": sources[1]["document_id"]},
     )
     assert renamed_rank == 1
+    assert ui._retrieval_rank(
+        reparsed[0], [["原文", "不同文件但同名", "", "0.9", "part-b.pdf：7, 8", "part-b.pdf：9", "part-b.pdf"]],
+        {"part-b.pdf": "different-document-id"},
+    ) is None
 
     csv_file = tmp_path / "cross-document.csv"
     with csv_file.open("w", encoding="utf-8", newline="") as handle:
