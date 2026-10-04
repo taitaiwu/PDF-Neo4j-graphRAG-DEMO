@@ -227,7 +227,7 @@ def test_all_concurrency_inputs_show_ollama_recommendation() -> None:
         if "最大並行請求數" in str(component.get("props", {}).get("label", ""))
     ]
 
-    assert len(concurrency_inputs) == 4
+    assert len(concurrency_inputs) == 5
     assert all(
         component["props"].get("info") == ui.OLLAMA_CONCURRENCY_HINT
         for component in concurrency_inputs
@@ -268,8 +268,8 @@ def test_evaluation_results_table_uses_smaller_font_class() -> None:
 def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     app = build_app()
     protected_labels = {
-        "2. PDF 與參數", "3. 建圖",
-        "4. 問答測試", "5. 自動問答測試", "6. 實驗",
+        "0-2 PDF 與參數", "0-3 建圖",
+        "0-4 問答測試", "0-5 自動問答測試", "0-6 單一專案實驗",
     }
     tabs = [
         component for component in app.config["components"]
@@ -283,7 +283,7 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     )
     connection_tab = next(
         component for component in app.config["components"]
-        if component.get("props", {}).get("label") == "1. 連線設定"
+        if component.get("props", {}).get("label") == "0-1 連線設定"
     )
     assert connection_tab["props"].get("interactive", True) is True
     assert all(tab["props"]["interactive"] is False for tab in tabs)
@@ -294,6 +294,15 @@ def test_pages_stay_locked_until_project_is_created_or_loaded() -> None:
     embedding["profiles"]["OpenAI"]["connected"] = True
     assert all(update["interactive"] is False for update in ui.workflow_tabs_for_ui("project", False, llm, embedding))
     assert all(update["interactive"] is True for update in ui.workflow_tabs_for_ui("project", True, llm, embedding))
+    page_labels = {
+        component.get("props", {}).get("label") for component in app.config["components"]
+    }
+    assert {
+        "0-0 專案設定", "0-1 連線設定", "0-2 PDF 與參數", "0-3 建圖",
+        "0-4 問答測試", "0-5 自動問答測試", "0-6 單一專案實驗",
+        "1-0 實驗專案", "1-1 成員專案連線測試", "1-2 問題集準備",
+        "1-3 自動實驗測試",
+    } <= page_labels
     gate_dependencies = [
         dependency for dependency in app.config["dependencies"]
         if str(dependency.get("api_name", "")).startswith("workflow_tabs_for_ui")
@@ -426,9 +435,13 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     labels = [
         component.get("props", {}).get("label") for component in app.config["components"]
     ]
-    assert labels.index("4. 問答測試") < labels.index("5. 自動問答測試")
-    assert labels.index("5. 自動問答測試") < labels.index("6. 實驗")
-    assert "7. 歷史紀錄" not in labels
+    assert labels.index("0-0 專案設定") < labels.index("0-1 連線設定")
+    assert labels.index("0-4 問答測試") < labels.index("0-5 自動問答測試")
+    assert labels.index("0-5 自動問答測試") < labels.index("0-6 單一專案實驗")
+    assert labels.index("0-6 單一專案實驗") < labels.index("1-0 實驗專案")
+    assert labels.index("1-0 實驗專案") < labels.index("1-1 成員專案連線測試")
+    assert labels.index("1-1 成員專案連線測試") < labels.index("1-2 問題集準備")
+    assert labels.index("1-2 問題集準備") < labels.index("1-3 自動實驗測試")
     components = app.config["components"]
     question_table_index = next(
         index for index, component in enumerate(components)
@@ -1541,7 +1554,7 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         ]
         and component.get("type") == "dropdown"
         for component in components
-    ) == ui.EXPERIMENT_GROUP_LIMIT
+    ) == ui.EXPERIMENT_GROUP_LIMIT + 1
     assert sum(
         component.get("props", {}).get("label") == "全域評測模型"
         and component.get("type") == "dropdown"
@@ -2467,3 +2480,100 @@ def test_model_selections_are_not_saved_in_env(tmp_path, monkeypatch) -> None:
     assert "BUILD_MODEL" not in content
     assert "EMBEDDING_MODEL" not in content
     assert "ANSWER_MODEL" not in content
+
+
+def test_experiment_project_members_require_existing_built_graphs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    built = ui.create_project("已建圖車型")
+    unbuilt = ui.create_project("未建圖車型")
+    ui.save_project(built["project_id"], {"graph_state": {"neo4j_imported": True}})
+    experiment = ui.create_experiment_project("跨車型比較")
+
+    assert ui._built_project_choices() == [("已建圖車型", built["project_id"])]
+    state, rows, status = ui.save_experiment_project_members_for_ui(
+        experiment["experiment_project_id"], [built["project_id"], unbuilt["project_id"]],
+    )
+    assert status.startswith("❌")
+    assert rows == []
+    assert state["members"] == []
+
+    state, rows, status = ui.save_experiment_project_members_for_ui(
+        experiment["experiment_project_id"], [built["project_id"]],
+    )
+    assert status.startswith("✅")
+    assert state["members"] == [built["project_id"]]
+    assert rows == [["已建圖車型", built["project_id"], built["neo4j_database"]]]
+
+
+def test_import_experiment_project_questions_saves_per_member(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    member = ui.create_project("車型 A")
+    ui.save_project(member["project_id"], {"graph_state": {"neo4j_imported": True}})
+    experiment = ui.create_experiment_project("多車型實驗")
+    experiment = ui.save_experiment_project(experiment["experiment_project_id"], {
+        "members": [member["project_id"]],
+    })
+    question_file = tmp_path / "questions.json"
+    question_file.write_text(json.dumps([{
+        "number": 1, "question": "Q", "expected_answer": "A",
+        "question_sources": [{"document": "guide.pdf", "pages": [1, 2]}],
+        "answer_sources": [{"document": "guide.pdf", "pages": [3]}],
+    }]), encoding="utf-8")
+
+    updated, rows, status = ui.import_experiment_project_questions_for_ui(
+        str(question_file), experiment, member["project_id"],
+    )
+
+    assert status.startswith("✅")
+    assert len(rows) == 1
+    assert len(updated["questions_by_project"][member["project_id"]]) == 1
+    assert not ui.load_project(member["project_id"]).get("experiment")
+
+
+def test_multi_project_experiment_runs_each_projects_own_database(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    members = [ui.create_project("Model A"), ui.create_project("Model B")]
+    for member in members:
+        ui.save_project(member["project_id"], {"graph_state": {"neo4j_imported": True}})
+    experiment = ui.create_experiment_project("cross-model")
+    experiment = ui.save_experiment_project(experiment["experiment_project_id"], {
+        "members": [member["project_id"] for member in members],
+        "questions_by_project": {
+            member["project_id"]: [{
+                "number": 1, "question": f"Q {index}", "expected_answer": "A",
+            }]
+            for index, member in enumerate(members, start=1)
+        },
+        "groups": [{
+            "name": "向量組", "answer_model": "model-a", "retrieval_mode": "基本向量檢索",
+            "top_k": 5, "use_reranker": False, "expand_evidence": False,
+        }],
+    })
+    calls = []
+
+    def run_single(project_id, questions, groups, _concurrency, _llm_state,
+                   _embedding_base, _embedding_key, _uri, database, _username,
+                   _password, _control, _judge, _effort, persist, _progress):
+        calls.append((project_id, questions, database, persist))
+        return "✅ 已完成", [], [], [{
+            "group_index": 0, "group_name": "向量組", "answer_model": "model-a",
+            "judge_model": "judge", "number": 1,
+            "question": questions[0]["question"], "expected_answer": "A",
+            "actual_answer": "A", "passed": project_id == members[0]["project_id"],
+            "reason": "判定", "retrieval_rank": 1, "recall_at_5": True,
+            "recall_at_10": True, "reciprocal_rank": 1.0,
+        }]
+
+    monkeypatch.setattr(ui, "run_experiment_groups_for_ui", run_single)
+    status, summaries, details, saved = ui.run_experiment_project_for_ui(
+        experiment, 2, {}, "embed", "key", "bolt", "user", "password",
+        "judge", "low",
+    )
+
+    assert status.startswith("✅ 已完成 1 個實驗組")
+    assert [call[0] for call in calls] == [member["project_id"] for member in members]
+    assert [call[2] for call in calls] == [member["neo4j_database"] for member in members]
+    assert all(call[3] is False for call in calls)
+    assert summaries[0][3:6] == [2, "1 / 2", "50.0%"]
+    assert {row[1] for row in details} == {member["name"] for member in members}
+    assert len(saved["results"]) == 2

@@ -297,7 +297,7 @@ def test_gradio_events_switch_connect_filter_and_restore(monkeypatch):
             "model_endpoint": "https://api.openai.com/v1", "api_key": "test-key",
             "graph_llm_model": "gpt-4o-mini", "extraction_llm_model": "outside-list",
         }})
-        refresh = event(component("0. 專案設定")["id"], "select")
+        refresh = event(component("0-0 專案設定")["id"], "select")
         await app.process_api(refresh["id"], [None], state=session)
         load = event(button("載入專案")["id"], "click")
         loaded = (await app.process_api(load["id"], [project["project_id"], None, None], state=session))["data"]
