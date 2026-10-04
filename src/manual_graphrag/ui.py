@@ -3663,7 +3663,7 @@ def build_app() -> gr.Blocks:
                     )
                 generate_evaluation_button = gr.Button("從 PDF 建立題目與答案", variant="primary")
             with gr.Group():
-                gr.Markdown("#### 測試模型設定")
+                gr.Markdown("#### 回答模型設定")
                 with gr.Row():
                     evaluation_test_model = gr.Dropdown(
                         choices=llm_choices,
@@ -3672,17 +3672,6 @@ def build_app() -> gr.Blocks:
                         label="回答模型",
                     )
                     evaluation_test_effort = gr.Dropdown(
-                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
-                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
-                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
-                    )
-                    evaluation_judge_model = gr.Dropdown(
-                        choices=llm_choices,
-                        value=preferred_llm,
-                        allow_custom_value=False,
-                        label="評測模型",
-                    )
-                    evaluation_judge_effort = gr.Dropdown(
                         choices=list(GPT_6_LUNA_REASONING_EFFORTS),
                         value=DEFAULT_REASONING_EFFORT, label="推理強度",
                         visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
@@ -3701,9 +3690,22 @@ def build_app() -> gr.Blocks:
                         label="測試最大並行請求數",
                         info=OLLAMA_CONCURRENCY_HINT,
                     )
+                generate_evaluation_answers_button = gr.Button("生成回答", variant="primary")
+            with gr.Group():
+                gr.Markdown("#### 評測模型設定")
                 with gr.Row():
-                    generate_evaluation_answers_button = gr.Button("生成回答", variant="primary")
-                    run_evaluation_button = gr.Button("進行評測")
+                    evaluation_judge_model = gr.Dropdown(
+                        choices=llm_choices,
+                        value=preferred_llm,
+                        allow_custom_value=False,
+                        label="評測模型",
+                    )
+                    evaluation_judge_effort = gr.Dropdown(
+                        choices=list(GPT_6_LUNA_REASONING_EFFORTS),
+                        value=DEFAULT_REASONING_EFFORT, label="推理強度",
+                        visible=str(preferred_llm or "").casefold() == GPT_6_LUNA_MODEL,
+                    )
+                run_evaluation_button = gr.Button("進行評測")
             with gr.Row():
                 evaluation_import_file = gr.File(
                     label="匯入題目（JSON／CSV）", file_types=[".json", ".csv"], type="filepath"

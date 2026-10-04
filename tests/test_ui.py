@@ -417,7 +417,8 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     assert "儲存題目" not in values
     assert "匯出題目" in values
     assert "#### 生題設定" in values
-    assert "#### 測試模型設定" in values
+    assert "#### 回答模型設定" in values
+    assert "#### 評測模型設定" in values
     question_table = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("headers")
