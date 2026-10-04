@@ -1892,12 +1892,12 @@ def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
         component for component in components
         if component.get("props", {}).get("value") == "匯出實驗結果 JSON"
     )
-    assert any(
-        target[0] == export_button["id"]
-        for dependency in app.config["dependencies"]
+    export_dependency = next(
+        dependency for dependency in app.config["dependencies"]
         if str(dependency.get("api_name", "")).startswith("export_experiment_results_for_ui")
-        for target in dependency["targets"]
+        and any(target[0] == export_button["id"] for target in dependency["targets"])
     )
+    assert result_table["id"] in export_dependency["inputs"]
 
 
 def test_export_experiment_results_includes_group_parameters_summary_and_details(tmp_path, monkeypatch) -> None:
@@ -1928,6 +1928,8 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
     payload = json.loads(Path(file_path).read_text(encoding="utf-8"))
 
     assert status.startswith("✅ 已匯出 1 個實驗組")
+    assert payload["schema_version"] == 2
+    assert "status" not in payload
     assert payload["project"] == {
         "project_id": project["project_id"], "name": "experiment-export",
     }
@@ -1943,14 +1945,14 @@ def test_export_experiment_results_includes_group_parameters_summary_and_details
         },
         "summary": {
             "answer_model": "model-a", "judge_model": "judge-a",
-            "question_count": 1, "correct_count": 1,
-            "accuracy": "100.0%", "recall_at_5": "100.0%",
-            "recall_at_10": "100.0%", "mrr": "1.000",
+            "question_count": 1, "correct_count": 1, "correct_total": "1 / 1",
+            "accuracy": 1.0, "recall_at_5": 1.0,
+            "recall_at_10": 1.0, "mrr": 1.0,
         },
         "results": [{
             key: value for key, value in result.items()
             if key not in {"group_index", "group_name"}
-        }],
+        } | {"manual_judgment": False}],
     }
 
 
@@ -1982,7 +1984,16 @@ def test_export_experiment_results_syncs_latest_manual_judgment(tmp_path, monkey
     assert status.startswith("✅ 已匯出")
     assert exported["groups"][0]["results"][0]["passed"] is False
     assert exported["groups"][0]["results"][0]["reason"] == "人工評判"
-    assert exported["groups"][0]["summary"]["correct_count"] == 0
+    assert exported["groups"][0]["results"][0]["manual_judgment"] is True
+    assert exported["groups"][0]["summary"] == {
+        "answer_model": "model-a", "judge_model": "judge-a",
+        "question_count": 1, "correct_count": 0, "correct_total": "0 / 1",
+        "accuracy": 0.0, "recall_at_5": 1.0, "recall_at_10": 1.0, "mrr": 1.0,
+    }
+    _second_status, second_file_path = ui.export_experiment_results_for_ui(
+        project["project_id"], edited_rows,
+    )
+    assert second_file_path != file_path
 
 
 def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatch) -> None:

@@ -2779,35 +2779,79 @@ def export_experiment_results_for_ui(
             "number", "question", "document", "expected_answer", "actual_answer",
             "answer_model", "judge_model", "passed", "reason", "retrieval_rank", "recall_at_5", "recall_at_10",
             "reciprocal_rank", "answer_reasoning_effort", "judge_reasoning_effort",
+            "manual_judgment",
         )
         exported_groups = []
         for group_index, group in enumerate(groups):
             name = str(group.get("name", ""))
             group_results = [
-                {key: result.get(key) for key in result_fields if key in result}
+                {
+                    **{key: result.get(key) for key in result_fields if key in result},
+                    "manual_judgment": bool(result.get("manual_judgment", False)),
+                }
                 for result in results
                 if result.get("group_index") == group_index
                 or ("group_index" not in result and result.get("group_name") == name)
             ]
-            summary = dict(summaries.get(name, {"question_count": len(group_results)}))
+            saved_summary = summaries.get(name, {})
             if group_results:
+                question_count = len(group_results)
                 correct_count = sum(bool(result.get("passed")) for result in group_results)
-            elif summary.get("correct_total"):
-                try:
-                    correct_count = int(str(summary["correct_total"]).split("/", 1)[0].strip())
-                except (TypeError, ValueError):
-                    correct_count = 0
+                accuracy = correct_count / question_count
+                recall_at_5 = (
+                    sum(bool(result.get("recall_at_5")) for result in group_results)
+                    / question_count
+                )
+                recall_at_10 = (
+                    sum(bool(result.get("recall_at_10")) for result in group_results)
+                    / question_count
+                )
+                mrr = (
+                    sum(float(result.get("reciprocal_rank", 0) or 0) for result in group_results)
+                    / question_count
+                )
             else:
+                question_count = int(saved_summary.get("question_count", 0) or 0)
+                raw_accuracy = saved_summary.get("accuracy", 0) or 0
                 try:
-                    correct_count = round(
-                        float(str(summary.get("accuracy", "0")).rstrip("%"))
-                        * int(summary.get("question_count", 0)) / 100
-                    )
+                    accuracy = float(str(raw_accuracy).rstrip("%"))
+                    if isinstance(raw_accuracy, str) and raw_accuracy.endswith("%"):
+                        accuracy /= 100
                 except (TypeError, ValueError):
-                    correct_count = 0
-            summary.pop("correct_total", None)
-            summary["correct_count"] = correct_count
-            summary["question_count"] = len(group_results) or summary.get("question_count", 0)
+                    accuracy = 0.0
+                correct_count = int(
+                    saved_summary.get("correct_count", round(accuracy * question_count)) or 0
+                )
+
+                def rate(value: Any) -> float | None:
+                    if value is None:
+                        return None
+                    try:
+                        parsed = float(str(value).rstrip("%"))
+                        return parsed / 100 if isinstance(value, str) and value.endswith("%") else parsed
+                    except (TypeError, ValueError):
+                        return None
+
+                recall_at_5 = rate(saved_summary.get("recall_at_5"))
+                recall_at_10 = rate(saved_summary.get("recall_at_10"))
+                try:
+                    mrr = float(saved_summary.get("mrr")) if saved_summary.get("mrr") is not None else None
+                except (TypeError, ValueError):
+                    mrr = None
+            summary = {
+                "answer_model": saved_summary.get("answer_model") or group.get("answer_model"),
+                "judge_model": (
+                    saved_summary.get("judge_model") or experiment.get("judge_model")
+                    or group.get("judge_model", group.get("answer_model"))
+                ),
+                "question_count": question_count,
+                "correct_count": correct_count,
+                "correct_total": f"{correct_count} / {question_count}",
+                "accuracy": accuracy,
+                "recall_at_5": recall_at_5,
+                "recall_at_10": recall_at_10,
+                "mrr": mrr,
+            }
             parameters = {
                 key: group.get(key)
                 for key in (
@@ -2822,16 +2866,12 @@ def export_experiment_results_for_ui(
             exported_groups.append({
                 "name": name,
                 "parameters": parameters,
-                "summary": {
-                    **summary,
-                    "answer_model": summaries.get(name, {}).get("answer_model") or group.get("answer_model"),
-                    "judge_model": summaries.get(name, {}).get("judge_model") or group.get("judge_model", group.get("answer_model")),
-                },
+                "summary": summary,
                 "results": group_results,
             })
         payload = {
+            "schema_version": 2,
             "project": {"project_id": project_id, "name": project.get("name", "")},
-            "status": experiment.get("status", ""),
             "max_concurrent_requests": experiment.get("max_concurrent_requests", 5),
             "evaluation": {
                 "judge_model": experiment.get("judge_model") or next(
@@ -2846,7 +2886,7 @@ def export_experiment_results_for_ui(
             "groups": exported_groups,
         }
         output = write_json(
-            Path("data/projects") / project_id / "exports" / "experiment-results.json",
+            Path("data/projects") / project_id / "exports" / f"experiment-results-{uuid4().hex}.json",
             payload,
         )
     except (OSError, TypeError, ValueError) as exc:
