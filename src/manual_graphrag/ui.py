@@ -785,16 +785,38 @@ def import_experiment_questions_for_ui(
     file_path: str | None,
     current_questions: list[dict[str, Any]] | None = None,
     project_id: str = "",
-) -> tuple[str, list[list[object]], list[dict[str, Any]]]:
+) -> tuple[str, list[list[object]], list[dict[str, Any]], list[dict[str, Any]], list[list[object]], list[list[object]], str]:
     current = list(current_questions or [])
+    try:
+        previous = load_project(project_id).get("experiment") or {} if project_id else {}
+    except (OSError, ValueError):
+        previous = {}
     if not file_path:
-        return "❌ 請選擇 JSON 或 CSV 題目集。", _evaluation_question_rows(current), current
+        return (
+            "❌ 請選擇 JSON 或 CSV 題目集。", _evaluation_question_rows(current), current,
+            previous.get("results", []), previous.get("summary_rows", []),
+            previous.get("detail_rows", []), previous.get("status", ""),
+        )
     try:
         questions = _questions_from_file(file_path)
         questions = _attach_project_document_ids(questions, project_id)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
-        return f"❌ 匯入失敗：{exc}", _evaluation_question_rows(current), current
-    return f"✅ 已匯入 {len(questions)} 道題目。", _evaluation_question_rows(questions), questions
+        return (
+            f"❌ 匯入失敗：{exc}", _evaluation_question_rows(current), current,
+            previous.get("results", []), previous.get("summary_rows", []),
+            previous.get("detail_rows", []), previous.get("status", ""),
+        )
+    status = f"✅ 已匯入 {len(questions)} 道題目。"
+    if project_id:
+        updated = {
+            **previous, "questions": questions, "results": [], "summary_rows": [],
+            "detail_rows": [], "status": status,
+        }
+        try:
+            _save_experiment_data(project_id, updated)
+        except (OSError, ValueError) as exc:
+            status = f"❌ 題目已匯入但自動儲存失敗：{exc}"
+    return status, _evaluation_question_rows(questions), questions, [], [], [], status
 
 
 def _experiment_group_rows(groups: list[dict[str, Any]]) -> list[list[object]]:
@@ -803,6 +825,194 @@ def _experiment_group_rows(groups: list[dict[str, Any]]) -> list[list[object]]:
         "是" if item["use_reranker"] else "否",
         "是" if item["expand_evidence"] else "否",
     ] for item in groups]
+
+
+EXPERIMENT_GROUP_LIMIT = 12
+EXPERIMENT_GROUP_FIELDS = 6
+
+
+def _inline_group_values(groups: list[dict[str, Any]]) -> list[Any]:
+    values: list[Any] = []
+    for index in range(EXPERIMENT_GROUP_LIMIT):
+        item = groups[index] if index < len(groups) else {}
+        values.extend([
+            item.get("name", ""), item.get("answer_model"), item.get("retrieval_mode", "混合檢索"),
+            item.get("top_k", 8), bool(item.get("use_reranker", False)),
+            bool(item.get("expand_evidence", False)),
+        ])
+    return values
+
+
+def _inline_group_updates(
+    groups: list[dict[str, Any]], model_choices: list[tuple[str, str]] | None = None,
+) -> list[Any]:
+    values = []
+    for index in range(EXPERIMENT_GROUP_LIMIT):
+        item = groups[index] if index < len(groups) else {}
+        visible = bool(item)
+        model_update = gr.update(value=item.get("answer_model"), visible=visible)
+        if model_choices is not None:
+            model_update["choices"] = model_choices
+        values.extend([
+            gr.update(value=item.get("name", ""), visible=visible),
+            model_update,
+            gr.update(value=item.get("retrieval_mode", "混合檢索"), visible=visible),
+            gr.update(value=item.get("top_k", 8), visible=visible),
+            gr.update(value=bool(item.get("use_reranker", False)), visible=visible),
+            gr.update(value=bool(item.get("expand_evidence", False)), visible=visible),
+            gr.update(visible=visible),
+        ])
+    return values
+
+
+def _groups_from_inline_values(values: tuple[Any, ...]) -> list[dict[str, Any]]:
+    groups = []
+    seen_empty_name = False
+    for index in range(EXPERIMENT_GROUP_LIMIT):
+        offset = index * EXPERIMENT_GROUP_FIELDS
+        name, model, mode, top_k, reranker, expansion = values[offset:offset + EXPERIMENT_GROUP_FIELDS]
+        name = str(name or "").strip()
+        if not name:
+            if any(str(values[later * EXPERIMENT_GROUP_FIELDS] or "").strip()
+                   for later in range(index + 1, EXPERIMENT_GROUP_LIMIT)):
+                raise ValueError("請使用該列的「移除」按鈕，不要清空中間列的名稱")
+            seen_empty_name = True
+            continue
+        if seen_empty_name:
+            raise ValueError("實驗組列不可留空缺；請使用「移除」按鈕")
+        if not model:
+            raise ValueError(f"「{name}」尚未選擇回答模型")
+        if mode not in {"基本向量檢索", "混合檢索"}:
+            raise ValueError(f"「{name}」的檢索模式無效")
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"「{name}」的 Top K 必須是整數") from exc
+        if not 1 <= top_k <= 50:
+            raise ValueError(f"「{name}」的 Top K 必須介於 1 到 50")
+        groups.append({
+            "name": name, "answer_model": str(model), "retrieval_mode": mode,
+            "top_k": top_k, "use_reranker": bool(reranker),
+            "expand_evidence": bool(expansion),
+        })
+    names = [item["name"] for item in groups]
+    if len(names) != len(set(names)):
+        raise ValueError("實驗組名稱不可重複")
+    return groups
+
+
+def _save_experiment_data(project_id: str, data: dict[str, Any]) -> None:
+    if not project_id:
+        raise ValueError("請先建立或載入專案")
+    save_project(project_id, {"experiment": data})
+
+
+def save_inline_experiment_groups_for_ui(
+    project_id: str, questions: list[dict[str, Any]], max_concurrent_requests: int | float,
+    current_groups: list[dict[str, Any]] | None, *values: Any,
+) -> tuple[str, list[dict[str, Any]], str]:
+    try:
+        groups = _groups_from_inline_values(values)
+        concurrency = int(max_concurrent_requests)
+        if concurrency < 1:
+            raise ValueError("測試最大並行請求數必須大於 0")
+        project = load_project(project_id)
+        previous = project.get("experiment") or {}
+        result_status = (
+            "⚠️ 實驗設定已變更；畫面保留的是最近一次執行結果。"
+            if previous.get("results") else "實驗組設定已自動儲存。"
+        )
+        _save_experiment_data(project_id, {
+            **previous, "questions": questions or [], "groups": groups,
+            "max_concurrent_requests": concurrency,
+            "status": result_status,
+        })
+    except (OSError, TypeError, ValueError) as exc:
+        return f"❌ 實驗設定儲存失敗：{exc}", list(current_groups or []), gr.update()
+    return "✅ 實驗組與並行設定已自動儲存。", groups, result_status
+
+
+def add_inline_experiment_group_for_ui(
+    project_id: str, questions: list[dict[str, Any]], max_concurrent_requests: int | float,
+    llm_state: dict[str, Any], current_groups: list[dict[str, Any]] | None,
+    *values: Any,
+) -> tuple[Any, ...]:
+    try:
+        groups = _groups_from_inline_values(values)
+        if len(groups) >= EXPERIMENT_GROUP_LIMIT:
+            raise ValueError(f"最多可設定 {EXPERIMENT_GROUP_LIMIT} 個實驗組")
+        model = preferred_service_model(llm_state)
+        if not model:
+            raise ValueError("請先設定可用的 LLM 模型")
+        next_index = 1
+        existing_names = {item["name"] for item in groups}
+        while f"實驗組 {next_index}" in existing_names:
+            next_index += 1
+        groups.append({
+            "name": f"實驗組 {next_index}", "answer_model": model,
+            "retrieval_mode": "混合檢索", "top_k": 8,
+            "use_reranker": False, "expand_evidence": False,
+        })
+        status, saved_groups, result_status = save_inline_experiment_groups_for_ui(
+            project_id, questions, max_concurrent_requests, groups,
+            *_inline_group_values(groups)
+        )
+        if status.startswith("❌"):
+            raise ValueError(status.removeprefix("❌ "))
+        return (*_inline_group_updates(saved_groups, service_choice_items(llm_state)), saved_groups, status, result_status)
+    except (OSError, TypeError, ValueError) as exc:
+        return (
+            *_inline_group_updates(list(current_groups or []), service_choice_items(llm_state)),
+            list(current_groups or []), f"❌ {exc}", gr.update(),
+        )
+
+
+def remove_inline_experiment_group_for_ui(
+    row_index: int, project_id: str, questions: list[dict[str, Any]],
+    max_concurrent_requests: int | float, current_groups: list[dict[str, Any]] | None,
+    *values: Any,
+) -> tuple[Any, ...]:
+    groups = _groups_from_inline_values(values)
+    if 0 <= row_index < len(groups):
+        groups.pop(row_index)
+    status, saved_groups, result_status = save_inline_experiment_groups_for_ui(
+        project_id, questions, max_concurrent_requests, current_groups,
+        *_inline_group_values(groups)
+    )
+    return (*_inline_group_updates(saved_groups), saved_groups, status, result_status)
+
+
+def load_experiment_for_ui(
+    project_id: str, llm_state: dict[str, Any],
+) -> tuple[Any, ...]:
+    try:
+        data = (load_project(project_id).get("experiment") or {}) if project_id else {}
+    except (OSError, ValueError) as exc:
+        data = {}
+        status = f"❌ 實驗資料載入失敗：{exc}"
+    else:
+        status = data.get("status", "請匯入題目集並設定實驗組。")
+    questions = data.get("questions", [])
+    groups = data.get("groups", [])
+    results = data.get("results", [])
+    return (
+        questions, _evaluation_question_rows(questions), groups, results,
+        data.get("max_concurrent_requests", 1), status,
+        data.get("summary_rows", []), data.get("detail_rows", []),
+        *_inline_group_updates(groups, service_choice_items(llm_state)),
+    )
+
+
+def refresh_experiment_model_choices_for_ui(
+    llm_state: dict[str, Any], *models: str | None,
+) -> list[Any]:
+    choices = service_choice_items(llm_state)
+    allowed = service_choices(llm_state)
+    fallback = preferred_service_model(llm_state)
+    return [
+        gr.update(choices=choices, value=model if model in allowed else fallback)
+        for model in models
+    ]
 
 
 def add_experiment_group_for_ui(
@@ -1411,7 +1621,19 @@ def run_experiment_groups_for_ui(
         "✅ 通過" if item["passed"] else "❌ 未通過", item["reason"],
         item["retrieval_rank"],
     ] for item in completed_results]
-    return f"✅ 已完成 {len(groups)} 個實驗組，共 {len(tasks)} 個題次。", summary_rows, detail_rows, completed_results
+    status = f"✅ 已完成 {len(groups)} 個實驗組，共 {len(tasks)} 個題次；結果已自動儲存。"
+    try:
+        project = load_project(project_id)
+        previous = project.get("experiment") or {}
+        _save_experiment_data(project_id, {
+            **previous, "questions": questions, "groups": groups,
+            "max_concurrent_requests": concurrency,
+            "results": completed_results, "summary_rows": summary_rows,
+            "detail_rows": detail_rows, "status": status,
+        })
+    except (OSError, ValueError) as exc:
+        status = f"⚠️ 實驗已完成，但結果保存失敗：{exc}"
+    return status, summary_rows, detail_rows, completed_results
 
 
 def _add_single_document(
@@ -2460,6 +2682,10 @@ def build_app() -> gr.Blocks:
             experiment_questions_state = gr.State([])
             experiment_groups_state = gr.State([])
             experiment_results_state = gr.State([])
+            experiment_answer_model = gr.Dropdown(
+                choices=llm_choices, value=preferred_llm, allow_custom_value=False,
+                visible=False, label="實驗預設模型",
+            )
             with gr.Row():
                 experiment_question_file = gr.File(
                     label="題目集（JSON／CSV）", file_types=[".json", ".csv"], type="filepath"
@@ -2471,25 +2697,31 @@ def build_app() -> gr.Blocks:
                 datatype=["number", "str", "str", "str", "str"],
                 interactive=False, wrap=True,
             )
-            gr.Markdown("#### 新增實驗組")
-            with gr.Row():
-                experiment_group_name = gr.Textbox(label="實驗組名稱", placeholder="例如：向量檢索 Top 5")
-                experiment_answer_model = gr.Dropdown(
-                    choices=llm_choices, value=preferred_llm,
-                    allow_custom_value=False, label="回答模型",
-                )
-                experiment_retrieval_mode = gr.Radio(
-                    ["基本向量檢索", "混合檢索"], value="混合檢索", label="檢索模式",
-                )
-                experiment_top_k = gr.Slider(1, 50, value=8, step=1, label="Top K")
-            with gr.Row():
-                experiment_use_reranker = gr.Checkbox(value=False, label="使用 Reranker")
-                experiment_expand_evidence = gr.Checkbox(value=False, label="擴展圖譜證據")
-                add_experiment_group_button = gr.Button("加入實驗組")
-            experiment_groups_table = gr.Dataframe(
-                headers=["實驗組", "回答模型", "檢索模式", "Top K", "Reranker", "擴展圖譜證據"],
-                interactive=False, wrap=True,
-            )
+            gr.Markdown("#### 實驗組設定（直接編輯欄位；每次變更會自動儲存）")
+            gr.Markdown("實驗組名稱　　回答模型　　檢索模式　　Top K　　Reranker　　擴展圖譜證據")
+            experiment_group_rows: list[list[Any]] = []
+            for row_index in range(EXPERIMENT_GROUP_LIMIT):
+                with gr.Row():
+                    group_name = gr.Textbox(label="實驗組", show_label=False, placeholder=f"實驗組 {row_index + 1}", visible=False, scale=2)
+                    group_model = gr.Dropdown(
+                        choices=llm_choices, value=None, allow_custom_value=False,
+                        label="回答模型", show_label=False, visible=False, scale=2,
+                    )
+                    group_retrieval = gr.Dropdown(
+                        choices=["基本向量檢索", "混合檢索"], value="混合檢索",
+                        label="檢索模式", show_label=False, visible=False, scale=2,
+                    )
+                    group_top_k = gr.Number(value=8, minimum=1, maximum=50, precision=0, label="Top K", show_label=False, visible=False, scale=1)
+                    group_reranker = gr.Checkbox(value=False, label="Reranker", show_label=False, visible=False, scale=1)
+                    group_expansion = gr.Checkbox(value=False, label="擴展證據", show_label=False, visible=False, scale=1)
+                    delete_group_button = gr.Button("移除", size="sm", visible=False, scale=1)
+                experiment_group_rows.append([
+                    group_name, group_model, group_retrieval, group_top_k,
+                    group_reranker, group_expansion, delete_group_button,
+                ])
+            experiment_group_fields = [component for row in experiment_group_rows for component in row[:6]]
+            experiment_group_all_components = [component for row in experiment_group_rows for component in row]
+            add_experiment_group_button = gr.Button("新增實驗組")
             experiment_group_status = gr.Markdown()
             with gr.Row():
                 experiment_max_concurrent_requests = gr.Number(
@@ -2542,6 +2774,17 @@ def build_app() -> gr.Blocks:
                      evaluation_use_reranker,
                      evaluation_expand_evidence,
                      evaluation_test_max_concurrent_requests, evaluation_status],
+        )
+        experiment_tab.select(
+            load_experiment_for_ui,
+            inputs=[project_selector, llm_service_state],
+            outputs=[
+                experiment_questions_state, experiment_questions_table,
+                experiment_groups_state, experiment_results_state,
+                experiment_max_concurrent_requests, experiment_status,
+                experiment_summary_table, experiment_details_table,
+                *experiment_group_all_components,
+            ],
         )
         evaluation_preference_inputs = [
             project_selector, evaluation_generation_model, evaluation_test_model, evaluation_question_count,
@@ -2604,17 +2847,42 @@ def build_app() -> gr.Blocks:
                 experiment_question_status,
                 experiment_questions_table,
                 experiment_questions_state,
+                experiment_results_state,
+                experiment_summary_table,
+                experiment_details_table,
+                experiment_status,
             ],
         )
         add_experiment_group_button.click(
-            add_experiment_group_for_ui,
-            inputs=[
-                experiment_group_name, experiment_answer_model, experiment_retrieval_mode,
-                experiment_top_k, experiment_use_reranker, experiment_expand_evidence,
-                experiment_groups_state,
-            ],
-            outputs=[experiment_group_status, experiment_groups_table, experiment_groups_state],
+            add_inline_experiment_group_for_ui,
+            inputs=[project_selector, experiment_questions_state,
+                    experiment_max_concurrent_requests, llm_service_state,
+                    experiment_groups_state,
+                    *experiment_group_fields],
+            outputs=[*experiment_group_all_components, experiment_groups_state,
+                     experiment_group_status, experiment_status],
         )
+        inline_group_save_inputs = [
+            project_selector, experiment_questions_state, experiment_max_concurrent_requests,
+            experiment_groups_state, *experiment_group_fields,
+        ]
+        for group_component in [*experiment_group_fields, experiment_max_concurrent_requests]:
+            group_component.change(
+                save_inline_experiment_groups_for_ui,
+                inputs=inline_group_save_inputs,
+                outputs=[experiment_group_status, experiment_groups_state, experiment_status],
+                show_progress="hidden",
+            )
+        for row_index, row in enumerate(experiment_group_rows):
+            row[-1].click(
+                partial(remove_inline_experiment_group_for_ui, row_index),
+                inputs=[project_selector, experiment_questions_state,
+                        experiment_max_concurrent_requests, experiment_groups_state,
+                        *experiment_group_fields],
+                outputs=[*experiment_group_all_components, experiment_groups_state,
+                         experiment_group_status, experiment_status],
+                show_progress="hidden",
+            )
         run_experiments_button.click(
             run_experiment_groups_for_ui,
             inputs=[
@@ -2795,6 +3063,11 @@ def build_app() -> gr.Blocks:
             for service_event in service_events:
                 service_event.then(
                     workflow_tabs_for_ui, inputs=access_inputs, outputs=protected_tabs,
+                    show_progress="hidden",
+                ).then(
+                    refresh_experiment_model_choices_for_ui,
+                    inputs=[llm_service_state, *[row[1] for row in experiment_group_rows]],
+                    outputs=[row[1] for row in experiment_group_rows],
                     show_progress="hidden",
                 )
         for field, endpoint_state, key_state in [

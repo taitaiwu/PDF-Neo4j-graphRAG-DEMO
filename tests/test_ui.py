@@ -1067,7 +1067,9 @@ def test_import_empty_file_preserves_existing_questions(tmp_path, monkeypatch) -
     assert updated == evaluation
 
 
-def test_import_experiment_questions_supports_question_set_fields(tmp_path) -> None:
+def test_import_experiment_questions_supports_question_set_fields(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("experiment-import")
     question_file = tmp_path / "experiment.json"
     question_file.write_text(json.dumps({"questions": [{
         "number": 3,
@@ -1078,11 +1080,23 @@ def test_import_experiment_questions_supports_question_set_fields(tmp_path) -> N
         "document": "manual.pdf",
     }]}), encoding="utf-8")
 
-    status, rows, questions = ui.import_experiment_questions_for_ui(str(question_file))
+    ui.save_project(project["project_id"], {"experiment": {
+        "groups": [{"name": "existing"}], "results": [{"passed": True}],
+        "summary_rows": [["existing", 1]], "detail_rows": [["existing", 1]],
+    }})
+    status, rows, questions, results, summaries, details, experiment_status = ui.import_experiment_questions_for_ui(
+        str(question_file), project_id=project["project_id"]
+    )
 
     assert status.startswith("✅ 已匯入 1 道")
     assert rows == [[3, "問題？", "答案", "manual.pdf：1, 2", "manual.pdf：3, 4"]]
     assert questions[0]["answer_source_pages"] == [3, 4]
+    assert results == summaries == details == []
+    assert experiment_status == status
+    persisted = ui.load_project(project["project_id"])["experiment"]
+    assert persisted["questions"] == questions
+    assert persisted["groups"] == [{"name": "existing"}]
+    assert persisted["results"] == []
 
 
 def test_import_and_roundtrip_cross_document_provenance(tmp_path) -> None:
@@ -1138,11 +1152,12 @@ def test_experiment_import_without_file_preserves_current_question_set() -> None
         "document": "manual.pdf",
     }]
 
-    status, rows, questions = ui.import_experiment_questions_for_ui(None, current)
+    status, rows, questions, results, summaries, details, _experiment_status = ui.import_experiment_questions_for_ui(None, current)
 
     assert status == "❌ 請選擇 JSON 或 CSV 題目集。"
     assert rows == [[1, "保留題目", "答案", "manual.pdf：1", "manual.pdf：2"]]
     assert questions == current
+    assert results == summaries == details == []
 
 
 def test_add_experiment_group_for_ui_stores_selected_settings() -> None:
@@ -1156,6 +1171,85 @@ def test_add_experiment_group_for_ui_stores_selected_settings() -> None:
         "name": "混合擴展", "answer_model": "model-a", "retrieval_mode": "混合檢索",
         "top_k": 12, "use_reranker": True, "expand_evidence": True,
     }
+
+
+def test_inline_experiment_groups_autosave_and_reload(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("experiment-autosave")
+    groups = [{
+        "name": "向量組", "answer_model": "gpt-4.1-mini",
+        "retrieval_mode": "基本向量檢索", "top_k": 5,
+        "use_reranker": False, "expand_evidence": True,
+    }]
+    questions = [{"number": 1, "question": "Q", "expected_answer": "A"}]
+
+    status, saved_groups, result_status = ui.save_inline_experiment_groups_for_ui(
+        project["project_id"], questions, 3, [], *ui._inline_group_values(groups),
+    )
+    ui.save_project(project["project_id"], {"experiment": {
+        **ui.load_project(project["project_id"])["experiment"],
+        "results": [{"passed": True}], "summary_rows": [["向量組", 1]],
+        "detail_rows": [["向量組", 1]], "status": "上次實驗已完成",
+    }})
+    llm_state = settings.load_service_settings("llm")
+    restored = ui.load_experiment_for_ui(project["project_id"], llm_state)
+    stored = ui.load_project(project["project_id"])["experiment"]
+
+    assert status.startswith("✅")
+    assert saved_groups == groups
+    assert stored["groups"] == groups
+    assert stored["questions"] == questions
+    assert restored[0] == questions
+    assert restored[2] == groups
+    assert restored[4] == 3
+    assert result_status == "實驗組設定已自動儲存。"
+    assert restored[3] == [{"passed": True}]
+    assert restored[6] == [["向量組", 1]]
+    assert restored[7] == [["向量組", 1]]
+    assert restored[8]["visible"] is True
+    assert restored[8]["value"] == "向量組"
+
+
+def test_inline_experiment_group_add_and_remove(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("experiment-rows")
+    llm_state = settings.load_service_settings("llm")
+    llm_state["profiles"]["OpenAI"]["connected"] = True
+    empty_values = ui._inline_group_values([])
+
+    added = ui.add_inline_experiment_group_for_ui(
+        project["project_id"], [], 1, llm_state, [], *empty_values,
+    )
+    groups = added[-3]
+    assert groups[0]["name"] == "實驗組 1"
+    assert added[0]["visible"] is True
+
+    removed = ui.remove_inline_experiment_group_for_ui(
+        0, project["project_id"], [], 1, groups, *ui._inline_group_values(groups),
+    )
+    assert removed[-3] == []
+    assert removed[0]["visible"] is False
+    assert ui.load_project(project["project_id"])["experiment"]["groups"] == []
+
+
+def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:
+    app = build_app()
+    components = app.config["components"]
+    assert not any(component.get("props", {}).get("headers") == [
+        "實驗組", "回答模型", "檢索模式", "Top K", "Reranker", "擴展圖譜證據",
+    ] for component in components)
+    assert sum(
+        component.get("props", {}).get("choices") == [
+            ("基本向量檢索", "基本向量檢索"), ("混合檢索", "混合檢索"),
+        ]
+        and component.get("type") == "dropdown"
+        for component in components
+    ) == ui.EXPERIMENT_GROUP_LIMIT
+    assert any(component.get("props", {}).get("value") == "新增實驗組" for component in components)
+    assert any(
+        str(dependency.get("api_name", "")).startswith("load_experiment_for_ui")
+        for dependency in app.config["dependencies"]
+    )
 
 
 def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatch) -> None:
@@ -1178,6 +1272,9 @@ def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatc
     monkeypatch.setattr(ui, "ThreadPoolExecutor", recording_executor)
     monkeypatch.setattr(ui, "answer_question_for_ui", fake_answer)
     monkeypatch.setattr(ui, "judge_evaluation_answer", lambda *_: {"passed": True, "reason": "正確"})
+    saved = {}
+    monkeypatch.setattr(ui, "load_project", lambda _project_id: {"experiment": {}})
+    monkeypatch.setattr(ui, "save_project", lambda _project_id, payload: saved.update(payload) or {})
     questions = [
         {"number": 1, "question": "題目一", "expected_answer": "答案一",
          "answer_source_pages": [2], "document": "manual.pdf"},
@@ -1205,6 +1302,9 @@ def test_run_experiment_groups_outputs_each_group_summary_and_details(monkeypatc
     assert captured["workers"] == 2
     assert {call[8] for call in captured["calls"]} == {"model-a", "model-b"}
     assert {call[11] for call in captured["calls"]} == {3, 12}
+    assert saved["experiment"]["groups"] == groups
+    assert saved["experiment"]["results"] == results
+    assert saved["experiment"]["summary_rows"] == summaries
 
 def test_switch_document_cycles_through_documents() -> None:
     documents = [
