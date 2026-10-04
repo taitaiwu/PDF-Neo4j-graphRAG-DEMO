@@ -398,6 +398,24 @@ def test_deleting_selected_project_selects_another_available_project(tmp_path, m
     assert refreshed["value"] == remaining_project["project_id"]
 
 
+def test_project_archive_ui_callbacks_export_and_import(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ui.create_project("封裝測試")
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(b"pdf")
+    ui.save_project(project["project_id"], {}, [str(pdf)])
+
+    archive_path, export_status = ui.export_project_for_ui(project["project_id"])
+    selected, imported, import_status = ui.import_project_for_ui(archive_path)
+
+    assert Path(archive_path).is_file()
+    assert "不包含外部 Neo4j" in export_status
+    assert imported["project_id"] == selected["value"]
+    assert imported["project_id"] != project["project_id"]
+    assert Path(imported["documents"][0]["path"]).read_bytes() == b"pdf"
+    assert "已匯入專案" in import_status
+
+
 def test_delete_button_uses_browser_confirmation() -> None:
     app = build_app()
     button = next(

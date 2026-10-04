@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import re
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from pathlib import Path
@@ -54,6 +55,8 @@ from .project_store import (
     append_question,
     create_project,
     delete_project,
+    export_project_archive,
+    import_project_archive,
     list_projects,
     load_project,
     project_database_name,
@@ -439,6 +442,33 @@ def create_project_for_ui(name: str) -> tuple[dict[str, Any], dict[str, Any], st
     except ValueError as exc:
         return gr.update(), {}, f"❌ {exc}"
     return gr.update(choices=_project_choices(), value=project["project_id"]), project, f"✅ 已建立專案「{project['name']}」。"
+
+
+def export_project_for_ui(project_id: str | None) -> tuple[str | None, str]:
+    if not project_id:
+        return None, "❌ 請先選擇專案。"
+    try:
+        archive_path = export_project_archive(project_id)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return None, f"❌ 專案匯出失敗：{exc}"
+    return str(archive_path), (
+        "✅ 專案封裝已建立，請下載保存。封裝含專案設定（包括 Neo4j 密碼）、PDF、題庫與本機結果；"
+        "不包含外部 Neo4j Database 本體。請勿將未加密封裝分享給他人。"
+    )
+
+
+def import_project_for_ui(archive_path: str | None) -> tuple[dict[str, Any], dict[str, Any], str]:
+    if not archive_path:
+        raise gr.Error("請先選擇專案封裝檔。")
+    try:
+        project = import_project_archive(archive_path)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise gr.Error(f"專案匯入失敗：{exc}") from exc
+    return (
+        gr.update(choices=_project_choices(), value=project["project_id"]),
+        project,
+        f"✅ 已匯入專案「{project['name']}」。外部 Neo4j Database 未包含；圖譜資料需重新匯入 Neo4j。",
+    )
 
 
 def refresh_projects_for_ui(project: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -3755,6 +3785,11 @@ def build_app() -> gr.Blocks:
                 create_project_button = gr.Button("建立新專案", variant="primary")
                 delete_project_button = gr.Button("刪除專案", variant="stop")
                 delete_project_completed = gr.State(False)
+            with gr.Row():
+                export_project_button = gr.Button("匯出專案封裝")
+                export_project_file = gr.File(label="下載專案封裝", interactive=False)
+                import_project_file = gr.File(label="選擇專案封裝 ZIP", type="filepath", file_types=[".zip"])
+                import_project_button = gr.Button("匯入專案封裝", variant="secondary")
             project_status = gr.Markdown("尚未選擇專案；載入後，設定與處理結果都會自動保存。")
             gr.Markdown("⚠️ 專案設定保存在本機 `data/projects/`，其中 Neo4j Password 為明文；模型 API Key 僅保存在 `.env`。")
 
@@ -4843,6 +4878,24 @@ def build_app() -> gr.Blocks:
         create_project_event = create_project_button.click(
             create_project_for_ui, inputs=new_project_name,
             outputs=[project_selector, project_state, project_status],
+        )
+        export_project_button.click(
+            export_project_for_ui, inputs=project_selector,
+            outputs=[export_project_file, project_status],
+        )
+        import_project_event = import_project_button.click(
+            import_project_for_ui, inputs=import_project_file,
+            outputs=[project_selector, project_state, project_status],
+        )
+        import_project_event.success(
+            load_project_with_services_for_ui,
+            inputs=[project_selector, llm_service_state, embedding_service_state],
+            outputs=[*project_load_outputs,
+                     llm_provider, llm_service_state, llm_models_table, model_test_button, model_list_button,
+                     model_connection_status, evaluation_generation_model, evaluation_test_model,
+                     embedding_provider, embedding_service_state, embedding_models_table,
+                     embedding_test_button, embedding_list_button, embedding_connection_status],
+            show_progress="hidden",
         )
         create_project_event.success(
             reset_new_project_pdf_status_for_ui,

@@ -7,6 +7,8 @@ from manual_graphrag.project_store import (
     append_question,
     create_project,
     delete_project,
+    export_project_archive,
+    import_project_archive,
     list_projects,
     load_project,
     remove_document,
@@ -148,3 +150,57 @@ def test_legacy_shared_graph_requires_reimport_to_project_database(tmp_path) -> 
     assert loaded["neo4j_database"].startswith("vehicle-")
     assert loaded["graph_state"]["neo4j_imported"] is False
     assert "請重新匯入" in loaded["graph_state"]["neo4j_error"]
+
+
+def test_project_archive_round_trip_preserves_local_data_and_rebases_paths(tmp_path) -> None:
+    root = tmp_path / "projects"
+    project = create_project("車型 A", root)
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(b"pdf bytes")
+    saved = save_project(
+        project["project_id"],
+        {
+            "settings": {"neo4j_password": "secret", "answer_model": "gpt-4.1-mini"},
+            "documents_meta": [{"file_name": "manual.pdf", "file_path": str(pdf)}],
+            "chunks": [{"number": 1, "text": "chunk"}],
+            "graph_state": {"run_id": "graph-run", "neo4j_imported": True},
+            "questions": [{"question": "Q", "answer": "A"}],
+            "evaluation": {"results": [{"correct": True}]},
+            "experiment": {"groups": [{"name": "control"}]},
+        },
+        [str(pdf)],
+        root,
+    )
+    exports_dir = root / project["project_id"] / "exports"
+    exports_dir.mkdir()
+    (exports_dir / "result.json").write_text('{"result": true}', encoding="utf-8")
+
+    archive = export_project_archive(project["project_id"], root, tmp_path)
+    imported = import_project_archive(archive, root)
+
+    assert imported["project_id"] != project["project_id"]
+    assert imported["neo4j_database"] != saved["neo4j_database"]
+    assert imported["name"] == "車型 A（匯入 2）"
+    assert imported["settings"]["neo4j_password"] == "secret"
+    assert imported["questions"] == [{"question": "Q", "answer": "A"}]
+    assert imported["evaluation"] == {"results": [{"correct": True}]}
+    assert imported["experiment"] == {"groups": [{"name": "control"}]}
+    assert imported["graph_state"]["neo4j_imported"] is False
+    assert "不包含外部" in imported["graph_state"]["neo4j_error"]
+    restored_pdf = Path(imported["documents"][0]["path"])
+    assert restored_pdf.read_bytes() == b"pdf bytes"
+    assert Path(imported["documents_meta"][0]["file_path"]) == restored_pdf
+    assert (root / imported["project_id"] / "exports" / "result.json").read_text(encoding="utf-8") == '{"result": true}'
+
+
+def test_import_project_archive_rejects_path_traversal(tmp_path) -> None:
+    import json
+    import zipfile
+
+    archive_path = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format": "manual-graphrag-project", "archive_version": 1}))
+        archive.writestr("project/../outside.txt", "unsafe")
+
+    with pytest.raises(ValueError, match="不安全"):
+        import_project_archive(archive_path, tmp_path / "projects")

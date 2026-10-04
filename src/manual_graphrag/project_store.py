@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import re
 import hashlib
+import json
+import os
 import shutil
+import stat
+import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 from threading import RLock
 from typing import Any
 from uuid import uuid4
@@ -14,6 +20,8 @@ from .storage import read_json, write_json
 PROJECTS_DIR = Path("data/projects")
 PROJECT_CONNECTION_SETTINGS = {"model_endpoint", "api_key"}
 _PROJECT_WRITE_LOCK = RLock()
+PROJECT_ARCHIVE_FORMAT = "manual-graphrag-project"
+PROJECT_ARCHIVE_VERSION = 1
 
 
 def project_database_name(project_id: str) -> str:
@@ -117,6 +125,134 @@ def save_project(
 ) -> dict[str, Any]:
     with _PROJECT_WRITE_LOCK:
         return _save_project_unlocked(project_id, payload, document_paths, root)
+
+
+def export_project_archive(
+    project_id: str,
+    root: str | Path = PROJECTS_DIR,
+    output_dir: str | Path | None = None,
+) -> Path:
+    """Package all files stored locally for one project into a portable ZIP."""
+    if not project_id or Path(project_id).name != project_id:
+        raise ValueError("請選擇有效的專案")
+    project_dir = Path(root) / project_id
+    project = load_project(project_id, root)
+    destination_dir = Path(output_dir) if output_dir else Path(tempfile.gettempdir())
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    fd, archive_name = tempfile.mkstemp(
+        prefix=f"{project_id}-project-", suffix=".zip", dir=destination_dir
+    )
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(archive_name, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            manifest = {
+                "format": PROJECT_ARCHIVE_FORMAT,
+                "archive_version": PROJECT_ARCHIVE_VERSION,
+                "project_name": project.get("name", project_id),
+                "neo4j_database_included": False,
+            }
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            for path in sorted(project_dir.rglob("*")):
+                if path.is_symlink():
+                    raise ValueError("專案資料夾包含不支援匯出的符號連結")
+                if path.is_file():
+                    archive.write(path, Path("project") / path.relative_to(project_dir))
+        return Path(archive_name)
+    except Exception:
+        Path(archive_name).unlink(missing_ok=True)
+        raise
+
+
+def import_project_archive(
+    archive_path: str | Path,
+    root: str | Path = PROJECTS_DIR,
+) -> dict[str, Any]:
+    """Safely restore a project archive under a new, unique project identity."""
+    archive_path = Path(archive_path)
+    if not archive_path.is_file():
+        raise ValueError("找不到匯入的專案封裝檔")
+    base = Path(root)
+    base.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path) as archive:
+        members = archive.infolist()
+        if len(members) > 20_000 or sum(item.file_size for item in members) > 5 * 1024**3:
+            raise ValueError("專案封裝檔超出允許的大小")
+        try:
+            manifest = json.loads(archive.read("manifest.json"))
+        except (KeyError, json.JSONDecodeError) as exc:
+            raise ValueError("不是有效的專案封裝檔（缺少 manifest.json）") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError("專案封裝檔的 manifest 格式錯誤")
+        if manifest.get("format") != PROJECT_ARCHIVE_FORMAT or manifest.get("archive_version") != PROJECT_ARCHIVE_VERSION:
+            raise ValueError("不支援此專案封裝格式或版本")
+        safe_members: list[tuple[zipfile.ZipInfo, PurePosixPath]] = []
+        for member in members:
+            if member.filename == "manifest.json":
+                continue
+            relative = PurePosixPath(member.filename)
+            mode = member.external_attr >> 16
+            if (relative.is_absolute() or ".." in relative.parts or "\\" in member.filename
+                    or not relative.parts or relative.parts[0] != "project"
+                    or stat.S_ISLNK(mode)):
+                raise ValueError("專案封裝檔包含不安全的檔案路徑")
+            safe_members.append((member, relative))
+        if not any(str(path) == "project/project.json" for _, path in safe_members):
+            raise ValueError("專案封裝檔缺少 project.json")
+
+        project_payload = json.loads(archive.read("project/project.json"))
+        if not isinstance(project_payload, dict):
+            raise ValueError("專案封裝檔中的 project.json 格式錯誤")
+        original_name = str(project_payload.get("name") or manifest.get("project_name") or "匯入專案").strip()
+        base_name = original_name or "匯入專案"
+        clean_name = base_name
+        suffix = 2
+        while _project_id(clean_name) in {project_id for _, project_id in list_projects(base)}:
+            clean_name = f"{base_name}（匯入 {suffix}）"
+            suffix += 1
+        project_id = _project_id(clean_name)
+        target = base / project_id
+        if target.exists():
+            raise ValueError("無法為匯入專案配置唯一識別碼")
+        target.mkdir(parents=True)
+        try:
+            for member, relative in safe_members:
+                if member.is_dir():
+                    continue
+                output_path = target.joinpath(*relative.parts[1:])
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, output_path.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+
+            now = datetime.now(timezone.utc).isoformat()
+            project_payload.update({
+                "project_id": project_id,
+                "neo4j_database": project_database_name(project_id),
+                "name": clean_name,
+                "created_at": now,
+                "updated_at": now,
+            })
+            project_payload["settings"] = _without_model_credentials(project_payload.get("settings", {}))
+            if isinstance(project_payload["settings"], dict):
+                project_payload["settings"]["neo4j_database"] = project_database_name(project_id)
+            documents_dir = target / "documents"
+            for document in project_payload.get("documents") or []:
+                filename = Path(str(document.get("name") or "")).name
+                document_path = documents_dir / filename
+                document["path"] = str(document_path) if filename and document_path.is_file() else ""
+            for metadata in project_payload.get("documents_meta") or []:
+                filename = Path(str(metadata.get("file_name") or "")).name
+                document_path = documents_dir / filename
+                if filename and document_path.is_file():
+                    metadata["file_path"] = str(document_path)
+            graph_state = project_payload.get("graph_state")
+            if isinstance(graph_state, dict) and graph_state:
+                graph_state["neo4j_imported"] = False
+                graph_state["neo4j_error"] = "匯入封裝不包含外部 Neo4j Database；請重新執行 Embedding 並匯入 Neo4j。"
+            write_json(target / "project.json", project_payload)
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+            raise
+    return load_project(project_id, base)
 
 
 def _save_project_unlocked(
