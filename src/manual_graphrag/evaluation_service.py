@@ -204,9 +204,16 @@ def generate_evaluation_questions(
             answer = str(item.get("expected_answer", "")).strip()
             if not question or not answer:
                 raise ValueError("每一題都必須包含 question 與 expected_answer")
-            raw_pages = item.get("source_pages", [])
-            if not isinstance(raw_pages, list):
-                raise ValueError("source_pages 必須是陣列")
+            raw_question_pages = item.get(
+                "question_source_pages", item.get("source_pages", [])
+            )
+            raw_answer_pages = item.get(
+                "answer_source_pages", item.get("source_pages", [])
+            )
+            if not isinstance(raw_question_pages, list):
+                raise ValueError("question_source_pages 必須是陣列")
+            if not isinstance(raw_answer_pages, list):
+                raise ValueError("answer_source_pages 必須是陣列")
             raw_numbers = item.get("source_chunk_numbers", [])
             if not isinstance(raw_numbers, list):
                 raise ValueError("source_chunk_numbers 必須是陣列")
@@ -220,18 +227,22 @@ def generate_evaluation_questions(
                     chunk_numbers.append(number)
             if not chunk_numbers:
                 raise ValueError("每一題都必須包含至少一個有效的 source_chunk_numbers")
-            pages: list[int] = []
-            for value in raw_pages:
-                try:
-                    page = int(value)
-                except (TypeError, ValueError):
-                    continue
-                if page in available_pages and page not in pages:
-                    pages.append(page)
-            if not pages:
-                pages = list(dict.fromkeys(
+            def valid_pages(values: list[Any]) -> list[int]:
+                result: list[int] = []
+                for value in values:
+                    try:
+                        page = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if page in available_pages and page not in result:
+                        result.append(page)
+                return result
+
+            cited_chunk_pages = list(dict.fromkeys(
                     page for number in chunk_numbers for page in chunk_lookup[number].pages
                 ))
+            answer_pages = valid_pages(raw_answer_pages) or cited_chunk_pages
+            question_pages = valid_pages(raw_question_pages) or answer_pages
             candidate = {
                 "question": question,
                 "expected_answer": answer,
@@ -254,7 +265,9 @@ def generate_evaluation_questions(
                 "number": index,
                 "question": question,
                 "expected_answer": answer,
-                "source_pages": pages,
+                "question_source_pages": question_pages,
+                "answer_source_pages": answer_pages,
+                "source_pages": answer_pages,
                 "source_chunk_numbers": chunk_numbers,
                 "document": document,
             })
@@ -280,9 +293,11 @@ def generate_evaluation_questions(
         "不同措辭若詢問相同事實、操作步驟或預期答案，仍視為重複；每題必須測試不同資訊，不可只替換同義詞、語序或問句模板。"
         f"{focus_instruction}"
         f"{exclusion_instruction}"
-        "每題提供精確標準答案、來源頁碼，以及該題所依據的 CHUNK 編號"
+        "每題提供精確標準答案、題目來源頁碼（question_source_pages）、答案來源頁碼（answer_source_pages），"
+        "並提供該題所依據的 CHUNK 編號"
         "（source_chunk_numbers，必須引用下方文件中標示的 CHUNK 編號）。輸出格式："
-        '{"questions":[{"question":"...","expected_answer":"...","source_pages":[1],'
+        '{"questions":[{"question":"...","expected_answer":"...",'
+        '"question_source_pages":[1],"answer_source_pages":[1],'
         '"source_chunk_numbers":[1]}]}。\n\n'
         f"文件：\n{context}",
         temperature=0.2,

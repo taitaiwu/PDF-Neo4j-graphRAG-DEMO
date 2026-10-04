@@ -22,7 +22,29 @@ def test_generate_evaluation_questions_validates_and_numbers(monkeypatch) -> Non
 
     assert [item["number"] for item in questions] == [1, 2]
     assert questions[0]["source_pages"] == [2]
+    assert questions[0]["question_source_pages"] == [2]
+    assert questions[0]["answer_source_pages"] == [2]
     assert questions[0]["document"] == "manual.pdf"
+
+
+def test_generate_evaluation_questions_keeps_question_and_answer_pages_separate(monkeypatch) -> None:
+    def fake_chat(*args, **kwargs):
+        return kwargs["validator"]({"questions": [{
+            "question": "第二頁提出的問題？",
+            "expected_answer": "答案在第三、四頁說明。",
+            "question_source_pages": [2],
+            "answer_source_pages": [3, 4],
+            "source_chunk_numbers": [7],
+        }]})
+
+    monkeypatch.setattr(evaluation_service, "_chat_json", fake_chat)
+    questions = evaluation_service.generate_evaluation_questions(
+        "url", "", "model", [TextChunk(7, "跨頁內容", (2, 3, 4), "manual.pdf")], 1,
+    )
+
+    assert questions[0]["question_source_pages"] == [2]
+    assert questions[0]["answer_source_pages"] == [3, 4]
+    assert questions[0]["source_pages"] == [3, 4]
 
 
 def test_generate_evaluation_questions_rejects_similar_questions(monkeypatch) -> None:

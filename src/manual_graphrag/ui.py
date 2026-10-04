@@ -575,9 +575,26 @@ def answer_question_for_project_ui(project_id: str, *args: Any) -> tuple[Any, ..
 
 
 def _evaluation_question_rows(questions: list[dict[str, Any]]) -> list[list[object]]:
-    return [[item["number"], item["question"], item["expected_answer"],
-             ", ".join(map(str, item.get("source_pages", []))),
-             item.get("document", "")] for item in questions]
+    return [[
+        item["number"], item["question"], item["expected_answer"],
+        ", ".join(map(str, item.get("question_source_pages", item.get("source_pages", [])))),
+        ", ".join(map(str, item.get("answer_source_pages", item.get("source_pages", [])))),
+        item.get("document", ""),
+    ] for item in questions]
+
+
+def _parse_source_pages(value: Any, question_number: int, label: str) -> list[int]:
+    page_values = value if isinstance(value, (list, tuple)) else (
+        str(value or "").replace("，", ",").split(",")
+    )
+    try:
+        return list(dict.fromkeys(
+            int(page) for page in page_values if str(page).strip()
+        ))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"第 {question_number} 題的{label}必須是逗號分隔的整數"
+        ) from exc
 
 
 def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
@@ -593,19 +610,26 @@ def _questions_from_rows(rows: Any) -> list[dict[str, Any]]:
         answer = str(row[2] or "").strip()
         if not question or not answer:
             raise ValueError(f"第 {index} 題的問題與標準答案不可為空")
-        raw_pages = row[3] if len(row) > 3 else ""
-        if isinstance(raw_pages, (list, tuple)):
-            page_values = raw_pages
+        if len(row) >= 6:
+            question_pages = _parse_source_pages(row[3], index, "題目來源頁碼")
+            answer_pages = _parse_source_pages(row[4], index, "答案來源頁碼")
+            document_index = 5
         else:
-            page_values = str(raw_pages or "").replace("，", ",").split(",")
-        try:
-            pages = [int(value) for value in page_values if str(value).strip()]
-        except ValueError as exc:
-            raise ValueError(f"第 {index} 題的來源頁碼必須是逗號分隔的整數") from exc
-        document = str(row[4]).strip() if len(row) > 4 and row[4] is not None else ""
+            legacy_pages = _parse_source_pages(
+                row[3] if len(row) > 3 else "", index, "來源頁碼"
+            )
+            question_pages = answer_pages = legacy_pages
+            document_index = 4
+        document = (
+            str(row[document_index]).strip()
+            if len(row) > document_index and row[document_index] is not None else ""
+        )
         questions.append({
             "number": index, "question": question,
-            "expected_answer": answer, "source_pages": pages,
+            "expected_answer": answer,
+            "question_source_pages": question_pages,
+            "answer_source_pages": answer_pages,
+            "source_pages": answer_pages,
             "document": document,
         })
     return questions
@@ -656,14 +680,18 @@ def import_evaluation_questions_for_ui(
             if not isinstance(items, list):
                 raise ValueError("JSON 必須是題目陣列或包含 questions 陣列")
             rows = [[item.get("number", index), item.get("question", ""),
-                     item.get("expected_answer", ""), item.get("source_pages", []),
+                     item.get("expected_answer", ""),
+                     item.get("question_source_pages", item.get("source_pages", [])),
+                     item.get("answer_source_pages", item.get("source_pages", [])),
                      item.get("document", "")]
                     for index, item in enumerate(items, start=1) if isinstance(item, dict)]
         elif path.suffix.lower() == ".csv":
             with path.open(encoding="utf-8-sig", newline="") as handle:
                 items = list(csv.DictReader(handle))
             rows = [[item.get("number", index), item.get("question", ""),
-                     item.get("expected_answer", ""), item.get("source_pages", ""),
+                     item.get("expected_answer", ""),
+                     item.get("question_source_pages", item.get("source_pages", "")),
+                     item.get("answer_source_pages", item.get("source_pages", "")),
                      item.get("document", "")]
                     for index, item in enumerate(items, start=1)]
         else:
@@ -689,9 +717,16 @@ def export_evaluation_questions_for_ui(
         return "❌ 請先建立或載入專案。", None
     try:
         questions = _questions_from_rows(rows)
+        export_questions = [{
+            key: question[key]
+            for key in (
+                "number", "question", "expected_answer", "question_source_pages",
+                "answer_source_pages", "document",
+            )
+        } for question in questions]
         output = write_json(
             Path("data/projects") / project_id / "exports" / "questions.json",
-            {"questions": questions},
+            {"questions": export_questions},
         )
     except (OSError, ValueError) as exc:
         return f"❌ 匯出失敗：{exc}", None
@@ -761,7 +796,11 @@ def _source_values_for_document(display: str, documents: str, document: str) -> 
 
 def _retrieval_rank(question: dict[str, Any], rows: list[list[object]]) -> int | None:
     document = str(question.get("document") or "")
-    expected_pages = {int(value) for value in question.get("source_pages", [])}
+    expected_pages = {
+        int(value) for value in question.get(
+            "answer_source_pages", question.get("source_pages", [])
+        )
+    }
     if not document or not expected_pages:
         return None
     ranked_pages: list[tuple[str, int]] = []
@@ -1989,8 +2028,8 @@ def build_app() -> gr.Blocks:
             )
             gr.Markdown("#### 測試題目")
             evaluation_questions_table = gr.Dataframe(
-                headers=["編號", "問題", "標準答案", "來源頁碼", "來源文件"],
-                datatype=["number", "str", "str", "str", "str"],
+                headers=["題號", "題目", "正確答案", "題目來源頁碼", "答案來源頁碼", "來源文件"],
+                datatype=["number", "str", "str", "str", "str", "str"],
                 type="array", interactive=True, wrap=True,
                 elem_classes="evaluation-table",
             )

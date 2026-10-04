@@ -354,7 +354,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     question_table = next(
         component for component in app.config["components"]
         if component.get("props", {}).get("headers")
-        == ["編號", "問題", "標準答案", "來源頁碼", "來源文件"]
+        == ["題號", "題目", "正確答案", "題目來源頁碼", "答案來源頁碼", "來源文件"]
     )
     assert any(
         str(dependency.get("api_name", "")).startswith("save_evaluation_questions_for_ui")
@@ -372,7 +372,8 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     components = app.config["components"]
     question_table_index = next(
         index for index, component in enumerate(components)
-        if component.get("props", {}).get("headers") == ["編號", "問題", "標準答案", "來源頁碼", "來源文件"]
+        if component.get("props", {}).get("headers")
+        == ["題號", "題目", "正確答案", "題目來源頁碼", "答案來源頁碼", "來源文件"]
     )
     metrics_box_index = next(
         index for index, component in enumerate(components)
@@ -953,7 +954,7 @@ def test_edit_questions_auto_save_and_clear_results(monkeypatch) -> None:
 def test_save_and_export_edited_questions(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     project = ui.create_project("project")
-    rows = [[1, "問題", "答案", "1, 4"]]
+    rows = [[1, "問題", "答案", "1", "2, 4", "manual.pdf"]]
 
     status, state, _ = ui.save_evaluation_questions_for_ui(
         project["project_id"], rows, {"dirty": True}
@@ -964,9 +965,18 @@ def test_save_and_export_edited_questions(tmp_path, monkeypatch) -> None:
 
     assert status.startswith("✅")
     assert state["dirty"] is False
+    assert state["questions"][0]["question_source_pages"] == [1]
+    assert state["questions"][0]["answer_source_pages"] == [2, 4]
     assert export_status.startswith("✅")
     payload = json.loads(Path(export_path).read_text(encoding="utf-8"))
-    assert payload["questions"][0]["source_pages"] == [1, 4]
+    assert payload["questions"][0] == {
+        "number": 1,
+        "question": "問題",
+        "expected_answer": "答案",
+        "question_source_pages": [1],
+        "answer_source_pages": [2, 4],
+        "document": "manual.pdf",
+    }
 
 
 def test_import_questions_supports_json_and_csv(tmp_path, monkeypatch) -> None:
@@ -974,11 +984,16 @@ def test_import_questions_supports_json_and_csv(tmp_path, monkeypatch) -> None:
     project = ui.create_project("import-test")
     json_file = tmp_path / "questions.json"
     json_file.write_text(json.dumps({"questions": [
-        {"question": "JSON Q", "expected_answer": "JSON A", "source_pages": [2]}
+        {
+            "question": "JSON Q", "expected_answer": "JSON A",
+            "question_source_pages": [1, 2], "answer_source_pages": [2, 3],
+            "document": "json.pdf",
+        }
     ]}), encoding="utf-8")
     csv_file = tmp_path / "questions.csv"
     csv_file.write_text(
-        "number,question,expected_answer,source_pages\n1,CSV Q,CSV A,3\n",
+        "number,question,expected_answer,question_source_pages,answer_source_pages,document\n"
+        '1,CSV Q,CSV A,2,"3,4",csv.pdf\n',
         encoding="utf-8",
     )
 
@@ -986,7 +1001,10 @@ def test_import_questions_supports_json_and_csv(tmp_path, monkeypatch) -> None:
     csv_result = ui.import_evaluation_questions_for_ui(project["project_id"], str(csv_file), {})
 
     assert json_result[2]["questions"][0]["question"] == "JSON Q"
+    assert json_result[2]["questions"][0]["question_source_pages"] == [1, 2]
+    assert json_result[2]["questions"][0]["answer_source_pages"] == [2, 3]
     assert csv_result[2]["questions"][0]["expected_answer"] == "CSV A"
+    assert csv_result[2]["questions"][0]["answer_source_pages"] == [3, 4]
     assert json_result[2]["dirty"] is False
     assert csv_result[2]["dirty"] is False
     assert "已匯入並自動儲存" in csv_result[0]
@@ -1011,7 +1029,7 @@ def test_import_without_file_preserves_existing_questions_and_results(monkeypatc
     )
 
     assert status == "❌ 請選擇 JSON 或 CSV 題目檔。"
-    assert question_rows == [[1, "現有題目", "現有答案", "4", "manual.pdf"]]
+    assert question_rows == [[1, "現有題目", "現有答案", "4", "4", "manual.pdf"]]
     assert updated == evaluation
     assert result_rows[0][1:4] == ["現有題目", "現有答案", "manual.pdf"]
 
@@ -1033,7 +1051,7 @@ def test_import_empty_file_preserves_existing_questions(tmp_path, monkeypatch) -
     )
 
     assert status.startswith("❌ 匯入失敗：題目不可為空")
-    assert question_rows == [[1, "現有題目", "現有答案", "", ""]]
+    assert question_rows == [[1, "現有題目", "現有答案", "", "", ""]]
     assert updated == evaluation
 
 def test_switch_document_cycles_through_documents() -> None:
