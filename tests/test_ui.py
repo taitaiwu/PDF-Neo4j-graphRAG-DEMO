@@ -411,7 +411,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     ]
 
     assert "從 PDF 建立題目與答案" in values
-    assert "生成回答" in values
+    assert values.count("檢索並生成回答") == 2
     assert "進行評測" in values
     assert "匯入題目" in values
     assert "儲存題目" not in values
@@ -477,7 +477,7 @@ def test_build_app_has_automatic_evaluation_page() -> None:
     )
     answer_availability_index = next(
         index for index, component in enumerate(components)
-        if component.get("props", {}).get("value") == "尚未生成測試回答；請先按「生成回答」。"
+        if component.get("props", {}).get("value") == "尚未生成測試回答；請先按「檢索並生成回答」。"
     )
     answer_heading_index = next(
         index for index, component in enumerate(components)
@@ -1750,13 +1750,26 @@ def test_inline_experiment_group_add_and_remove(tmp_path, monkeypatch) -> None:
     assert groups[0]["name"] == "實驗組 1"
     assert added[0]["visible"] is True
 
+    groups.append({
+        "name": "保留組", "answer_model": "gpt-4o-mini",
+        "retrieval_mode": "混合檢索", "top_k": 8,
+        "use_reranker": False, "expand_evidence": False,
+    })
+    monkeypatch.setattr(
+        ui, "service_choice_items",
+        lambda _state: [("OpenAI｜gpt-4o-mini", "gpt-4o-mini")],
+    )
+
     removed = ui.remove_inline_experiment_group_for_ui(
         0, project["project_id"], [], 1, groups, *ui._inline_group_values(groups),
     )
-    assert removed[-3] == []
-    assert removed[0]["visible"] is False
-    assert ui.load_project(project["project_id"])["experiment"]["groups"] == []
-    assert ui.load_project(project["project_id"])["experiment_group_settings"] == []
+    assert removed[-3][0]["name"] == "保留組"
+    assert removed[1]["value"] == "gpt-4o-mini"
+    assert removed[1]["choices"] == [("OpenAI｜gpt-4o-mini", "gpt-4o-mini")]
+    assert removed[1]["visible"] is True
+    assert removed[8]["visible"] is False
+    assert ui.load_project(project["project_id"])["experiment"]["groups"] == removed[-3]
+    assert ui.load_project(project["project_id"])["experiment_group_settings"] == removed[-3]
 
 
 def test_experiment_ui_uses_inline_dropdowns_and_no_group_dataframe() -> None:

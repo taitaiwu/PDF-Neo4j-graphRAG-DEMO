@@ -1324,7 +1324,11 @@ def remove_inline_experiment_group_for_ui(
         project_id, questions, max_concurrent_requests, current_groups,
         *_inline_group_values(groups), allow_empty=True,
     )
-    return (*_inline_group_updates(saved_groups), saved_groups, status, result_status)
+    llm_state = load_service_settings("llm")
+    return (
+        *_inline_group_updates(saved_groups, service_choice_items(llm_state)),
+        saved_groups, status, result_status,
+    )
 
 
 def _experiment_answer_availability(
@@ -1336,7 +1340,7 @@ def _experiment_answer_availability(
             f"✅ 目前有 {len(answers)} 個實驗題次的回答，可以進行評測。",
             gr.update(interactive=True),
         )
-    return "尚未生成實驗回答；請先按「生成回答」。", gr.update(interactive=False)
+    return "尚未生成實驗回答；請先按「檢索並生成回答」。", gr.update(interactive=False)
 
 
 def load_experiment_for_ui(
@@ -1625,7 +1629,7 @@ def _evaluation_answer_availability(evaluation: dict[str, Any] | None) -> tuple[
             if evaluated else f"✅ 目前有 {len(answers)} 題回答，可以進行評測。"
         )
         return message, gr.update(interactive=True)
-    return "尚未生成測試回答；請先按「生成回答」。", gr.update(interactive=False)
+    return "尚未生成測試回答；請先按「檢索並生成回答」。", gr.update(interactive=False)
 
 
 def update_manual_evaluation_for_ui(
@@ -2105,7 +2109,7 @@ def evaluate_generated_answers_for_ui(
     if not project_id:
         return "❌ 請先建立或載入專案。", [], current
     if not pending:
-        return "❌ 請先按「生成回答」完成回答生成。", [], current
+        return "❌ 請先按「檢索並生成回答」完成回答生成。", [], current
     if not judge_model or not judge_model_endpoint:
         return "❌ 請選擇可用的評測模型。", [], current
     try:
@@ -2581,7 +2585,7 @@ def evaluate_experiment_answers_for_ui(
     if not project_id:
         return "❌ 請先選擇專案。", [], [], []
     if not pending_answers:
-        return "❌ 請先按「生成回答」完成回答生成。", [], [], []
+        return "❌ 請先按「檢索並生成回答」完成回答生成。", [], [], []
     if not judge_model or not judge_endpoint:
         return "❌ 請選擇可用的評測模型。", [], [], []
     try:
@@ -4046,10 +4050,10 @@ def build_app() -> gr.Blocks:
                         value=3, minimum=1, precision=0, label="最大並行請求數",
                         info=OLLAMA_CONCURRENCY_HINT,
                     )
-                generate_evaluation_answers_button = gr.Button("生成回答", variant="primary")
+                generate_evaluation_answers_button = gr.Button("檢索並生成回答", variant="primary")
             with gr.Group(elem_classes="evaluation-metrics-box"):
                 evaluation_answers_status = gr.Markdown(
-                    "尚未生成測試回答；請先按「生成回答」。",
+                    "尚未生成測試回答；請先按「檢索並生成回答」。",
                     elem_classes="evaluation-metrics",
                 )
             with gr.Group():
@@ -4146,10 +4150,10 @@ def build_app() -> gr.Blocks:
                     value=5, minimum=1, precision=0,
                     label="最大並行請求數", info=OLLAMA_CONCURRENCY_HINT,
                 )
-            generate_experiments_answers_button = gr.Button("生成回答", variant="primary")
+            generate_experiments_answers_button = gr.Button("檢索並生成回答", variant="primary")
             with gr.Group(elem_classes="evaluation-metrics-box"):
                 experiment_answers_status = gr.Markdown(
-                    "尚未生成實驗回答；請先按「生成回答」。",
+                    "尚未生成實驗回答；請先按「檢索並生成回答」。",
                     elem_classes="evaluation-metrics",
                 )
             with gr.Group():
