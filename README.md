@@ -275,6 +275,8 @@ docker logs pdf-graphrag
 ./start.sh
 ~~~
 
+啟動腳本會記錄 `requirements.txt` 的雜湊；相依套件未變更時略過 pip 安裝，只有首次啟動或需求檔變更時才安裝。若需修復或強制重裝套件，刪除 `.venv/.requirements.sha256` 後再執行腳本。
+
 或手動啟動：
 
 ~~~bash
@@ -289,6 +291,7 @@ python src/app.py
 
 ~~~bash
 . .venv/bin/activate
+python -m pip install -r requirements-dev.txt
 pytest
 ~~~
 

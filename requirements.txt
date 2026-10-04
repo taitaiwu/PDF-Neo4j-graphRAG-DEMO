@@ -2,5 +2,4 @@ gradio>=5.0,<6.0
 neo4j>=5.28.4,<7.0
 neo4j-graphrag>=1.19,<2.0
 pymupdf>=1.28,<2.0
-pytest>=8.0,<9.0
 PyYAML>=6.0,<7.0

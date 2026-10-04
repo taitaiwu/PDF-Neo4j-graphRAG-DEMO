@@ -15,9 +15,18 @@ if [[ ! -x ".venv/bin/python" ]]; then
 fi
 
 echo "[2/4] 檢查並安裝必要套件..."
-if ! ".venv/bin/python" -m pip install -r requirements.txt; then
-    echo "[錯誤] 套件安裝失敗，請檢查網路連線與上方錯誤訊息。" >&2
-    exit 1
+REQUIREMENTS_HASH="$(".venv/bin/python" -c \
+    'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+    requirements.txt)"
+REQUIREMENTS_MARKER=".venv/.requirements.sha256"
+if [[ ! -f "$REQUIREMENTS_MARKER" ]] || [[ "$(<"$REQUIREMENTS_MARKER")" != "$REQUIREMENTS_HASH" ]]; then
+    if ! ".venv/bin/python" -m pip install -r requirements.txt; then
+        echo "[錯誤] 套件安裝失敗，請檢查網路連線與上方錯誤訊息。" >&2
+        exit 1
+    fi
+    printf '%s\n' "$REQUIREMENTS_HASH" > "$REQUIREMENTS_MARKER"
+else
+    echo "套件需求未變更，略過安裝。若需強制重裝，刪除 $REQUIREMENTS_MARKER 後重跑。"
 fi
 
 echo "[3/4] 檢查環境設定..."
