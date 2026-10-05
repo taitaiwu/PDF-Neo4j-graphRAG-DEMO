@@ -320,7 +320,9 @@ def load_project_with_services_for_ui(
     llm_state = restore_service_settings(
         llm_state, values[6], values[7], {0: values[8], 1: values[16], 4: values[10]},
     )
-    embedding_profile = embedding_state["profiles"][embedding_state["active"]]
+    # Read credentials from .env rather than the page's State, which may be a
+    # stale startup snapshot; saving that snapshot would wipe the stored key.
+    embedding_profile = load_service_settings("embedding")["profiles"][embedding_state["active"]]
     embedding_state = restore_service_settings(
         embedding_state, embedding_profile["base_url"], embedding_profile["api_key"], {0: values[9]},
     )
@@ -331,7 +333,7 @@ def load_project_with_services_for_ui(
     save_service_settings(llm_state)
     save_service_settings(embedding_state)
     return (*values, llm_state["active"], llm[0], *llm[3:7], llm[9], llm[10],
-            embedding_state["active"], embedding[0], *embedding[3:7])
+            embedding_state["active"], *embedding[0:7])
 
 
 def load_evaluation_with_services_for_ui(
@@ -4967,7 +4969,8 @@ def build_app() -> gr.Blocks:
             outputs=[*project_load_outputs,
                      llm_provider, llm_service_state, llm_models_table, model_test_button, model_list_button,
                      model_connection_status, evaluation_generation_model, evaluation_test_model,
-                     embedding_provider, embedding_service_state, embedding_models_table,
+                     embedding_provider, embedding_service_state, embedding_api_base, embedding_api_key,
+                     embedding_models_table,
                      embedding_test_button, embedding_list_button, embedding_connection_status],
             show_progress="hidden",
         )
@@ -4981,7 +4984,8 @@ def build_app() -> gr.Blocks:
             outputs=[*project_load_outputs,
                      llm_provider, llm_service_state, llm_models_table, model_test_button, model_list_button,
                      model_connection_status, evaluation_generation_model, evaluation_test_model,
-                     embedding_provider, embedding_service_state, embedding_models_table,
+                     embedding_provider, embedding_service_state, embedding_api_base, embedding_api_key,
+                     embedding_models_table,
                      embedding_test_button, embedding_list_button, embedding_connection_status],
         )
         initialize_project_event = create_project_event.success(
@@ -4990,7 +4994,8 @@ def build_app() -> gr.Blocks:
             outputs=[*project_load_outputs,
                      llm_provider, llm_service_state, llm_models_table, model_test_button, model_list_button,
                      model_connection_status, evaluation_generation_model, evaluation_test_model,
-                     embedding_provider, embedding_service_state, embedding_models_table,
+                     embedding_provider, embedding_service_state, embedding_api_base, embedding_api_key,
+                     embedding_models_table,
                      embedding_test_button, embedding_list_button, embedding_connection_status],
             show_progress="hidden",
         )
