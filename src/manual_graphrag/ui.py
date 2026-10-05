@@ -3675,6 +3675,7 @@ def import_graph_for_ui(
     neo4j_password: str,
     embedding_model: str,
     graph_state: dict[str, Any],
+    progress=gr.Progress(),
 ) -> tuple[str, dict[str, Any]]:
     if not graph_state or not graph_state.get("run_id"):
         return "❌ 請先完成知識圖譜抽取。", graph_state or {}
@@ -3690,14 +3691,19 @@ def import_graph_for_ui(
         )
         if not evidence:
             raise ValueError("沒有可建立向量索引的原文、實體或關係")
+        progress(0, desc=f"Embedding 0 / {len(evidence)} 筆證據")
         vectors = embedding_vectors(
             embedding_api_base, embedding_api_key, embedding_model,
             [item["text"] for item in evidence],
+            progress_callback=lambda done, total: progress(
+                0.9 * done / total, desc=f"Embedding {done} / {total} 筆證據",
+            ),
         )
         for item, vector in zip(evidence, vectors):
             item["embedding"] = vector
         updated_state["embedding_dimensions"] = len(vectors[0])
         updated_state["vector_index_name"] = vector_index_name(len(vectors[0]))
+        progress(0.9, desc="正在匯入 Neo4j 並建立索引")
         imported = import_extraction(
             neo4j_uri,
             neo4j_database,
